@@ -35,6 +35,9 @@ export const EVENT_AUDIT_ACTIONS = [
   'schedule.generated', 'schedule.edited', 'schedule.locked', 'schedule.unlocked', 'schedule.published',
   // Part 3 Task 4: an organiser took a CSV of the event report (member data leaving RSN): which part and how many rows.
   'report.downloaded',
+  // Part 3 Task 3: the waiting list. promoted and lapsed are the product's own (automatic); the rest are people's.
+  'waitlist.joined', 'waitlist.left', 'waitlist.promoted', 'waitlist.lapsed', 'waitlist.admitted_over_capacity',
+  'waitlist.removed',
 ] as const;
 
 export type EventAuditAction = typeof EVENT_AUDIT_ACTIONS[number];

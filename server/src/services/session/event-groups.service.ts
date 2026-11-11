@@ -409,6 +409,27 @@ export async function applyRegistrationGroups(
   throw new ConflictError(ErrorCodes.EVENT_GROUP_REQUIRED, 'Choose your group for this event first.');
 }
 
+/**
+ * Part 3 Task 3: applyRegistrationGroups' question for someone joining a full event's waiting list, answered without
+ * writing (a group written now would count on the board for someone who holds no place). The same refusals (an unknown
+ * key is a 400; a person's own first place with no group chosen is 409 EVENT_GROUP_REQUIRED); the keys come back to be
+ * kept on the waiting row and written as their own choice when they are promoted. An event without groups, and someone
+ * who already has a group, keep nothing.
+ */
+export async function checkRegistrationGroups(
+  client: PoolClient, sessionId: string, userId: string, userRole: UserRole | undefined, groupKeys: string[] | undefined,
+  ownFirstPlace: boolean,
+): Promise<string[]> {
+  const rules = await getEventGroupRules(sessionId, client);
+  if (!rules) return [];
+  const keys = groupKeys && groupKeys.length > 0 ? checkedKeys(rules, groupKeys) : [];
+  if ((await keysOf(readerOf(client), sessionId, userId)).length > 0) return [];
+  if (keys.length > 0 || !ownFirstPlace) return keys;
+  const { allowed } = await canActAsHost(userId, userRole, sessionId);
+  if (allowed) return [];
+  throw new ConflictError(ErrorCodes.EVENT_GROUP_REQUIRED, 'Choose your group for this event first.');
+}
+
 // ─── What a screen reads ─────────────────────────────────────────────────────
 
 /**

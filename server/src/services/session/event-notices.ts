@@ -41,8 +41,11 @@ export function isRemindable(event: EventFacts, now: Date): boolean {
 export const eventPagePath = (sessionId: string): string => `/sessions/${sessionId}`;
 export const eventPageUrl = (sessionId: string): string => `${config.clientUrl}${eventPagePath(sessionId)}`;
 
-/** `event_schedule_changed` (Part 2 Task 9): someone's meetings changed in a newly published schedule version. */
-export type EventBellType = 'event_reminder' | 'event_rescheduled' | 'event_schedule_changed';
+/**
+ * `event_schedule_changed` (Part 2 Task 9): someone's meetings changed in a newly published schedule version.
+ * `event_waitlist_promoted` (Part 3 Task 3): a place opened and the first person on the waiting list was given it.
+ */
+export type EventBellType = 'event_reminder' | 'event_rescheduled' | 'event_schedule_changed' | 'event_waitlist_promoted';
 
 export interface EventBell {
   userId: string;
@@ -99,7 +102,8 @@ interface MovedRecipient {
 /**
  * Tell everyone with a place that a published, scheduled event has moved: one bell each ("{title} has moved to
  * {when}", on the event's clock and naming its zone) and an email when their email switch and the admin's 'event_rescheduled' switch are both on. Everyone who
- * holds a place (not removed, left or no-show), the host and the co-hosts, but not the organiser who moved it. Only
+ * holds a place (not removed, left or no-show), the host and the co-hosts, and (Part 3 Task 3) everyone on its waiting
+ * list, who may yet be given a place at the new time, but not the organiser who moved it. Only
  * while config.eventComms is 'on'; a time that did not change tells nobody. Never throws. A move, like a
  * cancellation, is not a reminder: it ignores the "event reminders" preference.
  *
@@ -134,7 +138,8 @@ export async function notifyEventRescheduled(
           AND (u.id IN (SELECT sp.user_id FROM session_participants sp
                          WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show'))
                OR u.id IN (SELECT c.user_id FROM session_cohosts c WHERE c.session_id = $1)
-               OR u.id IN (SELECT s.host_user_id FROM sessions s WHERE s.id = $1))`,
+               OR u.id IN (SELECT s.host_user_id FROM sessions s WHERE s.id = $1)
+               OR u.id IN (SELECT w.user_id FROM event_waitlist w WHERE w.session_id = $1 AND w.status = 'waiting'))`,
       [sessionId, actorId],
     );
     if (recipients.rows.length === 0) return { notified: 0 };

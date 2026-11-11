@@ -351,3 +351,41 @@ export interface GeneratedAdmissionCode {
   id: string;
   code: string;
 }
+
+// ─── The waiting list (10 Nov 2026 spec, Part 3 Task 3; plan K3) ─────────────
+//
+// A full event (sessions.config.maxParticipants places held by anyone but its host and co-hosts) puts the next eligible
+// person on its waiting list; the first in line is given the next place that frees. The list is its own table
+// (event_waitlist), never a participant status, so nobody waiting is matched, admitted, reminded or counted.
+
+/** How a person reached the line: the event page, the RSN Call link, an approved request, an accepted invite. */
+export type WaitlistJoinedVia = 'register' | 'call_link' | 'approval' | 'invite';
+
+/** event_waitlist.status. */
+export type WaitlistStatus = 'waiting' | 'promoted' | 'left' | 'removed' | 'lapsed';
+
+/**
+ * The additive `access.waitlist` block on GET /sessions/:id: whether the event is full, and this person's place in the
+ * line (1 = next). Attendees are never told how many places or people there are.
+ */
+export interface EventWaitlistAccess {
+  full: boolean;
+  position: number | null;
+}
+
+/** One person on the line, as the event's organisers see it (GET /sessions/:id/waitlist). */
+export interface WaitlistEntryCard {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  position: number;
+  queuedAt: string;
+  joinedVia: WaitlistJoinedVia;
+  accountKind: 'member' | 'event_guest';
+}
+
+/** POST /sessions/:id/register with `waitlist: true` on a full event: 202 and this. */
+export interface WaitlistedRegistration {
+  waitlisted: true;
+  position: number;
+}

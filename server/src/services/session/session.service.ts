@@ -25,7 +25,8 @@ import { assertTemplateChoice, templateKeepable } from '../matching/matching-tem
 import { assertVideoRoom } from './video-room';
 import { LIVE_STATUSES, tokenMainRoomOf } from './main-room';
 import {
-  admittedViaOf, archivedEventsSql, canRegister, eventListedForSql, publicEventsSql, readEventAccessFacts, runsEvent, visibleEventsSql,
+  admittedViaOf, archivedEventsSql, canRegister, capacityTakenSql, eventCapacitySql, eventListedForSql, publicEventsSql,
+  readEventAccessFacts, runsEvent, visibleEventsSql, waitlistAheadSql,
 } from './event-access';
 import { applyRegistrationGroups } from './event-groups.service';
 import { ensureCallCode } from './call-link.service';
@@ -513,295 +514,392 @@ function liftedByPersonalInvite(leftAt: Date | null | undefined, invitedAt: Date
   return new Date(leftAt).getTime() < invitedAt.getTime();
 }
 
+/** The participant statuses that hold a place a person is using now (left and no-show come back through a registration). */
+const ACTIVE_PLACE_STATUSES: readonly string[] = ['registered', 'checked_in', 'in_lobby', 'in_round'];
+
+const REMOVED_SENTENCE = 'You have been removed from this event by the host';
+const ACCOUNT_CLOSED_SENTENCE = 'Your account cannot join events right now.';
+
+/**
+ * What a registration may carry. #4B (June-10 debrief) — a kicked (status='removed') user is normally barred from
+ * re-entry. The ONLY way back is a FRESH, personal invite from the host. H1b fix round 1 (26 Oct 2026): "fresh" is exact.
+ * The invite-accept path passes `personalInviteCreatedAt` when the host made the targeted-email invite, and only a removal
+ * made before that moment is lifted: a kick made after it (an old invite the kick's withdrawal missed, or one accepted
+ * again) stands. Every other caller (direct join, socket reconnect, shared link) passes nothing → still bounced.
+ *   viaInvite              T2 (1 Nov 2026), D2: the invite-accept path is registering someone the host invited, so a pod
+ *                          that asks for approval takes them (a shared link records who used it only after the registration).
+ *   approvedRequest        T11 (1 Nov 2026): the host has approved this person's request to join an event that asks for
+ *                          approval (the approve route), so that event takes them; capacity and their own row still decide.
+ *   groupKeys              10 Nov 2026 spec, Part 2 Task 5: the person's answer to an event's required group question,
+ *                          written as their own choice in this transaction. An event without groups ignores it.
+ *   arrivedThroughCallLink Part 2 Task 6: the person is entering through this event's own RSN Call link (call-entry
+ *                          service's enterCall, the only caller that sets it): an event guest may then ask for a place here.
+ */
+export interface RegisterOptions {
+  personalInviteCreatedAt?: Date;
+  viaInvite?: boolean;
+  approvedRequest?: boolean;
+  groupKeys?: string[];
+  arrivedThroughCallLink?: boolean;
+}
+
+/**
+ * Part 3 Task 3 — what only the waiting list passes:
+ *   overCapacity  an organiser's "Let in now" (admitFromWaitlist): the place is given even though the event is full.
+ *   fromWaitlist  the person is being promoted from the event's waiting list (promoteFromWaitlist): an event guest who
+ *                 joined the line through the call link may take the place (guestMayRegister's onWaitlist).
+ */
+export type RegisterTxOptions = RegisterOptions & { overCapacity?: boolean; fromWaitlist?: boolean };
+
 // S15 (live-test 2026-06-06) — isNewRegistration distinguishes a FRESH
 // registration from a re-activation (a 'left'/'no_show' row flipping back to
 // 'registered'). The live page auto-registers on every mount, so "Join Live
 // Event" / "Join Late" after leaving hit the re-register UPDATE — and the
 // route re-sent the "you're registered" confirmation email each time. Only
 // fresh INSERTs deserve the email.
+export type RegisterResult = SessionParticipant & { isNewRegistration: boolean };
+
+/**
+ * Part 3 Task 3 (K3): the one capacity lock per event. Every new place and every promotion takes it, in its own
+ * transaction, right before the recount, and holds it to commit; so two people can never take the last place at once
+ * and a promotion never fills a place someone else is taking. Transaction-scoped: nothing to release.
+ */
+export async function lockEventCapacity(client: PoolClient, sessionId: string): Promise<void> {
+  await client.query(`SELECT pg_advisory_xact_lock(hashtext('event-capacity:' || $1::text))`, [sessionId]);
+}
+
+/** registerParticipantTx in its own transaction, then the live event's memory (registerParticipantTx says the rules). */
 export async function registerParticipant(
   sessionId: string,
   userId: string,
   userRole?: UserRole,
-  // #4B (June-10 debrief) — a kicked (status='removed') user is normally barred
-  // from re-entry. The ONLY way back is a FRESH, personal invite from the host.
-  // H1b fix round 1 (26 Oct 2026): "fresh" is exact. The invite-accept path
-  // passes when the host made the targeted-email invite, and only a removal made
-  // before that moment is lifted: a kick made after it (an old invite the kick's
-  // withdrawal missed, or one accepted again) stands. Every other caller (direct
-  // join, socket reconnect, shared link) passes nothing → still bounced.
-  // T2 (1 Nov 2026), D2: `viaInvite` says the invite-accept path is registering someone the host invited, so a pod
-  // that asks for approval takes them (a shared link records who used it only after the registration).
-  // T11 (1 Nov 2026): `approvedRequest` says the host has approved this person's request to join an event that asks
-  // for approval (the approve route), so that event takes them; capacity and their own row still decide.
-  // 10 Nov 2026 spec, Part 2 Task 5: `groupKeys` is the person's answer to an event's required group question,
-  // written as their own choice in this transaction. An event without groups ignores it.
-  // Part 2 Task 6: `arrivedThroughCallLink` says the person is entering through this event's own RSN Call link
-  // (call-entry.service's enterCall, the only caller that sets it): an event guest may then ask for a place here.
-  options?: {
-    personalInviteCreatedAt?: Date; viaInvite?: boolean; approvedRequest?: boolean; groupKeys?: string[];
-    arrivedThroughCallLink?: boolean;
-  },
-): Promise<SessionParticipant & { isNewRegistration: boolean }> {
-  const invitedAt = options?.personalInviteCreatedAt ?? null;
-  const viaInvite = !!options?.viaInvite || !!invitedAt;
-  const participant = await transaction(async (client) => {
-    // Read session without lock — ON CONFLICT handles concurrent inserts safely.
-    // FOR UPDATE was causing cascading timeouts when multiple users register simultaneously.
-    // Part 2 Task 5: whether the event has matching groups is read in the same row, so an event without them
-    // (every event before groups existed) makes exactly the reads it always made.
-    const sessionResult = await client.query<SessionRow & { hasEventGroups?: boolean }>(
-      `SELECT ${SESSION_COLUMNS},
-              EXISTS (SELECT 1 FROM event_groups eg WHERE eg.session_id = sessions.id) AS "hasEventGroups"
-         FROM sessions WHERE id = $1`,
-      [sessionId]
-    );
-    if (sessionResult.rows.length === 0) {
+  options?: RegisterOptions,
+): Promise<RegisterResult> {
+  const participant = await transaction((client) => registerParticipantTx(client, sessionId, userId, userRole, options ?? {}));
+  await syncLiveRegistration(sessionId, userId);
+  return participant;
+}
+
+/**
+ * Give this person a place, inside the caller's transaction (Part 3 Task 3: registerParticipant wraps it; the waiting
+ * list composes it with its own writes under the same lock). The rules, in order:
+ *   1. an active account; 2. a draft takes only the people who run it, and registration may open later; 3. a completed
+ *   or cancelled event takes nobody; 4. an event guest only where guestMayRegister allows; 5. who may take a place
+ *   (canRegister, or a NULL event's pod rules); 6. a removal is terminal (REMOVED_FROM_EVENT, before capacity: a removed
+ *   person never hears "full" and is never queued); 7. someone who already holds a place (left, disconnected, no-show)
+ *   takes it back with no capacity check and no lock; 8. a new place: the capacity lock, a recount of the places held
+ *   (capacityTakenSql), then a place or 409 SESSION_FULL. The people who run the event (host, co-host, admin) and an
+ *   organiser's "Let in now" (overCapacity) are never held to capacity. Any place given marks the person's waiting row
+ *   promoted, so nobody is both waiting and holding a place.
+ */
+async function registerParticipantTx(
+  client: PoolClient,
+  sessionId: string,
+  userId: string,
+  userRole: UserRole | undefined,
+  options: RegisterTxOptions,
+): Promise<RegisterResult> {
+  const invitedAt = options.personalInviteCreatedAt ?? null;
+  const viaInvite = !!options.viaInvite || !!invitedAt;
+  // Read session without lock — ON CONFLICT handles concurrent inserts safely.
+  // FOR UPDATE was causing cascading timeouts when multiple users register simultaneously (capacity has its own
+  // advisory lock, lockEventCapacity, taken only for a new place).
+  // Part 2 Task 5: whether the event has matching groups is read in the same row, so an event without them
+  // (every event before groups existed) makes exactly the reads it always made.
+  // Part 3 Task 3: and whether the account is active, in the same read (a closed or suspended account takes no place).
+  const sessionResult = await client.query<SessionRow & { hasEventGroups?: boolean; accountActive?: boolean | null }>(
+    `SELECT ${SESSION_COLUMNS},
+            (SELECT ${activeMemberSql('acct')} FROM users acct WHERE acct.id = $2) AS "accountActive",
+            EXISTS (SELECT 1 FROM event_groups eg WHERE eg.session_id = sessions.id) AS "hasEventGroups"
+       FROM sessions WHERE id = $1`,
+    [sessionId, userId]
+  );
+  if (sessionResult.rows.length === 0) {
+    throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+  }
+  const session = sessionResult.rows[0];
+  // A missing account reads NULL and is refused too; a row read without the column at all (a test's) reads as before.
+  if (session.accountActive === false || session.accountActive === null) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, ACCOUNT_CLOSED_SENTENCE);
+  }
+
+  // Part 2 Task 2 (D1): a draft takes nobody but the people who run it, and answers everyone else exactly as an id
+  // that does not exist. An event whose registration opens later holds back everyone it would take, at any
+  // visibility, until then. A published event with no opening time (every existing one) reads nothing more here.
+  const opensLater = !!session.registrationOpensAt && new Date(session.registrationOpensAt).getTime() > Date.now()
+    && session.status !== SessionStatus.COMPLETED && session.status !== SessionStatus.CANCELLED;
+  if (session.publication === 'draft' || opensLater) {
+    const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
+    if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+    if (facts.publication === 'draft' && !runsEvent(facts, userRole)) {
       throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
     }
-    const session = sessionResult.rows[0];
-
-    // Part 2 Task 2 (D1): a draft takes nobody but the people who run it, and answers everyone else exactly as an id
-    // that does not exist. An event whose registration opens later holds back everyone it would take, at any
-    // visibility, until then. A published event with no opening time (every existing one) reads nothing more here.
-    const opensLater = !!session.registrationOpensAt && new Date(session.registrationOpensAt).getTime() > Date.now()
-      && session.status !== SessionStatus.COMPLETED && session.status !== SessionStatus.CANCELLED;
-    if (session.publication === 'draft' || opensLater) {
-      const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
-      if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
-      if (facts.publication === 'draft' && !runsEvent(facts, userRole)) {
-        throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
-      }
-      // Fix round 1 (review M4): the whole rule, so someone the event would refuse anyway (private, a closed circle, an
-      // approval event, a private pod) hears that refusal, and only someone it would take hears the opening time.
-      if (opensLater) {
-        const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
-        if (!decision.ok) throw new AppError(decision.status, decision.code as ErrorCode, decision.message);
-      }
-    }
-
-    // Check session is open for registration
-    const closedStatuses: SessionStatus[] = [SessionStatus.COMPLETED, SessionStatus.CANCELLED];
-    if (closedStatuses.includes(session.status)) {
-      throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'This event is no longer accepting participants');
-    }
-
-    // Part 2, Task 3 (fix round 1): an event guest takes a place only where guestMayRegister allows (the event they
-    // came in through, or one where they already hold a row), on every way in. Members pass on the cached gate.
-    // Part 2, Task 4: an event with an admission mode also lets in a guest it has entitled (guestMayRegister c).
-    const { isGuest } = await assertGuestMayRegister((text, params) => client.query(text, params), sessionId, userId,
-      { approvedRequest: !!options?.approvedRequest, arrivedThroughCallLink: !!options?.arrivedThroughCallLink });
-
-    const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
-
-    // T11 (1 Nov 2026): an event with its own visibility follows the one rule (event-access.ts) and never adds
-    // anyone to its pod. A NULL event follows its pod's rules below, exactly as before.
-    // Part 2 Task 4: an admission mode (never on an event without a visibility: sessions_admission_needs_visibility) is
-    // part of the same rule; what gave the place is recorded below.
-    let admittedVia: AdmittedVia | null = null;
-    if (session.visibility) {
-      const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
-      if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
-      const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
+    // Fix round 1 (review M4): the whole rule, so someone the event would refuse anyway (private, a closed circle, an
+    // approval event, a private pod) hears that refusal, and only someone it would take hears the opening time.
+    if (opensLater) {
+      const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options.approvedRequest });
       if (!decision.ok) throw new AppError(decision.status, decision.code as ErrorCode, decision.message);
-      admittedVia = admittedViaOf(facts, userRole, { viaInvite, approvedRequest: !!options?.approvedRequest });
     }
+  }
 
-    // Enforce pod visibility rules for session access (admin/super_admin bypass)
-    const podResult = await client.query(
-      `SELECT visibility FROM pods WHERE id = $1`,
-      [session.podId]
-    );
-    if (podResult.rows.length > 0 && !isAdmin && !session.visibility) {
-      const podVisibility = podResult.rows[0].visibility;
-      const memberResult = await client.query(
-        `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
-        [session.podId, userId]
-      );
-      const isMember = memberResult.rows.length > 0;
+  // Check session is open for registration
+  const closedStatuses: SessionStatus[] = [SessionStatus.COMPLETED, SessionStatus.CANCELLED];
+  if (closedStatuses.includes(session.status)) {
+    throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'This event is no longer accepting participants');
+  }
 
-      if (podVisibility === 'public' && !isMember) {
-        // Auto-add to pod when registering for a session in a public pod. Never an event guest (Part 2, Task 3):
-        // they take the event's place only, and never become a pod member.
-        if (!isGuest) {
-          try {
-            await client.query(
-              `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
-               ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
-              [session.podId, userId]
-            );
-          } catch { /* ignore if already member */ }
-        }
-      } else if ((podVisibility === 'invite_only' || podVisibility === 'private') && !isMember) {
-        // For private/invite-only pods, only allow if user has a valid (accepted) invite
-        // User must go through acceptInvite() first which adds them to pod + marks invite
-        throw new ForbiddenError('You must be a pod member to register for events in a private pod');
-      } else if (podVisibility === 'public_with_approval' && !isMember && !viaInvite) {
-        // T2 (1 Nov 2026), D2: a pod that asks for approval takes into its events only the people it approved (its
-        // active members), the host, a co-host and people invited to the event. Anyone else with the id used to be
-        // registered, and so let into the live room. Fix round 1: this gates a NEW place only. Someone who already
-        // holds a row (let in before, then out of the pod; a reconnect after a restart) goes on to the row checks
-        // below as before: already registered, a recoverable leave, or a terminal removal.
-        const outsider = await client.query<{ outsider: boolean }>(
-          `SELECT ${approvalPodOutsiderSql('s', '$2')}
-                  AND NOT EXISTS (SELECT 1 FROM session_participants held WHERE held.session_id = s.id AND held.user_id = $2) AS outsider
-             FROM sessions s WHERE s.id = $1`,
-          [sessionId, userId],
-        );
-        if (outsider.rows[0]?.outsider) throw new ForbiddenError(APPROVAL_POD_EVENT_REFUSAL);
-      }
-    }
-
-    // Check capacity
-    const config = typeof session.config === 'string'
-      ? JSON.parse(session.config as unknown as string)
-      : session.config;
-
-    // T2: a removed, suspended or banned account holds no place (the participants list leaves them out too).
-    const countResult = await client.query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM session_participants sp JOIN users u ON u.id = sp.user_id
-        WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left') AND ${activeMemberSql('u')}`,
-      [sessionId]
-    );
-    const currentCount = parseInt(countResult.rows[0].count, 10);
-    const full = !!config.maxParticipants && currentCount >= config.maxParticipants;
-
-    // A full event refuses at once, as before; only a host's personal invite looks at the row first (below).
-    if (full && !invitedAt) {
-      throw new ConflictError('SESSION_FULL', 'This event has reached its maximum participant count');
-    }
-
-    // Check for existing registration (with when a removal of theirs was made)
-    const existing = await client.query<{ id: string; status: string; left_at: Date | null }>(
-      `SELECT id, status, left_at FROM session_participants WHERE session_id = $1 AND user_id = $2`,
-      [sessionId, userId]
-    );
-    // H1b fix round 1 — a removal this host's personal invite lifts: one made before the invite. Such a person was in
-    // the event, so taking them back is not held to its capacity (a full event would otherwise keep them out for good:
-    // their removed row bars the way in that someone refused only for capacity has).
-    const readmits = existing.rows[0]?.status === 'removed' && liftedByPersonalInvite(existing.rows[0].left_at, invitedAt);
-    if (full && !readmits) {
-      throw new ConflictError('SESSION_FULL', 'This event has reached its maximum participant count');
-    }
-
-    // Part 2 Task 5: an event with matching groups writes the group a person chose with their registration. It
-    // refuses only a person's own first registration that chose none, because they can choose in the same request
-    // (fix round 1, controller ruling: an attendee is never stranded). An approved request, an invite accepted,
-    // someone coming back to a place they held, and anyone the organiser adds are let in without a group and wait
-    // in the board's basket for the organiser. A place someone already holds, and a removal, are answered below
-    // as before. Only an event with groups reads further.
-    const heldStatus = existing.rows[0]?.status;
-    const givesPlace = !heldStatus
-      || (!['registered', 'checked_in', 'in_lobby', 'in_round'].includes(heldStatus) && (heldStatus !== 'removed' || readmits));
-    if (session.hasEventGroups && givesPlace) {
-      const ownFirstPlace = !heldStatus && !viaInvite && !options?.approvedRequest;
-      await applyRegistrationGroups(client, sessionId, userId, userRole, options?.groupKeys, ownFirstPlace);
-    }
-
-    if (existing.rows.length > 0) {
-      const existingStatus = existing.rows[0].status;
-      if (['registered', 'checked_in', 'in_lobby', 'in_round'].includes(existingStatus)) {
-        throw new ConflictError('SESSION_ALREADY_REGISTERED', 'You are already registered for this event');
-      }
-      // WS2 (27 May remaining work) — kick = banned from re-entry. Pre-fix
-      // the re-register UPDATE below resurrected 'removed' rows straight
-      // back to 'registered', so a kicked user could walk back into the
-      // event (the socket join path auto-registers on page load). REMOVED
-      // is terminal in the participant state machine; honor it here too.
-      // #4B — EXCEPT when re-admitted by a personal host invite made after the
-      // removal (readmits); then we fall through to the re-register UPDATE.
-      if (existingStatus === 'removed' && !readmits) {
-        throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, 'You have been removed from this event by the host');
-      }
-      // Re-register. H1b (26 Oct 2026) — guarded like every other status write. An invite accept and the REST register
-      // run outside the event's guard, so a kick could land between the read above and this write, which used to undo
-      // it. A removed row is written only when its removal was made before the host's personal invite being accepted
-      // ($3, the one way back; the invite accept's own insert keeps the same rule): a kick made after the invite stands,
-      // nothing is written, and the person is told they were removed.
-      const result = await client.query<SessionParticipant>(
-        `UPDATE session_participants SET status = 'registered', left_at = NULL, is_no_show = FALSE
-         WHERE session_id = $1 AND user_id = $2
-           AND (status <> 'removed' OR ($3::timestamptz IS NOT NULL AND (left_at IS NULL OR left_at < $3::timestamptz)))
-         RETURNING ${PARTICIPANT_COLUMNS}`,
-        [sessionId, userId, invitedAt]
-      );
-      if (result.rows[0]) return { ...result.rows[0], isNewRegistration: false };
-      const reread = await client.query<{ status: string }>(
-        `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
-        [sessionId, userId]
-      );
-      if (reread.rows[0]?.status === 'removed') {
-        throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, 'You have been removed from this event by the host');
-      }
-      // Otherwise the row went away meanwhile (an unregister), or a personal invite has just taken them back: the
-      // insert below registers them afresh, or reads the row as it now is.
-    }
-
-    // Phase R8 (20 May 2026 — live-test post-mortem). For admin / super_admin
-    // users who are NOT the event director, default acting_as_host to FALSE
-    // (opt-in as participant) so they don't get stuck on the "Pick how
-    // you're joining first" Phase P picker. They can still flip to host
-    // mid-event via the Join-as banner. Pre-fix, the column stayed NULL
-    // and the LiveSessionPage blocked them behind the picker — Raja Ali
-    // King (super_admin) saw this in the 20 May test even after the event
-    // ended because the picker doesn't gate on session.status='completed'.
-    const isDirector = session.hostUserId === userId;
-    const defaultActingAsHost = (isAdmin && !isDirector) ? false : null;
-
-    // ON CONFLICT DO NOTHING absorbs the race where a concurrent caller
-    // inserted the same (session_id, user_id) between our SELECT-existing
-    // check above and this INSERT. Pre-fix, the second caller hit the
-    // session_participants_session_id_user_id_key unique constraint and
-    // 500'd — incident 2026-04-28 11:00:48 UTC, where the lobby page's
-    // auto-register fired alongside the invite-accept flow's nested
-    // registerParticipant for the same user.
-    const insertResult = await client.query<SessionParticipant>(
-      `INSERT INTO session_participants (session_id, user_id, status, acting_as_host)
-       VALUES ($1, $2, 'registered', $3)
-       ON CONFLICT (session_id, user_id) DO NOTHING
-       RETURNING ${PARTICIPANT_COLUMNS}`,
-      [sessionId, userId, defaultActingAsHost]
-    );
-
-    let participant: SessionParticipant & { isNewRegistration: boolean };
-    if (insertResult.rowCount === 0) {
-      // Lost the ON CONFLICT race — the concurrent caller's insert is the
-      // fresh one (and sends any confirmation); this call is a no-op read.
-      const existingRow = await client.query<SessionParticipant>(
-        `SELECT ${PARTICIPANT_COLUMNS} FROM session_participants WHERE session_id = $1 AND user_id = $2`,
-        [sessionId, userId]
-      );
-      participant = { ...existingRow.rows[0], isNewRegistration: false };
-    } else {
-      participant = { ...insertResult.rows[0], isNewRegistration: true };
-    }
-
-    // Part 2 Task 4: what gave this place on an event with an admission mode. The first answer is kept (a later
-    // re-register after leaving keeps how they first came in). An event with no mode writes nothing, as before.
-    if (admittedVia) {
-      await client.query(
-        `UPDATE session_participants SET admitted_via = $3 WHERE session_id = $1 AND user_id = $2 AND admitted_via IS NULL`,
-        [sessionId, userId, admittedVia],
-      );
-    }
-
-    // Sync invite status: if user had a pending invite for this session, mark it accepted
-    await client.query(
-      `UPDATE invites SET status = 'accepted', accepted_by_user_id = COALESCE(accepted_by_user_id, $1), accepted_at = COALESCE(accepted_at, NOW())
-       WHERE session_id = $2 AND status = 'pending' AND (invitee_email = (SELECT email FROM users WHERE id = $1) OR accepted_by_user_id = $1)`,
-      [userId, sessionId]
-    );
-
-    logger.info({ sessionId, userId }, 'Participant registered');
-    return participant;
+  // Part 2, Task 3 (fix round 1): an event guest takes a place only where guestMayRegister allows (the event they
+  // came in through, or one where they already hold a row), on every way in. Members pass on the cached gate.
+  // Part 2, Task 4: an event with an admission mode also lets in a guest it has entitled (guestMayRegister c).
+  // Part 3 Task 3: and a guest promoted from the event's waiting list (fromWaitlist; guestMayRegister's onWaitlist).
+  const { isGuest } = await assertGuestMayRegister((text, params) => client.query(text, params), sessionId, userId, {
+    approvedRequest: !!options.approvedRequest, arrivedThroughCallLink: !!options.arrivedThroughCallLink,
+    fromWaitlist: !!options.fromWaitlist,
   });
 
-  // Phase 2A (5 May spec) — if the session is currently live (has an active
-  // orchestrator), sync the in-memory state machine so reads observe the
-  // (re-)registration immediately. The DB row is already written above; we
-  // pass persistToDb:false to avoid a redundant UPDATE. Failure here is
-  // logged-but-ignored because the periodic reconciler will catch any drift
-  // on its next tick.
+  const isAdmin = !!userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+
+  // T11 (1 Nov 2026): an event with its own visibility follows the one rule (event-access.ts) and never adds
+  // anyone to its pod. A NULL event follows its pod's rules below, exactly as before.
+  // Part 2 Task 4: an admission mode (never on an event without a visibility: sessions_admission_needs_visibility) is
+  // part of the same rule; what gave the place is recorded below.
+  let admittedVia: AdmittedVia | null = null;
+  if (session.visibility) {
+    const facts = await readEventAccessFacts(sessionId, userId, (text, params) => client.query(text, params));
+    if (!facts) throw new NotFoundError('Session', sessionId, "We couldn't find that event.");
+    const decision = canRegister(facts, userRole, { viaInvite, approvedRequest: !!options.approvedRequest });
+    if (!decision.ok) throw new AppError(decision.status, decision.code as ErrorCode, decision.message);
+    admittedVia = admittedViaOf(facts, userRole, { viaInvite, approvedRequest: !!options.approvedRequest });
+  }
+
+  // Enforce pod visibility rules for session access (admin/super_admin bypass)
+  const podResult = await client.query(
+    `SELECT visibility FROM pods WHERE id = $1`,
+    [session.podId]
+  );
+  if (podResult.rows.length > 0 && !isAdmin && !session.visibility) {
+    const podVisibility = podResult.rows[0].visibility;
+    const memberResult = await client.query(
+      `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
+      [session.podId, userId]
+    );
+    const isMember = memberResult.rows.length > 0;
+
+    if (podVisibility === 'public' && !isMember) {
+      // Auto-add to pod when registering for a session in a public pod. Never an event guest (Part 2, Task 3):
+      // they take the event's place only, and never become a pod member. A full event undoes it with the rest of the
+      // registration (the transaction, or registerOrWaitlist's savepoint).
+      if (!isGuest) {
+        try {
+          await client.query(
+            `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
+             ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
+            [session.podId, userId]
+          );
+        } catch { /* ignore if already member */ }
+      }
+    } else if ((podVisibility === 'invite_only' || podVisibility === 'private') && !isMember) {
+      // For private/invite-only pods, only allow if user has a valid (accepted) invite
+      // User must go through acceptInvite() first which adds them to pod + marks invite
+      throw new ForbiddenError('You must be a pod member to register for events in a private pod');
+    } else if (podVisibility === 'public_with_approval' && !isMember && !viaInvite) {
+      // T2 (1 Nov 2026), D2: a pod that asks for approval takes into its events only the people it approved (its
+      // active members), the host, a co-host and people invited to the event. Anyone else with the id used to be
+      // registered, and so let into the live room. Fix round 1: this gates a NEW place only. Someone who already
+      // holds a row (let in before, then out of the pod; a reconnect after a restart) goes on to the row checks
+      // below as before: already registered, a recoverable leave, or a terminal removal.
+      const outsider = await client.query<{ outsider: boolean }>(
+        `SELECT ${approvalPodOutsiderSql('s', '$2')}
+                AND NOT EXISTS (SELECT 1 FROM session_participants held WHERE held.session_id = s.id AND held.user_id = $2) AS outsider
+           FROM sessions s WHERE s.id = $1`,
+        [sessionId, userId],
+      );
+      if (outsider.rows[0]?.outsider) throw new ForbiddenError(APPROVAL_POD_EVENT_REFUSAL);
+    }
+  }
+
+  // Their row (with when a removal of theirs was made). Part 3 Task 3 (audit D-d): read before capacity, so a removal
+  // is answered as a removal on a full event, and a place someone already holds is never counted against them.
+  const existing = await client.query<{ id: string; status: string; left_at: Date | null }>(
+    `SELECT id, status, left_at FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId]
+  );
+  const existingStatus = existing.rows[0]?.status;
+  // H1b fix round 1 — a removal this host's personal invite lifts: one made before the invite. Such a person was in
+  // the event, so taking them back is not held to its capacity (a full event would otherwise keep them out for good).
+  const readmits = existing.rows[0]?.status === 'removed' && liftedByPersonalInvite(existing.rows[0].left_at, invitedAt);
+
+  // WS2 (27 May remaining work) — kick = banned from re-entry. REMOVED is terminal in the participant state machine;
+  // honor it here too. #4B — EXCEPT when re-admitted by a personal host invite made after the removal (readmits).
+  if (existingStatus === 'removed' && !readmits) {
+    throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, REMOVED_SENTENCE);
+  }
+  if (existingStatus && ACTIVE_PLACE_STATUSES.includes(existingStatus)) {
+    throw new ConflictError('SESSION_ALREADY_REGISTERED', 'You are already registered for this event');
+  }
+
+  // Part 2 Task 5: an event with matching groups writes the group a person chose with their registration. It
+  // refuses only a person's own first registration that chose none, because they can choose in the same request
+  // (fix round 1, controller ruling: an attendee is never stranded). An approved request, an invite accepted,
+  // someone coming back to a place they held, and anyone the organiser adds are let in without a group and wait
+  // in the board's basket for the organiser. Only an event with groups reads further.
+  const writeGroups = async (ownFirstPlace: boolean): Promise<void> => {
+    if (session.hasEventGroups) {
+      await applyRegistrationGroups(client, sessionId, userId, userRole, options.groupKeys, ownFirstPlace);
+    }
+  };
+
+  if (existingStatus) {
+    // A place they already hold (left, disconnected, no-show), or a removal a personal invite lifts: taken back with no
+    // capacity check (K3: leaving never gave the place up) and no lock.
+    await writeGroups(false);
+    // Re-register. H1b (26 Oct 2026) — guarded like every other status write. An invite accept and the REST register
+    // run outside the event's guard, so a kick could land between the read above and this write, which used to undo
+    // it. A removed row is written only when its removal was made before the host's personal invite being accepted
+    // ($3, the one way back; the invite accept's own insert keeps the same rule): a kick made after the invite stands,
+    // nothing is written, and the person is told they were removed.
+    const result = await client.query<SessionParticipant>(
+      `UPDATE session_participants SET status = 'registered', left_at = NULL, is_no_show = FALSE
+       WHERE session_id = $1 AND user_id = $2
+         AND (status <> 'removed' OR ($3::timestamptz IS NOT NULL AND (left_at IS NULL OR left_at < $3::timestamptz)))
+       RETURNING ${PARTICIPANT_COLUMNS}`,
+      [sessionId, userId, invitedAt]
+    );
+    const retaken = result.rows[0] ? { ...result.rows[0], isNewRegistration: false } : null;
+    if (retaken) {
+      await endWaiting(client, sessionId, userId);
+      return retaken;
+    }
+    const reread = await client.query<{ status: string }>(
+      `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, userId]
+    );
+    if (reread.rows[0]?.status === 'removed') {
+      throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, REMOVED_SENTENCE);
+    }
+    // Otherwise the row went away meanwhile (an unregister): a new place below, under the lock like any other.
+  }
+
+  // A new place. Part 3 Task 3 (K3): under the event's capacity lock, so the recount below is the count the place is
+  // given against; then the row is read again, in case this same person's other request took the place while this one
+  // waited for the lock (its place is theirs: answered as today's lost insert race, never as "full").
+  await lockEventCapacity(client, sessionId);
+  const mine = await client.query<SessionParticipant>(
+    `SELECT ${PARTICIPANT_COLUMNS} FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId]
+  );
+  if (mine.rows[0]) {
+    if (mine.rows[0].status === 'removed') throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, REMOVED_SENTENCE);
+    return { ...mine.rows[0], isNewRegistration: false };
+  }
+  const room = await client.query<{
+    taken: number | string | null; capacity: number | string | null; ahead: number | string | null; runs: boolean | null;
+  }>(
+    `SELECT ${capacityTakenSql('s')} AS taken, ${eventCapacitySql('s')} AS capacity, ${waitlistAheadSql('s', '$2')} AS ahead,
+            (s.host_user_id = $2 OR EXISTS (SELECT 1 FROM session_cohosts rc WHERE rc.session_id = s.id AND rc.user_id = $2)) AS runs
+       FROM sessions s WHERE s.id = $1`,
+    [sessionId, userId]
+  );
+  const capacityValue = room.rows[0]?.capacity;
+  const capacity = capacityValue === null || capacityValue === undefined ? null : Number(capacityValue);
+  const taken = Number(room.rows[0]?.taken ?? 0) || 0;
+  // The people waiting ahead of this person keep the free places for themselves (the line is first in, first out); an
+  // event with nobody waiting reads 0 here, so it fills exactly as before.
+  const ahead = Number(room.rows[0]?.ahead ?? 0) || 0;
+  // The people who run the event never take a place from anyone (the host and co-hosts are not counted) and are never
+  // turned away or queued; an organiser's "Let in now" is let in over capacity on purpose.
+  const heldToCapacity = !isAdmin && !room.rows[0]?.runs && !options.overCapacity;
+  if (heldToCapacity && capacity !== null && taken + ahead >= capacity) {
+    throw new ConflictError('SESSION_FULL', 'This event has reached its maximum participant count');
+  }
+
+  // Someone promoted from the waiting list answered the group question when they joined it (their keys come with them);
+  // one who has none (the event gained groups since) is let in for the organiser to place, as an approval is.
+  await writeGroups(!viaInvite && !options.approvedRequest && !options.fromWaitlist);
+
+  // Phase R8 (20 May 2026 — live-test post-mortem). For admin / super_admin
+  // users who are NOT the event director, default acting_as_host to FALSE
+  // (opt-in as participant) so they don't get stuck on the "Pick how
+  // you're joining first" Phase P picker. They can still flip to host
+  // mid-event via the Join-as banner.
+  const isDirector = session.hostUserId === userId;
+  const defaultActingAsHost = (isAdmin && !isDirector) ? false : null;
+
+  // ON CONFLICT DO NOTHING absorbs the race where a concurrent caller
+  // inserted the same (session_id, user_id) between our SELECT-existing
+  // check above and this INSERT (incident 2026-04-28 11:00:48 UTC, where the lobby page's
+  // auto-register fired alongside the invite-accept flow's nested
+  // registerParticipant for the same user).
+  const insertResult = await client.query<SessionParticipant>(
+    `INSERT INTO session_participants (session_id, user_id, status, acting_as_host)
+     VALUES ($1, $2, 'registered', $3)
+     ON CONFLICT (session_id, user_id) DO NOTHING
+     RETURNING ${PARTICIPANT_COLUMNS}`,
+    [sessionId, userId, defaultActingAsHost]
+  );
+
+  let participant: RegisterResult;
+  if (insertResult.rowCount === 0) {
+    // Lost the ON CONFLICT race — the concurrent caller's insert is the
+    // fresh one (and sends any confirmation); this call is a no-op read.
+    const existingRow = await client.query<SessionParticipant>(
+      `SELECT ${PARTICIPANT_COLUMNS} FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, userId]
+    );
+    participant = { ...existingRow.rows[0], isNewRegistration: false };
+  } else {
+    participant = { ...insertResult.rows[0], isNewRegistration: true };
+  }
+  await finishPlace(client, sessionId, userId, admittedVia);
+  logger.info({ sessionId, userId }, 'Participant registered');
+  return participant;
+}
+// Exported here, after its body, so registerParticipant's own source (the wrapper above and this rule) reads as one piece.
+export { registerParticipantTx };
+
+/**
+ * The writes every new place ends with: what gave it (an event with an admission mode), a pending invite marked
+ * accepted, and (Part 3 Task 3) the person's waiting row ended.
+ */
+async function finishPlace(client: PoolClient, sessionId: string, userId: string, admittedVia: AdmittedVia | null): Promise<void> {
+  // Part 2 Task 4: what gave this place on an event with an admission mode. The first answer is kept (a later
+  // re-register after leaving keeps how they first came in). An event with no mode writes nothing, as before.
+  if (admittedVia) {
+    await client.query(
+      `UPDATE session_participants SET admitted_via = $3 WHERE session_id = $1 AND user_id = $2 AND admitted_via IS NULL`,
+      [sessionId, userId, admittedVia],
+    );
+  }
+
+  // Sync invite status: if user had a pending invite for this session, mark it accepted
+  await client.query(
+    `UPDATE invites SET status = 'accepted', accepted_by_user_id = COALESCE(accepted_by_user_id, $1), accepted_at = COALESCE(accepted_at, NOW())
+     WHERE session_id = $2 AND status = 'pending' AND (invitee_email = (SELECT email FROM users WHERE id = $1) OR accepted_by_user_id = $1)`,
+    [userId, sessionId]
+  );
+
+  await endWaiting(client, sessionId, userId);
+}
+
+/**
+ * Part 3 Task 3: a place given ends the person's waiting row (promoted), so nobody is both waiting and holding a place.
+ * A place taken back (left, no-show, a removal lifted by a personal invite) runs only this, as it ran nothing before.
+ */
+async function endWaiting(client: PoolClient, sessionId: string, userId: string): Promise<void> {
+  await client.query(
+    `UPDATE event_waitlist SET status = 'promoted', decided_at = NOW(), updated_at = NOW()
+      WHERE session_id = $1 AND user_id = $2 AND status = 'waiting'`,
+    [sessionId, userId],
+  );
+}
+
+/**
+ * Phase 2A (5 May spec) — if the session is currently live (has an active orchestrator), sync the in-memory state
+ * machine so reads observe the (re-)registration immediately. The DB row is already written; persistToDb:false avoids a
+ * redundant UPDATE. Failure here is logged-but-ignored because the periodic reconciler will catch any drift on its next
+ * tick. Call it after the place's transaction has committed (registerParticipant, the waiting list's promotion).
+ */
+export async function syncLiveRegistration(sessionId: string, userId: string): Promise<void> {
   try {
     const { activeSessions } = await import('../orchestration/state/session-state');
     if (activeSessions.has(sessionId)) {
@@ -813,8 +911,6 @@ export async function registerParticipant(
   } catch (err) {
     logger.warn({ err, sessionId, userId }, 'registerParticipant: in-memory state-machine sync failed (DB write committed; reconciler will fix on next tick)');
   }
-
-  return participant;
 }
 
 export async function unregisterParticipant(sessionId: string, userId: string): Promise<void> {

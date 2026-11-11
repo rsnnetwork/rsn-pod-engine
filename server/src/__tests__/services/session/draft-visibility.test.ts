@@ -178,7 +178,7 @@ const facts = (over: Partial<EventAccessFacts> = {}): EventAccessFacts => ({
   visibility: null, podId: 'pod-1', podVisibility: 'public', isHost: false, isCohost: false, isPodOrganiser: false,
   inAudience: true, isInvited: false, participantStatus: null, accountActive: true, myRequest: null, outsideClosedCircle: false,
   publication: 'draft', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
-  admissionMode: null, entitled: false, entitledVia: null,
+  admissionMode: null, entitled: false, entitledVia: null, capacity: null, placesTaken: 0, waitlistPosition: null,
   ...over,
 });
 
@@ -375,7 +375,11 @@ describe('GET /sessions/:id', () => {
       imageUrl: null,
       timezone: 'UTC',
       // Part 2 Task 4 adds `admission` (additive): an event with no mode and no visibility follows its pod's rules.
-      access: { visibility: null, mode: 'register', myRequest: null, autoRegister: true, canManageRequests: false, admission: 'pod_rules' },
+      // Part 3 Task 3 adds `waitlist` (additive): an event with no limit is never full, and nobody is waiting.
+      access: {
+        visibility: null, mode: 'register', myRequest: null, autoRegister: true, canManageRequests: false, admission: 'pod_rules',
+        waitlist: { full: false, position: null },
+      },
     });
   });
 });

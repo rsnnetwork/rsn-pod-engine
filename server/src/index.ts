@@ -81,6 +81,7 @@ import eventAuditRoutes from './routes/event-audit';
 import eventLifecycleRoutes from './routes/event-lifecycle';
 import eventGroupRoutes from './routes/event-groups';
 import eventAdmissionRoutes from './routes/event-admission';
+import eventWaitlistRoutes from './routes/event-waitlist';
 import callLinkRoutes, { sessionCallLinkRoutes } from './routes/call-links';
 import scheduleRoutes from './routes/schedule';
 import eventImageRoutes from './routes/event-image';
@@ -363,6 +364,7 @@ app.use('/api/sessions', eventAuditRoutes); // An event's audit trail for its or
 app.use('/api/sessions', eventLifecycleRoutes); // Publish, unpublish, cancel, archive, delete for good: /api/sessions/:id/<step>
 app.use('/api/sessions', eventGroupRoutes); // An event's matching groups and round rules: /api/sessions/:id/groups
 app.use('/api/sessions', eventAdmissionRoutes); // Who gets a place: /api/sessions/:id/admission/* (Part 2 Task 4)
+app.use('/api/sessions', eventWaitlistRoutes); // A full event's waiting list: /api/sessions/:id/waitlist* (Part 3 Task 3)
 app.use('/api/sessions', sessionCallLinkRoutes); // An event's RSN Call link for its organisers: /api/sessions/:id/call-link
 app.use('/api/call-links', callLinkRoutes); // The RSN Call link itself: open, verify by code, enter (Part 2 Task 6)
 app.use('/api/sessions', scheduleRoutes); // The organisers' matching board draft: /api/sessions/:id/schedule

@@ -1134,3 +1134,16 @@ export const eventReportExportLimiter = rateLimit({
   store: buildStore('event-report-export'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: EVENT_REPORT_EXPORT_LIMITED } },
 });
+
+// The waiting list (10 Nov 2026 spec, Part 3 Task 3): leaving it, and the organisers reading it, letting someone in and
+// taking someone off it. Thirty a minute per person. Joining it is the registration's own (the register route, the call
+// link's entry, an approval, an invite accept), under their limits.
+export const waitlistLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('waitlist'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});

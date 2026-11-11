@@ -14,19 +14,21 @@ import {
 } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
-import { canSeeEvent, readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
+import { canSeeEvent, managesRequests, readEventAccessFacts, summariseEventAccess } from '../services/session/event-access';
 import { readEventCircle } from '../services/circle/circle-events.service';
 import { summariseEventLifecycle } from '../services/session/event-lifecycle.service';
 import * as eventRequests from '../services/session/event-requests.service';
 import { fanoutEventGroups } from '../services/session/event-groups.service';
 import { eventChatReadLimiter, eventRequestLimiter } from '../middleware/rateLimit';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
+import { afterPlaceFreed, registerOrWaitlist } from '../services/session/event-waitlist.service';
 // 27 May — live main-room presence (heartbeat) to gate the event-plan "not matched" counts.
 import { activeSessions } from '../services/orchestration/state/session-state';
 import { getCanonicalConnectedSet } from '../services/orchestration/state/canonical-state';
 import {
   ApiResponse, SessionStatus, UserRole, hasRoleAtLeast, EventFormat, EVENT_FORMAT_KEYS, resolveEventFormat, liveKindOf,
   EventVisibility, EVENT_VISIBILITY_KEYS, ErrorCodes, GROUP_LIMITS, isGroupKey, canonicalTimeZone,
+  type WaitlistedRegistration,
 } from '@rsn/shared';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
@@ -349,6 +351,10 @@ router.put(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const session = await sessionService.updateSession(req.params.id, req.user!.userId, req.body, req.user!.role);
+      // Part 3 Task 3: a capacity raised (or a format switch, which sets the format's own) frees places for the waiting
+      // list. Promotion reads the event's own count under its lock, so an edit that freed nothing promotes nobody.
+      const body = req.body as { config?: { maxParticipants?: unknown }; format?: unknown };
+      if (body.config?.maxParticipants !== undefined || body.format !== undefined) void afterPlaceFreed(session.id, 'capacity');
       // Bug 30 (19 May Ali) — fan out so every member's session list
       // shows the updated title/time/status instantly.
       fanoutSessionEntities(session.podId ?? null, session.id).catch(() => {});
@@ -536,7 +542,9 @@ router.post(
       fanoutSessionEntities(podId, req.params.id, [E.userSessions(userId), E.sessionParticipants(req.params.id)]).catch(() => {});
       eventRequests.fanoutJoinRequests(req.params.id, userId, [E.sessionParticipants(req.params.id), E.userSessions(userId)]).catch(() => {});
       if (outcome.isNewRegistration) void sendRegistrationEmail(req.params.id, userId);
-      const response: ApiResponse = { success: true, data: outcome.request };
+      // Part 3 Task 3 (additive): an approval on a full event approves the request and puts the person on the waiting
+      // list; the organiser's toast says where ("number N on the waiting list"). null: they were given a place.
+      const response: ApiResponse = { success: true, data: { ...outcome.request, waitlistPosition: outcome.waitlistPosition } };
       res.json(response);
     } catch (err) {
       next(err);
@@ -568,6 +576,21 @@ router.post(
 const registerBodySchema = z.object({
   groupKeys: z.array(z.string().refine(isGroupKey, "That group isn't one of this event's groups.")).max(GROUP_LIMITS.maxGroups).optional(),
 }).passthrough();
+// Part 3 Task 3: `waitlist: true` asks to join the waiting list when the event is full (202). Without it a full event
+// answers 409 SESSION_FULL exactly as before (controller ruling: no environment switch; production's client sends no
+// such field, so it behaves as today). Read from the same body, which registerBodySchema passes through.
+const registerWaitlistSchema = z.object({ waitlist: z.boolean().optional() }).passthrough();
+
+/** Part 3 Task 3: the event page's registration with `waitlist: true`: a full event answers the person's place in its line. */
+async function registerOrQueueFromEventPage(
+  req: Request, groupKeys: string[] | undefined,
+): Promise<sessionService.RegisterResult | WaitlistedRegistration> {
+  const outcome = await registerOrWaitlist(req.params.id, req.user!.userId, req.user!.role, {
+    ...(groupKeys ? { groupKeys } : {}), joinedVia: 'register',
+  });
+  if (outcome.kind === 'waitlisted') return { waitlisted: true, position: outcome.position };
+  return { ...outcome.participant, isNewRegistration: outcome.isNewRegistration };
+}
 
 router.post(
   '/:id/register',
@@ -576,9 +599,17 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { groupKeys } = req.body as z.infer<typeof registerBodySchema>;
-      const participant = await sessionService.registerParticipant(
-        req.params.id, req.user!.userId, req.user!.role, groupKeys ? { groupKeys } : undefined,
-      );
+      const asked = registerWaitlistSchema.safeParse(req.body);
+      if (!asked.success) throw new ValidationError('Check what you entered and try again.');
+      const participant = asked.data.waitlist === true
+        ? await registerOrQueueFromEventPage(req, groupKeys)
+        : await sessionService.registerParticipant(
+          req.params.id, req.user!.userId, req.user!.role, groupKeys ? { groupKeys } : undefined,
+        );
+      if ('waitlisted' in participant) {
+        res.status(202).json({ success: true, data: participant } satisfies ApiResponse);
+        return;
+      }
       // Phase May-19 realtime — broadcast so every pod member +
       // registered participant sees the new self-registration without
       // a refresh (badge counts, "Registered" pill on the event card).
@@ -673,6 +704,8 @@ router.delete(
       } catch { /* non-fatal */ }
 
       await sessionService.unregisterParticipant(req.params.id, req.user!.userId);
+      // Part 3 Task 3: the place is free; the first person on the waiting list is given it (after this answer).
+      void afterPlaceFreed(req.params.id, 'unregister');
       // Phase R2 (20 May 2026) — also fanout E.sessionParticipants so
       // other clients viewing this session's participants list see the
       // user disappear without F5.
@@ -732,6 +765,16 @@ router.get(
 );
 // ─── GET /sessions/:id/participant-counts ─────────────────────────────────────
 
+/** Part 3 Task 3: the people waiting on the event's line (active accounts), for its organisers' counts. */
+async function countWaiting(sessionId: string): Promise<number> {
+  const r = await query<{ n: number | string }>(
+    `SELECT COUNT(*)::int AS n FROM event_waitlist w JOIN users u ON u.id = w.user_id
+      WHERE w.session_id = $1 AND w.status = 'waiting' AND u.status = 'active'`,
+    [sessionId],
+  );
+  return Number(r.rows[0]?.n ?? 0);
+}
+
 router.get(
   '/:id/participant-counts',
   authenticate,
@@ -750,7 +793,13 @@ router.get(
         }
       }
       const counts = await sessionService.getParticipantStatusCounts(req.params.id);
-      const response: ApiResponse = { success: true, data: counts };
+      // Part 3 Task 3 (additive): how many are waiting, for the people who manage the event's line only (attendees are
+      // never told counts, only "full").
+      const facts = await readEventAccessFacts(req.params.id, req.user!.userId);
+      const data = facts && managesRequests(facts, req.user!.role)
+        ? { ...counts, waitlisted: await countWaiting(req.params.id) }
+        : counts;
+      const response: ApiResponse = { success: true, data };
       res.json(response);
     } catch (err) {
       next(err);
@@ -1045,6 +1094,9 @@ async function mutateSessionCohost(
     fanoutSessionEntities(session.podId ?? null, sessionId, [
       E.session(sessionId), E.sessionParticipants(sessionId), E.sessionPlan(sessionId),
     ]).catch(() => {});
+    // Part 3 Task 3: a co-host holds no place, so making one frees theirs for the waiting list. Removing a co-host makes
+    // them count again and bumps nobody.
+    if (action === 'assign') void afterPlaceFreed(sessionId, 'cohost');
 
     logger.info({ sessionId, targetUserId, action, by: req.user!.userId }, 'Co-host change via REST');
     res.json({ success: true, data: { userId: targetUserId, isCohost: action === 'assign' } });

@@ -15,7 +15,9 @@
 //   readCallEntry       where a signed-in person stands on the event, changing nothing.
 //   enterCall           gives what was missing and takes the place (registerParticipant, the one way a place is given:
 //                       every admission, capacity, removal and guest rule holds), or sends the request an approval event
-//                       asks for. Calling it again changes nothing.
+//                       asks for. Calling it again changes nothing. Part 3 Task 3: a full event puts the person on its
+//                       waiting list (registerOrWaitlist; step 'waitlisted' with their position), and the first in line
+//                       is given the next place that frees.
 //
 // Open items this file closes (handed over by Tasks 3 and 4):
 //   - A guest cannot call POST /sessions/:id/admission/redeem (not on the guest allowlist). Their admission code is
@@ -52,7 +54,7 @@ import {
 } from './event-admission.service';
 import { fanoutEventGroups, getEventGroupRules, setParticipantGroups } from './event-groups.service';
 import { requestToJoin } from './event-requests.service';
-import { registerParticipant } from './session.service';
+import { leaveWaitlist, registerOrWaitlist } from './event-waitlist.service';
 import { eventImageColumns, eventImageUrlOf } from './event-image-url';
 import { sendRegistrationEmail } from './registration-email';
 
@@ -275,7 +277,7 @@ export async function readCallEntryForEvent(event: CallEventRow, userId: string,
   const lifecycle = lifecycleOfCallEvent(event);
   const base: CallEntryState = {
     step: 'details', sessionId: null, livePath: null, missing: { ...NOTHING_MISSING }, refusal: null,
-    startsAt: iso(event.scheduled_at),
+    startsAt: iso(event.scheduled_at), waitlistPosition: null,
   };
   if (lifecycle === 'cancelled') return { ...base, step: 'cancelled' };
   if (lifecycle === 'completed' || lifecycle === 'archived') return { ...base, step: 'ended' };
@@ -295,6 +297,10 @@ export async function readCallEntryForEvent(event: CallEventRow, userId: string,
       step: live ? 'enter' : 'wait_for_start',
       livePath: live ? `/session/${event.id}/live` : null,
     };
+  }
+  // Part 3 Task 3: on the full event's waiting list. Not an enterable step: entering again changes nothing.
+  if (facts.waitlistPosition !== null) {
+    return { ...base, step: 'waitlisted', sessionId: event.id, waitlistPosition: facts.waitlistPosition };
   }
   if (facts.myRequest === 'pending') return { ...base, step: 'pending_approval', sessionId: event.id };
   if (facts.myRequest === 'declined') return { ...base, step: 'declined' };
@@ -442,14 +448,17 @@ export async function enterCall(
   if (now.step !== 'details' || now.missing.displayName || now.missing.admissionCode || !groupAnswered) return now;
 
   try {
-    const participant = await registerParticipant(event.id, userId, role, {
-      ...(groupKeys ? { groupKeys } : {}), arrivedThroughCallLink: true,
+    // A full event puts them on its waiting list (the line tells its own screens); a place is told as before.
+    const placed = await registerOrWaitlist(event.id, userId, role, {
+      ...(groupKeys ? { groupKeys } : {}), arrivedThroughCallLink: true, joinedVia: 'call_link',
     });
-    void fanoutSessionEntities(podId, event.id, [E.userSessions(userId), E.sessionParticipants(event.id)]);
-    if (groupKeys) void fanoutEventGroups(event.id);
-    // The "you're registered" email opens the site they entered from, when it is one of ours (else the main app).
-    if (participant.isNewRegistration) {
-      void sendRegistrationEmail(event.id, userId, firstAllowedClientBaseUrl([opts.origin], clientOriginConfig()));
+    if (placed.kind === 'registered') {
+      void fanoutSessionEntities(podId, event.id, [E.userSessions(userId), E.sessionParticipants(event.id)]);
+      if (groupKeys) void fanoutEventGroups(event.id);
+      // The "you're registered" email opens the site they entered from, when it is one of ours (else the main app).
+      if (placed.isNewRegistration) {
+        void sendRegistrationEmail(event.id, userId, firstAllowedClientBaseUrl([opts.origin], clientOriginConfig()));
+      }
     }
   } catch (err) {
     if (!(err instanceof AppError)) throw err;
@@ -458,6 +467,16 @@ export async function enterCall(
     if (err.statusCode === 403 || err.statusCode === 409) return refused(now, err.code, err.message);
     throw err;
   }
+  return readCallEntryForEvent(event, userId, role);
+}
+
+/**
+ * Part 3 Task 3: take oneself off the waiting list of the event behind `code` (the call link's "Leave the waiting list";
+ * a guest has no other way to it). Answers where they stand afterwards; someone not on the line is answered as they are.
+ */
+export async function leaveCallWaitlist(code: string, userId: string, role: UserRole): Promise<CallEntryState> {
+  const event = await eventForViewer(code, { userId, role });
+  await leaveWaitlist(event.id, userId);
   return readCallEntryForEvent(event, userId, role);
 }
 
@@ -479,6 +498,8 @@ interface MyCallEventRow {
   registration_opens_at: Date | null;
   place: string | null;
   request: string | null;
+  /** Part 3 Task 3: they are waiting on the event's waiting list. */
+  waiting?: boolean | null;
   timezone: string | null;
   has_image: boolean | null;
   image_updated_at: Date | null;
@@ -490,6 +511,7 @@ function stepOfRow(row: MyCallEventRow, lifecycle: EventLifecycle): CallEventSum
   if (lifecycle === 'completed' || lifecycle === 'archived') return 'ended';
   if (row.place === 'removed') return 'refused';
   if (row.place && PLACE_STATUSES.includes(row.place)) return lifecycle === 'live' ? 'enter' : 'wait_for_start';
+  if (row.waiting) return 'waitlisted';
   if (row.request === 'pending') return 'pending_approval';
   if (row.request === 'declined') return 'declined';
   return 'details';
@@ -498,8 +520,9 @@ function stepOfRow(row: MyCallEventRow, lifecycle: EventLifecycle): CallEventSum
 export const MY_CALL_EVENTS_MAX = 50;
 
 /**
- * The events a person holds a place in or has asked to join, each with its link's code: upcoming and live first (soonest
- * first), then the ones that are over (latest first), 50 at most. A draft only for the people who run it.
+ * The events a person holds a place in, has asked to join or (Part 3 Task 3) is waiting for, each with its link's code:
+ * upcoming and live first (soonest first), then the ones that are over (latest first), 50 at most. A draft only for the
+ * people who run it.
  */
 export async function listMyCallEvents(userId: string): Promise<CallEventSummary[]> {
   const r = await query<MyCallEventRow>(
@@ -507,9 +530,12 @@ export async function listMyCallEvents(userId: string): Promise<CallEventSummary
        SELECT session_id FROM session_participants WHERE user_id = $1
        UNION
        SELECT session_id FROM event_join_requests WHERE user_id = $1 AND status IN ('pending', 'approved', 'declined')
+       UNION
+       SELECT session_id FROM event_waitlist WHERE user_id = $1 AND status = 'waiting'
      )
      SELECT s.id, s.call_code, s.title, s.scheduled_at, s.status::text AS status, s.publication, s.archived_at,
             s.registration_opens_at, sp.status::text AS place, r.status AS request,
+            EXISTS (SELECT 1 FROM event_waitlist w WHERE w.session_id = s.id AND w.user_id = $1 AND w.status = 'waiting') AS waiting,
             s.timezone, ${eventImageColumns('s')}
        FROM mine
        JOIN sessions s ON s.id = mine.session_id

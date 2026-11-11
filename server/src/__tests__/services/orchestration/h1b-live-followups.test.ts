@@ -240,6 +240,18 @@ function answer(sql: string, params: unknown[]): Answer {
   if (sql === "SELECT COUNT(*) as count FROM session_participants sp JOIN users u ON u.id = sp.user_id WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show') AND u.status = 'active'") {
     return { rows: [{ count: String(world.participants.filter((p) => p.session_id === a && !['removed', 'left', 'no_show'].includes(p.status)).length) }] };
   }
+  // Part 3 Task 3 (K3): a new place reads the person's row again under the capacity lock, then counts the places held by
+  // anyone but the host (a row that is not removed; this world has no co-hosts) against the event's capacity.
+  if (/^SELECT session_participants\.id, .* FROM session_participants WHERE session_id = \$1 AND user_id = \$2$/.test(sql)) {
+    const p = participant(a, b);
+    return { rows: p ? [{ ...p }] : [] };
+  }
+  if (/AS taken, .* AS capacity, .* AS runs FROM sessions s WHERE s\.id = \$1$/.test(sql)) {
+    const s = world.sessions.get(a as string);
+    if (!s) return { rows: [] };
+    const taken = world.participants.filter((p) => p.session_id === a && p.status !== 'removed' && p.user_id !== s.host_user_id).length;
+    return { rows: [{ taken, capacity: s.config?.maxParticipants ?? null, runs: b === s.host_user_id }] };
+  }
   // The registration's read of the person's row (with when a removal of theirs was made), and the plain re-read.
   if (sql === 'SELECT id, status, left_at FROM session_participants WHERE session_id = $1 AND user_id = $2'
       || sql === 'SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2') {
@@ -847,34 +859,41 @@ describe('1. a kicked member re-admitted by a fresh personal invite stays in (th
     });
   }
 
-  it('a full event: someone let in without a row is kicked, gets a removed row, is refused, and a personal invite made after the kick takes them back in', async () => {
-    const t = await liveEvent({ maxParticipants: 3 }); // the host, the member and the partner fill it
+  // Part 3 Task 3 (controller ruling): a full event's live door no longer lets a newcomer in without a row (the waiting
+  // list holds them), so the row-less kick this case began with cannot happen; what stays is the way back: a member
+  // kicked from a full event and re-invited personally after the kick is taken back over capacity.
+  it('a full event: a newcomer is refused at the door, and a member kicked from it is taken back by a personal invite made after the kick, over capacity', async () => {
+    const t = await liveEvent({ maxParticipants: 2 }); // the member and the partner fill it (the host holds no place)
     const extra = person('Extra');
     podMember(t.podId, extra);
     const extraSock = connect(extra);
     await join(extraSock, t.sessionId);
-    expectAdmitted(extraSock, t.sessionId);
-    expect(statusOf(t.sessionId, extra)).toBeNull(); // in the room, refused a row only because the event is full
+    expect(extraSock.got).toContainEqual({
+      event: 'error', payload: { code: 'SESSION_FULL', message: 'This event is full. Join the waiting list on the event page.' },
+    });
+    expect(statusOf(t.sessionId, extra)).toBeNull();
 
-    await kick(t, extra);
-    expect(statusOf(t.sessionId, extra)).toBe('removed');
-    const refused = connect(extra);
+    await kick(t, t.member);
+    expect(statusOf(t.sessionId, t.member)).toBe('removed');
+    // The kicked member's place went to the newcomer meanwhile: the event is full again without them.
+    world.participants.push({ id: randomUUID(), session_id: t.sessionId, user_id: extra, status: 'registered', joined_at: null, left_at: null });
+    const refused = connect(t.member);
     await join(refused, t.sessionId);
     expect(refused.got).toEqual([EVICTED]);
-    await expect(sessionService.generateLiveKitToken(t.sessionId, extra)).rejects.toThrow('User is not a participant in this event');
+    await expect(sessionService.generateLiveKitToken(t.sessionId, t.member)).rejects.toThrow('User is not a participant in this event');
 
     await aMomentLater();
-    const accepted = await acceptInvite(invite(t.sessionId, t.host, emailOf(extra)), extra, emailOf(extra));
+    const accepted = await acceptInvite(invite(t.sessionId, t.host, emailOf(t.member)), t.member, emailOf(t.member));
     expect(accepted.participantStatus).toBe('registered');
-    expect(memoryOf(t.sessionId, extra)).toBe('registered');
-    const back = connect(extra);
+    expect(memoryOf(t.sessionId, t.member)).toBe('registered');
+    const back = connect(t.member);
     await join(back, t.sessionId);
     expectAdmitted(back, t.sessionId);
     await aMomentLater();
     await reconcileSessionStates(t.sessionId, io);
-    expect(statusOf(t.sessionId, extra)).toBe('in_lobby');
-    expect(memoryOf(t.sessionId, extra)).toBe('in_main_room');
-    await expect(sessionService.generateLiveKitToken(t.sessionId, extra)).resolves.toMatchObject({ token: 'livekit-token' });
+    expect(statusOf(t.sessionId, t.member)).toBe('in_lobby');
+    expect(memoryOf(t.sessionId, t.member)).toBe('in_main_room');
+    await expect(sessionService.generateLiveKitToken(t.sessionId, t.member)).resolves.toMatchObject({ token: 'livekit-token' });
   });
 });
 

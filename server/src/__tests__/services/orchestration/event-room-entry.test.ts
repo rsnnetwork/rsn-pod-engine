@@ -57,9 +57,13 @@ describe('decideRoomEntry, when the event can be asked', () => {
     }
   });
 
-  it('lets in someone refused only because the event is full (today\'s behaviour, on purpose)', async () => {
+  // Part 3 Task 3 (controller ruling): a full event's newcomer used to be let in with no row, on purpose. The waiting
+  // list holds them now: refused, with the sentence that sends them to it. Someone with a row is admitted above.
+  it('refuses someone refused only because the event is full, sending them to the waiting list', async () => {
     mockAdmission.mockResolvedValue('refused');
-    expect(await decide(page(), { registered: false, refusalCode: 'SESSION_FULL' })).toEqual({ kind: 'enter' });
+    expect(await decide(page(), { registered: false, refusalCode: 'SESSION_FULL' })).toEqual({
+      kind: 'refuse', refusal: { code: 'SESSION_FULL', message: 'This event is full. Join the waiting list on the event page.' },
+    });
   });
 
   it('refuses everyone else, in words that fit them', async () => {

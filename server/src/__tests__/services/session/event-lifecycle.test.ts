@@ -514,6 +514,7 @@ describe('summariseEventLifecycle', () => {
     inAudience: true, isInvited: false, participantStatus: 'registered', accountActive: true, myRequest: null,
     outsideClosedCircle: false, publication: 'published' as const, archived: false, registrationOpensAt: null,
     eventTimezone: null, isPodAdmin: false, placesHeld: 3, admissionMode: null, entitled: false, entitledVia: null,
+    capacity: null, placesTaken: 0, waitlistPosition: null,
   };
 
   it('a production-shaped event (no lifecycle columns read) is open for registration, and a member may do nothing', () => {

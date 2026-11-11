@@ -161,10 +161,13 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // Auto-add to pod (public pod, not a member) - INSERT INTO pod_members
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
-      // COUNT participants (capacity check)
-      mockQuery.mockResolvedValueOnce({ rows: [{ count: '5' }], rowCount: 1 });
-      // Check existing registration — none found
+      // Check existing registration — none found (Part 3 Task 3: read before capacity)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // Part 3 Task 3 (K3): a new place is given under the event's capacity lock, after the person's row is read again
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // and the places held are counted against the capacity (host and co-hosts not counted)
+      mockQuery.mockResolvedValueOnce({ rows: [{ taken: 5, capacity: 500, runs: false }], rowCount: 1 });
       // INSERT session_participants
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'sp-1', sessionId: 'session-123', userId: 'user-new', status: 'registered' }], rowCount: 1 });
 
@@ -237,9 +240,7 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
       // Check membership
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'member' }], rowCount: 1 });
-      // COUNT participants (capacity check)
-      mockQuery.mockResolvedValueOnce({ rows: [{ count: '2' }], rowCount: 1 });
-      // Check existing — already registered
+      // Check existing — already registered (Part 3 Task 3: read before capacity; a held place is never counted)
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'sp-1', status: 'registered' }], rowCount: 1 });
 
       await expect(sessionService.registerParticipant('session-123', 'user-existing'))
@@ -265,10 +266,13 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
       // membership check
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'member' }], rowCount: 1 });
-      // COUNT participants
-      mockQuery.mockResolvedValueOnce({ rows: [{ count: '5' }], rowCount: 1 });
       // existing check — none yet (concurrent caller hasn't inserted yet from our perspective)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // Part 3 Task 3 (K3): a new place is given under the event's capacity lock, after the person's row is read again
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // and the places held are counted against the capacity (host and co-hosts not counted)
+      mockQuery.mockResolvedValueOnce({ rows: [{ taken: 5, capacity: 500, runs: false }], rowCount: 1 });
       // INSERT … ON CONFLICT DO NOTHING — returns 0 rows (concurrent INSERT won)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // Follow-up SELECT — returns the row the concurrent caller inserted
@@ -296,9 +300,7 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
       // Check membership
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'member' }], rowCount: 1 });
-      // COUNT participants
-      mockQuery.mockResolvedValueOnce({ rows: [{ count: '2' }], rowCount: 1 });
-      // Check existing — left status
+      // Check existing — left status (Part 3 Task 3: a left place is kept, so no capacity count and no lock)
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'sp-1', status: 'left' }], rowCount: 1 });
       // UPDATE session_participants RETURNING
       mockQuery.mockResolvedValueOnce({ rows: [reregistered], rowCount: 1 });

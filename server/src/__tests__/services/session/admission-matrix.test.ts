@@ -38,6 +38,7 @@ const base: EventAccessFacts = {
   inAudience: false, isInvited: false, participantStatus: null, accountActive: true, myRequest: null,
   outsideClosedCircle: false, admissionMode: null, entitled: false, entitledVia: null,
   publication: 'published', archived: false, registrationOpensAt: null, eventTimezone: null, isPodAdmin: false, placesHeld: 0,
+  capacity: null, placesTaken: 0, waitlistPosition: null,
 };
 
 type Viewer = 'organiser' | 'admin' | 'member' | 'invitee' | 'listed' | 'codeHolder' | 'stranger' | 'removed';
@@ -437,6 +438,8 @@ describe('guestMayRegister: an event with an admission mode lets in a guest it h
     const run = jest.fn(async () => ({ rows: [{ guest_first_session_id: null, holds_place: false, admission_mode: 'restricted', admission_entitled: true, approved_request: false }] }));
     expect(await readGuestRegistrationFacts(run, EVENT, ME)).toEqual({
       sessionId: EVENT, guestFirstSessionId: null, holdsPlace: false, admissionMode: 'restricted', admissionEntitled: true, approvedRequest: false,
+      // Part 3 Task 3: the same one read says whether the guest is on the event's waiting list (absent from the row: no).
+      onWaitlist: false,
     });
     expect(run).toHaveBeenCalledTimes(1);
     const sql = String((run.mock.calls[0] as unknown[])[0]).replace(/\s+/g, ' ');

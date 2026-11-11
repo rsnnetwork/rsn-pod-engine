@@ -17,7 +17,7 @@ import { E } from '../../realtime/entities';
 import {
   EVENT_PRIVATE_SENTENCE, canSeeEvent, managesRequests, needsApproval, readEventAccessFacts, type EventAccessFacts,
 } from './event-access';
-import { registerParticipant } from './session.service';
+import { registerOrWaitlist } from './event-waitlist.service';
 import { recordEventAudit } from '../audit/event-audit';
 
 export interface EventJoinRequest {
@@ -213,15 +213,17 @@ export async function listRequests(
 }
 
 /**
- * Approve: the request row is locked, the person is registered (capacity applies: a full event answers
- * SESSION_FULL and the request stays pending; a removed person stays removed), then the request is approved.
+ * Approve: the request row is locked, the person is registered (a removed person stays removed), then the request is
+ * approved. Part 3 Task 3: on a full event the approval still stands (it is the organiser's say-so; capacity is a
+ * separate fact) and the person joins the waiting list (`waitlistPosition`), to be promoted with that approval when a
+ * place frees. Before, a full event answered SESSION_FULL and left the request pending for the organiser to re-approve.
  */
 export async function approveRequest(
   sessionId: string,
   requesterId: string,
   approverId: string,
   role: UserRole | undefined,
-): Promise<{ request: EventJoinRequest; isNewRegistration: boolean }> {
+): Promise<{ request: EventJoinRequest; isNewRegistration: boolean; waitlistPosition: number | null }> {
   await requireManager(sessionId, approverId, role);
   const outcome = await transaction(async (client) => {
     const locked = await client.query<EventJoinRequest>(
@@ -241,19 +243,22 @@ export async function approveRequest(
     if (!account.rows[0]?.active) {
       throw new ConflictError(ErrorCodes.EVENT_REQUEST_ANSWERED, 'This person is no longer a member of REASON.');
     }
-    // The registration's own rules decide (capacity, a removal); a refusal leaves the request pending.
-    const participant = await registerParticipant(sessionId, requesterId, undefined, { approvedRequest: true })
+    // The registration's own rules decide (a removal, the account); a refusal leaves the request pending. A full event
+    // queues them instead (registerOrWaitlist).
+    const placed = await registerOrWaitlist(sessionId, requesterId, undefined, { approvedRequest: true, joinedVia: 'approval' })
       .catch((err: { code?: string }) => {
-        if (err?.code === ErrorCodes.SESSION_ALREADY_REGISTERED) return { isNewRegistration: false };
+        if (err?.code === ErrorCodes.SESSION_ALREADY_REGISTERED) return null;
         throw err;
       });
+    const isNewRegistration = placed?.kind === 'registered' && placed.isNewRegistration;
+    const waitlistPosition = placed?.kind === 'waitlisted' ? placed.position : null;
     const approved = await client.query<EventJoinRequest>(
       `UPDATE event_join_requests r SET status = 'approved', decided_at = NOW(), decided_by = $3, updated_at = NOW()
         WHERE r.session_id = $1 AND r.user_id = $2
         RETURNING ${REQUEST_COLUMNS}`,
       [sessionId, requesterId, approverId],
     );
-    return { request: approved.rows[0], isNewRegistration: participant.isNewRegistration };
+    return { request: approved.rows[0], isNewRegistration, waitlistPosition };
   });
 
   void recordEventAudit({
@@ -262,7 +267,9 @@ export async function approveRequest(
   const { title } = await eventTitleAndName(sessionId, requesterId);
   await ring([requesterId], 'approval', {
     title: 'Your request was approved',
-    body: `You have a place in ${title}.`,
+    body: outcome.waitlistPosition === null
+      ? `You have a place in ${title}.`
+      : `${title} is full, so you're number ${outcome.waitlistPosition} on the waiting list. We'll tell you the moment a place opens.`,
     link: `/sessions/${sessionId}`,
   });
   return outcome;

@@ -17,6 +17,10 @@
 //
 //   d) (Part 2, Task 6) the event whose RSN Call link the guest is entering by right now (arrivedThroughCallLink).
 //
+//   e) (Part 3, Task 3) the event whose waiting list the guest is on, while it promotes them (onWaitlist, read only when
+//      the promotion asks: fromWaitlist). A guest reaches a waiting list only through the call link (d), so this is the
+//      same say-so carried to the moment a place opens, when the guest is no longer on the link.
+//
 // Task 6 extends guestMayRegister (keep its name and its facts-in, boolean-out shape).
 
 import { ErrorCodes, type AdmissionMode } from '@rsn/shared';
@@ -48,6 +52,11 @@ export interface GuestRegistrationFacts {
    * place is still canRegister's, so an invitation-only or approval event holds its own rules.
    */
   arrivedThroughCallLink?: boolean;
+  /**
+   * Part 3, Task 3: the guest is waiting on this event's waiting list and is being promoted from it now
+   * (promoteFromWaitlist, through registerParticipantTx's fromWaitlist).
+   */
+  onWaitlist?: boolean;
 }
 
 /** What a guest who may not register here is told. */
@@ -59,6 +68,7 @@ export function guestMayRegister(facts: GuestRegistrationFacts): boolean {
   if (facts.holdsPlace) return true;
   if (facts.guestFirstSessionId !== null && facts.guestFirstSessionId === facts.sessionId) return true;
   if (facts.arrivedThroughCallLink) return true;
+  if (facts.onWaitlist) return true;
   return !!facts.admissionMode && (!!facts.admissionEntitled || !!facts.approvedRequest);
 }
 
@@ -75,7 +85,8 @@ export async function readGuestRegistrationFacts(
             (s.admission_mode IS NOT NULL AND ${restrictedEntitlementSql('s', '$2')}) AS admission_entitled,
             (s.admission_mode IS NOT NULL AND EXISTS (
               SELECT 1 FROM event_join_requests gr WHERE gr.session_id = s.id AND gr.user_id = $2 AND gr.status = 'approved'
-            )) AS approved_request
+            )) AS approved_request,
+            EXISTS (SELECT 1 FROM event_waitlist gw WHERE gw.session_id = $1 AND gw.user_id = $2 AND gw.status = 'waiting') AS on_waitlist
        FROM users u
        LEFT JOIN sessions s ON s.id = $1
       WHERE u.id = $2`,
@@ -90,6 +101,7 @@ export async function readGuestRegistrationFacts(
     admissionMode: mode === 'open' || mode === 'approval' || mode === 'restricted' ? mode : null,
     admissionEntitled: row?.admission_entitled === true,
     approvedRequest: row?.approved_request === true,
+    onWaitlist: row?.on_waitlist === true,
   };
 }
 
@@ -103,7 +115,7 @@ export async function assertGuestMayRegister(
   run: GuestRegistrationQuery,
   sessionId: string,
   userId: string,
-  options: { approvedRequest?: boolean; arrivedThroughCallLink?: boolean } = {},
+  options: { approvedRequest?: boolean; arrivedThroughCallLink?: boolean; fromWaitlist?: boolean } = {},
 ): Promise<{ isGuest: boolean }> {
   const gate = await readAccountGate(userId);
   if (gate.kind === 'member') return { isGuest: false };
@@ -114,6 +126,8 @@ export async function assertGuestMayRegister(
     ...read,
     approvedRequest: read.approvedRequest || !!options.approvedRequest,
     arrivedThroughCallLink: !!options.arrivedThroughCallLink,
+    // Only the promotion's own say-so counts: a guest who is waiting registers anywhere else under the rules above.
+    onWaitlist: read.onWaitlist === true && !!options.fromWaitlist,
   };
   if (!guestMayRegister(facts)) {
     throw new AppError(403, ErrorCodes.GUEST_MEMBERSHIP_REQUIRED, GUEST_REGISTRATION_MESSAGE);

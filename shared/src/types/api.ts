@@ -124,6 +124,8 @@ export const ErrorCodes = {
   ADMISSION_CODE_NOT_FOUND: 'ADMISSION_CODE_NOT_FOUND',    // 404; no such admission code on this event (the organisers' revoke)
   // The RSN Call link (Part 2 Task 6, 11 Nov 2026).
   EVENT_CANCELLED: 'EVENT_CANCELLED',                    // 409; the event behind a call link was cancelled: it takes nobody
+  // The waiting list (Part 3 Task 3): SESSION_FULL above is still the answer to a plain registration on a full event.
+  WAITLIST_ENTRY_NOT_FOUND: 'WAITLIST_ENTRY_NOT_FOUND',  // 404; that person is not waiting on this event's list (the organisers' admit or remove)
   // The matching board's draft (Part 2 Task 8).
   SCHEDULE_CHANGED: 'SCHEDULE_CHANGED',                  // 409; the board changed since the organiser's read; details.board is the board now
   SCHEDULE_LOCKED: 'SCHEDULE_LOCKED',                    // 409; the meeting or seat is locked: unlock it first
