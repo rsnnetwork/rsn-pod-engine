@@ -93,7 +93,6 @@ export default function Wall({ config, fallbackViewer, highlightPostId }: {
   const linkedGone = linkedOut && isNotFound(linked.error);
   const linkedFailed = linkedOut && !isNotFound(linked.error);
 
-
   // The acting screen refreshes itself when its own change settles: a change that changed nothing (the same
   // reaction again) is answered 200 and sent to no one, so it gets no echo, and a moderator who is not a
   // member is not in the audience at all.

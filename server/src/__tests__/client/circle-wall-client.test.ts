@@ -218,6 +218,15 @@ describe('the screens', () => {
     expect(card).toMatch(/allowEmpty=\{p\.media\.length > 0 \|\| !!p\.sharedFrom \|\| !!p\.sharedUnavailable\}/);
   });
 
+  it('fix round 2: the placeholder has no Reply, Like, Edit or name, and no reply box opens on it (even one left open)', () => {
+    const row = read('components/wall/WallCommentRow.tsx');
+    const placeholder = row.slice(row.indexOf('if (c.withdrawn) {'), row.indexOf('const href = '));
+    expect(placeholder).toMatch(/\{WITHDRAWN_COMMENT\}/);
+    expect(placeholder).not.toMatch(/onReply|onLike|onEdit|authorName|Avatar/);
+    expect(placeholder).toMatch(/\{viewer\.canModerate && \(/);
+    expect(comments).toMatch(/\{!isReply && !c\.withdrawn && replyTo === c\.id && \(/);
+  });
+
   it('fix round 10: no wall component is over 200 lines', () => {
     for (const f of ['Wall', 'WallPostCard', 'WallPostBody', 'WallPostActions', 'WallPostReactions', 'WallCommentRow', 'WallNotices', 'ClampedText', 'WallEditForm']) {
       const lines = read(`components/wall/${f}.tsx`).split(NL).length;

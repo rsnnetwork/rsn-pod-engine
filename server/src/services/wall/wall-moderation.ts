@@ -90,7 +90,6 @@ export const WALL_BELL_TYPES: Record<WallSpace, string[]> = {
   pod: ['pod_post', 'pod_reaction', 'pod_comment', 'pod_reply'],
 };
 
-/** A comment's or reply's bell link: the post's, naming the comment, so its bells can be found when it is removed. */
 /**
  * The space's bell types as SQL literals, from the fixed list above (nothing a member types reaches it), so the planner
  * can use idx_notifications_wall_link (migration 149), whose predicate names the same types.
@@ -100,6 +99,7 @@ const bellTypesSql = (space: WallSpace) => WALL_BELL_TYPES[space].map((t) => `'$
 /** A link as a LIKE prefix: its own %, _ and backslash are escaped (a wall link has none, but a prefix must not widen). */
 const likePrefix = (link: string) => link.replace(/[\\%_]/g, (c) => `\\${c}`);
 
+/** A comment's or reply's bell link: the post's, naming the comment, so its bells can be found when it is removed. */
 export const commentBellLink = (postLink: string, commentId: string) => `${postLink}&comment=${commentId}`;
 
 /**

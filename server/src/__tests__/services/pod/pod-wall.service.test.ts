@@ -1731,3 +1731,45 @@ describe('fix round 1: removed words leave the bell lists (pod)', () => {
     await expect(wall.editComment(POD, COMMENT, asMember, { content: 'x' })).rejects.toMatchObject({ statusCode: 404, message: 'This comment was removed.' });
   });
 });
+
+// ─── S4 fix round 2 ──────────────────────────────────────────────────────────
+
+describe('fix round 2: a withdrawn pod comment is a neutral placeholder, and moderators clear its thread', () => {
+  it('a withdrawn comment carries no author id, name or picture, no words and no likes', async () => {
+    world.comments = [{
+      id: COMMENT, author_id: AUTHOR, display_name: 'Ada Author', avatar_url: 'https://cdn.example/ada.jpg', author_closed: false,
+      content: 'old words', created_at: CREATED_AT, edited_at: EDITED_AT, withdrawn_at: new Date(), parent_comment_id: null,
+      like_count: 4, liked_by_me: true,
+    }];
+    const { comments } = await wall.listComments(POD, POST, asMember);
+    expect(comments[0]).toEqual({
+      id: COMMENT, authorId: '', authorName: null, authorAvatarUrl: null, authorClosed: false, content: '',
+      createdAt: CREATED_AT.toISOString(), parentCommentId: null, likeCount: 0, likedByMe: false, editedAt: null, withdrawn: true,
+    });
+    expect(JSON.stringify(comments)).not.toMatch(new RegExp(`${AUTHOR}|Ada Author|ada\\.jpg|old words`));
+  });
+
+  it('a director who wrote the withdrawn comment clears its whole thread in one action, recorded', async () => {
+    world.member = { role: 'director', status: 'active' };
+    world.lockedComment = { author_id: VIEWER, post_id: POST, deleted_at: null, has_replies: true, withdrawn_at: new Date() };
+    world.commentsRemoved = 3;
+    await expect(wall.deleteComment(POD, COMMENT, asMember)).resolves.toEqual({ postId: POST, alreadyRemoved: false });
+    expect(calls(/UPDATE pod_post_comments SET deleted_at/)[0][1]).toEqual([COMMENT, VIEWER, true]);
+    expect((calls(/INSERT INTO audit_log/)[0][1] as unknown[]).slice(0, 4)).toEqual([VIEWER, 'wall_comment_removed', 'pod', POD]);
+  });
+
+  it('a host clears someone else\'s withdrawn thread the same way', async () => {
+    world.member = { role: 'host', status: 'active' };
+    world.lockedComment = { author_id: AUTHOR, post_id: POST, deleted_at: null, has_replies: true, withdrawn_at: new Date() };
+    await expect(wall.deleteComment(POD, COMMENT, asMember)).resolves.toEqual({ postId: POST, alreadyRemoved: false });
+    expect(calls(/UPDATE pod_post_comments SET deleted_at/)[0][1]).toEqual([COMMENT, VIEWER, true]);
+  });
+
+  it('its author who does not moderate, or who has left, gets alreadyRemoved, and nothing is written', async () => {
+    world.lockedComment = { author_id: VIEWER, post_id: POST, deleted_at: null, has_replies: true, withdrawn_at: new Date() };
+    await expect(wall.deleteComment(POD, COMMENT, asMember)).resolves.toEqual({ postId: POST, alreadyRemoved: true });
+    world.member = { role: 'director', status: 'removed' };
+    await expect(wall.deleteComment(POD, COMMENT, asMember)).resolves.toEqual({ postId: POST, alreadyRemoved: true });
+    expect(writes()).toHaveLength(0);
+  });
+});

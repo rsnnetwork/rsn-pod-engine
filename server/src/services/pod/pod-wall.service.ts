@@ -234,17 +234,25 @@ function mapPost(row: PostRow): PodWallPost {
 }
 
 function mapComment(row: CommentRow): PodWallComment {
+  // Fix round 2: a withdrawn comment is a neutral placeholder: no author id, name or picture, no words, no likes.
+  if (row.withdrawn_at) {
+    return {
+      id: row.id, authorId: '', authorName: null, authorAvatarUrl: null, authorClosed: false,
+      content: '', createdAt: iso(row.created_at), parentCommentId: row.parent_comment_id ?? null,
+      likeCount: 0, likedByMe: false, editedAt: null, withdrawn: true,
+    };
+  }
   return {
     id: row.id,
     authorId: row.author_id,
     ...authorOf(row),
-    content: row.withdrawn_at ? '' : row.content,
+    content: row.content,
     createdAt: iso(row.created_at),
     parentCommentId: row.parent_comment_id ?? null,
     likeCount: row.like_count ?? 0,
     likedByMe: !!row.liked_by_me,
     editedAt: row.edited_at ? iso(row.edited_at) : null,
-    withdrawn: !!row.withdrawn_at,
+    withdrawn: false,
   };
 }
 
@@ -1014,14 +1022,18 @@ export async function deleteComment(
     const own = comment?.author_id === viewer.userId;
     if (!access && !own) throw refusal;
     if (!comment) throw commentNotFound(commentId);
-    if (!own && !(await moderatesPodNow(client, podId, viewer))) {
+    // Fix round 2: a withdrawn comment's thread is a moderator's to clear, the comment's own author included when they
+    // moderate (their withdrawal was theirs; removing the replies is moderation).
+    const moderates = (!own || !!comment.withdrawn_at) && !!access && (await moderatesPodNow(client, podId, viewer));
+    if (!own && !moderates) {
       throw comment.deleted_at ? commentRemoved(commentId) : new ForbiddenError(ONLY_OWN_COMMENTS);
     }
+    const moderation = !own || (!!comment.withdrawn_at && moderates);
     const ofPost = postLink(podId, comment.post_id);
     const nothing = { postId: comment.post_id, alreadyRemoved: true, rung: [] as string[] };
-    if (comment.deleted_at || (own && comment.withdrawn_at)) return nothing;
+    if (comment.deleted_at || (comment.withdrawn_at && !moderation)) return nothing;
 
-    if (own && comment.has_replies) {
+    if (!moderation && comment.has_replies) {
       await client.query(
         `UPDATE pod_post_comments SET content = '', withdrawn_at = NOW(), deleted_by = $2 WHERE id = $1`,
         [commentId, viewer.userId],
@@ -1036,7 +1048,7 @@ export async function deleteComment(
       `UPDATE pod_post_comments SET deleted_at = NOW(), deleted_by = $2
        WHERE (id = $1 OR ($3::boolean AND parent_comment_id = $1)) AND deleted_at IS NULL
        RETURNING id, withdrawn_at`,
-      [commentId, viewer.userId, !own],
+      [commentId, viewer.userId, moderation],
     );
     // A withdrawn comment was already taken off the count when it was withdrawn.
     const counted = gone.rows.filter((row) => !row.withdrawn_at).length;
@@ -1046,7 +1058,7 @@ export async function deleteComment(
         [comment.post_id, counted],
       );
     }
-    if (!own) {
+    if (moderation) {
       await recordModeration(client, {
         actorId: viewer.userId, action: 'wall_comment_removed', space: 'pod', spaceId: podId,
         snapshot: {

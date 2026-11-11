@@ -154,7 +154,7 @@ export default function WallComments({ config, postId, viewer, userId, onChanged
       onDelete={() => void remove(c)}
     >
       {!isReply && repliesOf(c.id).map((r) => renderComment(r, true))}
-      {!isReply && replyTo === c.id && (
+      {!isReply && !c.withdrawn && replyTo === c.id && (
         <div className="ml-8 flex items-center gap-2" data-testid={`reply-form-${c.id}`}>
           <input
             ref={replyRef}

@@ -980,13 +980,18 @@ export async function listComments(
     [postId, viewerId, COMMENTS_SHOWN + 1],
   );
   // `any`: a row of the SELECT above.
-  const comments = r.rows.slice(0, COMMENTS_SHOWN).map((row: any): WallComment => ({
+  // Fix round 2: a withdrawn comment is a neutral placeholder: no author id, name or picture, no words, no likes.
+  const comments = r.rows.slice(0, COMMENTS_SHOWN).map((row: any): WallComment => (row.withdrawn_at ? {
+    id: row.id, authorId: '', authorName: null, authorAvatarUrl: null, authorClosed: false,
+    content: '', createdAt: row.created_at, parentCommentId: row.parent_comment_id ?? null,
+    likeCount: 0, likedByMe: false, editedAt: null, withdrawn: true,
+  } : {
     id: row.id, authorId: row.author_id, ...authorOf(row),
-    content: row.withdrawn_at ? '' : row.content, createdAt: row.created_at,
+    content: row.content, createdAt: row.created_at,
     parentCommentId: row.parent_comment_id ?? null,
     likeCount: row.like_count ?? 0, likedByMe: !!row.liked_by_me,
     editedAt: row.edited_at ?? null,
-    withdrawn: !!row.withdrawn_at,
+    withdrawn: false,
   }));
   return { comments, truncated: r.rows.length > COMMENTS_SHOWN };
 }
@@ -1107,18 +1112,23 @@ export async function deleteComment(
     const comment = r.rows[0];
     if (!comment) throw commentNotFound(commentId);
     const own = comment.author_id === userId;
-    if (!own) {
+    // Fix round 2: a withdrawn comment's thread is a moderator's to clear, the comment's own author included when they
+    // moderate (their withdrawal was theirs; removing the replies is moderation).
+    let moderates = false;
+    if (!own || comment.withdrawn_at) {
       const role = await roleInCircle(client, comment.circle_id, userId);
-      if (!moderatesWith(role, viewerRole)) {
+      moderates = moderatesWith(role, viewerRole);
+      if (!own && !moderates) {
         if (role === null) throw commentNotFound(commentId);
         throw comment.deleted_at ? commentRemoved(commentId) : new ForbiddenError(ONLY_OWN_COMMENTS);
       }
     }
+    const moderation = !own || (!!comment.withdrawn_at && moderates);
     const ofPost = postLink(comment.circle_id, comment.post_id);
     const nothing = { circleId: comment.circle_id, postId: comment.post_id, alreadyRemoved: true, rung: [] as string[] };
-    if (comment.deleted_at || (own && comment.withdrawn_at)) return nothing;
+    if (comment.deleted_at || (comment.withdrawn_at && !moderation)) return nothing;
 
-    if (own && comment.has_replies) {
+    if (!moderation && comment.has_replies) {
       await client.query(
         `UPDATE circle_post_comments SET content = '', withdrawn_at = NOW(), deleted_by = $2 WHERE id = $1`,
         [commentId, userId],
@@ -1135,7 +1145,7 @@ export async function deleteComment(
       `UPDATE circle_post_comments SET deleted_at = NOW(), deleted_by = $2
        WHERE (id = $1 OR ($3::boolean AND parent_comment_id = $1)) AND deleted_at IS NULL
        RETURNING id, withdrawn_at`,
-      [commentId, userId, !own],
+      [commentId, userId, moderation],
     );
     // A withdrawn comment was already taken off the count when it was withdrawn.
     const counted = gone.rows.filter((row) => !row.withdrawn_at).length;
@@ -1145,7 +1155,7 @@ export async function deleteComment(
         [comment.post_id, counted],
       );
     }
-    if (!own) {
+    if (moderation) {
       await recordModeration(client, {
         actorId: userId, action: 'wall_comment_removed', space: 'circle', spaceId: comment.circle_id,
         snapshot: {

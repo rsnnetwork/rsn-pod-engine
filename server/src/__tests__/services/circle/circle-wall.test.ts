@@ -990,3 +990,53 @@ describe('fix round 1: withdrawn comments in the thread', () => {
     await expect(editComment(COMMENT, VIEWER, { content: 'x' })).rejects.toMatchObject({ statusCode: 404, message: 'This comment was removed.' });
   });
 });
+
+// ─── S4 fix round 2 ──────────────────────────────────────────────────────────
+
+describe('fix round 2: a withdrawn comment is a neutral placeholder, and moderators clear its thread', () => {
+  it('a withdrawn comment carries no author id, name or picture, no words and no likes', async () => {
+    world.comments = [{
+      id: COMMENT, author_id: AUTHOR, display_name: 'Ada Author', avatar_url: 'https://cdn.example/ada.jpg', author_former: false,
+      content: 'old words', created_at: CREATED_AT, edited_at: EDITED_AT, withdrawn_at: new Date(), parent_comment_id: null,
+      like_count: 4, liked_by_me: true,
+    }];
+    const { comments } = await listComments(POST, VIEWER, 'member');
+    expect(comments[0]).toEqual({
+      id: COMMENT, authorId: '', authorName: null, authorAvatarUrl: null, authorClosed: false, content: '',
+      createdAt: CREATED_AT, parentCommentId: null, likeCount: 0, likedByMe: false, editedAt: null, withdrawn: true,
+    });
+    expect(JSON.stringify(comments)).not.toMatch(new RegExp(`${AUTHOR}|Ada Author|ada\\.jpg|old words`));
+  });
+
+  it('a moderator who wrote the withdrawn comment clears its whole thread in one action, recorded, not "already removed"', async () => {
+    asRole('moderator');
+    world.lockedComment = { author_id: VIEWER, deleted_at: null, has_replies: true, withdrawn_at: new Date() };
+    world.commentsRemoved = 3;
+    await expect(deleteComment(COMMENT, VIEWER, 'member')).resolves.toEqual({ postId: POST, alreadyRemoved: false });
+    expect(paramsOf(/^UPDATE circle_post_comments SET deleted_at/)).toEqual([COMMENT, VIEWER, true]);
+    expect((paramsOf(/INSERT INTO audit_log/) as unknown[]).slice(0, 4)).toEqual([VIEWER, 'wall_comment_removed', 'circle', C1]);
+  });
+
+  it('an owner clears someone else\'s withdrawn thread the same way', async () => {
+    asRole('owner');
+    world.lockedComment = { author_id: AUTHOR, deleted_at: null, has_replies: true, withdrawn_at: new Date() };
+    world.commentsRemoved = 2;
+    await expect(deleteComment(COMMENT, VIEWER, 'member')).resolves.toEqual({ postId: POST, alreadyRemoved: false });
+    expect(paramsOf(/^UPDATE circle_post_comments SET deleted_at/)).toEqual([COMMENT, VIEWER, true]);
+    expect(calls(/INSERT INTO audit_log/)).toHaveLength(1);
+  });
+
+  it('its author who does not moderate gets alreadyRemoved, and nothing is written', async () => {
+    world.lockedComment = { author_id: VIEWER, deleted_at: null, has_replies: true, withdrawn_at: new Date() };
+    await expect(deleteComment(COMMENT, VIEWER, 'member')).resolves.toEqual({ postId: POST, alreadyRemoved: true });
+    expect(writes()).toHaveLength(0);
+  });
+
+  it('nobody replies to the withdrawn comment itself (a reply to a reply under it still joins the thread)', async () => {
+    world.parent = null;
+    await expect(addComment(POST, VIEWER, 'to the placeholder', COMMENT)).rejects.toMatchObject({ statusCode: 404 });
+    expect(sqlOf(calls(/^SELECT c\.id, c\.author_id, c\.parent_comment_id FROM circle_post_comments c/)[0])).toContain('c.withdrawn_at IS NULL');
+    world.parent = { id: 'reply-1', author_id: AUTHOR, parent_comment_id: COMMENT };
+    await expect(addComment(POST, VIEWER, 'to the reply', 'reply-1')).resolves.toMatchObject({ parentCommentId: COMMENT });
+  });
+});
