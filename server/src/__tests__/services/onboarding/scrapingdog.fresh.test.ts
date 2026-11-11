@@ -1,32 +1,16 @@
-// ─── 14 Sep 2026: the live page, and the whole page ──────────────────────────
-// Shradha's slug: ScrapingDog's cached copy still said RSN while her page
-// said Vokt. A linkId with its casing changed misses their cache (14 seconds,
-// Vokt). And the page carries certifications, volunteering, publications,
-// languages, followers: all mapped, and summarised into highlights.
+// ─── 14 Sep 2026: the whole page ──────────────────────────────────────────────
+// Shradha's page carries certifications, volunteering, publications, languages, followers: all mapped, and
+// summarised into highlights. (The 14 Sep scrambled-casing "live" read was replaced on 12 Nov 2026 by one call for
+// the plain slug, the id ScrapingDog serves its stored copy by: see scrapingdog.provider.ts.)
 
 jest.mock('../../../config', () => ({
   __esModule: true,
   default: { scrapingdogApiKey: 'test-key-do-not-leak', logLevel: 'silent', isDev: false, env: 'test' },
 }));
 
-import { freshSlug, mapProfile, mergeLiveWithCached, isThin, scrapingdogProvider } from '../../../services/onboarding/providers/scrapingdog.provider';
+import { mapProfile, scrapingdogProvider } from '../../../services/onboarding/providers/scrapingdog.provider';
 
 const mock = (status: number, body?: any) => ({ status, json: async () => body } as unknown as Response);
-
-describe('freshSlug', () => {
-  it('changes the casing so the slug is never the canonical lowercase form, and is reproducible per seed', () => {
-    const a = freshSlug('shradhadhikari', 12345);
-    expect(a.toLowerCase()).toBe('shradhadhikari');
-    expect(a).not.toBe('shradhadhikari');
-    expect(freshSlug('shradhadhikari', 12345)).toBe(a);
-    expect(freshSlug('shradhadhikari', 67890)).not.toBe(a);
-    expect(freshSlug('ali-hamza-b0650a281', 7).toLowerCase()).toBe('ali-hamza-b0650a281');
-  });
-  it('flips at least one letter even when the seed would flip none, and leaves a slug without letters alone', () => {
-    expect(freshSlug('abc', 0)).not.toBe('abc');
-    expect(freshSlug('123-456', 5)).toBe('123-456');
-  });
-});
 
 const shradhaLive = {
   fullName: 'Shradha Adhikari', headline: '', location: '', about: 'Curious about data and business.', followers: '4K followers', connections: '500+ connections',
@@ -45,16 +29,6 @@ const shradhaLive = {
   projects: [], awards: [], courses: [], organizations: [],
   profile_photo: 'https://media.licdn.com/dms/image/shradha.jpg',
 };
-const shradhaCached = {
-  fullName: 'Shradha Adhikari', headline: '', about: '',
-  experience: [
-    { position: '', company_name: 'Raw Speed Networking | RSN' },
-    { position: '', company_name: 'misterraw' },
-    { position: '', company_name: '******* *******' },
-  ],
-  certification: [{ certification: 'Sales: Practical Techniques', company_name: 'LinkedIn', issue_date: 'Issued Feb 2025' }],
-};
-
 describe('mapProfile: the whole page', () => {
   it('maps certifications, volunteering, publications, languages and followers, and builds highlights', () => {
     const m = mapProfile(shradhaLive, 'https://www.linkedin.com/in/shradhadhikari')!;
@@ -77,22 +51,6 @@ describe('mapProfile: the whole page', () => {
       '4K followers on LinkedIn',
     ]);
     expect(m.missing).toEqual(['headline', 'currentRole']);
-    // One entry the guest view hid.
-    expect(m.masked).toBe(1);
-    expect(isThin(m.profile)).toBe(false);
-  });
-
-  it('a live page with masked entries but an About still reads the cached copy for the older positions', async () => {
-    const fetchMock = jest.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(mock(200, shradhaLive))
-      .mockResolvedValueOnce(mock(200, shradhaCached));
-    const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    if (out.kind !== 'partial') throw new Error('expected partial');
-    expect(out.result.profile?.currentCompany).toBe('Vokt');
-    expect(out.result.profile?.summary).toBe('Curious about data and business.');
-    expect(out.result.profile?.pastRoles).toEqual(['at Raw Speed Networking | RSN', 'at misterraw']);
-    jest.restoreAllMocks();
   });
 
   // The live page (williamhgates, 14 Sep): "Co-chair\n        \n          Gates Foundation".
@@ -147,88 +105,43 @@ describe('mapProfile: the whole page', () => {
   });
 });
 
-// 15 Sep 2026 (Ali's own page): the live scrape carried LinkedIn's grey
-// placeholder as the photo; the cached copy had the real one.
+// 15 Sep 2026 (Ali's own page): the scrape carried LinkedIn's grey placeholder as the photo.
 describe('a placeholder is no photo', () => {
-  it('the placeholder maps to null, so the merge takes the cached real photo', async () => {
-    const live = mapProfile({ ...shradhaLive, profile_photo: 'https://static.licdn.com/aero-v1/sc/h/9c8pery4andzj6ohjkjp54ma2' }, 'u')!.profile;
-    expect(live.photoUrl).toBeNull();
-    const cached = mapProfile(shradhaLive, 'u')!.profile;
-    expect(mergeLiveWithCached(live, cached).photoUrl).toBe('https://media.licdn.com/dms/image/shradha.jpg');
-    const fetchMock = jest.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(mock(200, { ...shradhaLive, profile_photo: 'https://static.licdn.com/aero-v1/sc/h/9c8pery4andzj6ohjkjp54ma2' }))
-      .mockResolvedValueOnce(mock(200, shradhaLive));
-    const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    if (out.kind !== 'partial') throw new Error('expected partial');
-    expect(out.photoUrl).toBe('https://media.licdn.com/dms/image/shradha.jpg');
-    jest.restoreAllMocks();
+  it('the placeholder maps to null', () => {
+    const p = mapProfile({ ...shradhaLive, profile_photo: 'https://static.licdn.com/aero-v1/sc/h/9c8pery4andzj6ohjkjp54ma2' }, 'u')!.profile;
+    expect(p.photoUrl).toBeNull();
   });
 });
 
-describe('mergeLiveWithCached', () => {
-  it('the live page wins on the current company and About; the cached copy fills gaps and its old company becomes a past role', () => {
-    const live = mapProfile({ ...shradhaLive, about: '' }, 'u')!.profile;
-    const cached = mapProfile({ ...shradhaCached, headline: 'Business developer', about: 'Old about.' }, 'u')!.profile;
-    expect(isThin(live)).toBe(true);
-    const m = mergeLiveWithCached(live, cached);
-    expect(m.currentCompany).toBe('Vokt');
-    expect(m.headline).toBe('Business developer');
-    expect(m.summary).toBe('Old about.');
-    expect(m.pastRoles).toEqual(['at Raw Speed Networking | RSN', 'at misterraw']);
-    expect(m.certifications).toEqual([
-      'Python for Data Science, AI & Development (IBM, Jul 2025)', 'Business Development Foundations (LinkedIn, Mar 2025)', 'Sales: Practical Techniques (LinkedIn, Feb 2025)',
-    ]);
-    expect(m.volunteering).toEqual(['Researcher at Robin Hood Army']);
-    expect(m.photoUrl).toBe('https://media.licdn.com/dms/image/shradha.jpg');
-  });
-});
-
-describe('enrich: live first, cached only to fill', () => {
+// 12 Nov 2026: one call per lookup, for the plain slug (the id ScrapingDog serves its stored copy by).
+describe('enrich: one call, the plain slug', () => {
   afterEach(() => { jest.restoreAllMocks(); });
 
-  it('a full live page is used alone: one call, a scrambled-case linkId, the live source', async () => {
+  it('a full page: one call, the plain lower-case slug, one source', async () => {
     const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mock(200, { fullName: 'Jane Doe', headline: 'CTO', about: 'Builds.', experience: [{ position: 'CTO', company_name: 'Acme' }] }));
-    const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/jane-doe' });
+    const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/Jane-Doe' });
     expect(out.kind).toBe('found');
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const url = String(fetchMock.mock.calls[0][0]);
-    expect(url.toLowerCase()).toContain('&id=jane-doe&');
-    expect(url).not.toContain('&id=jane-doe&');
-    if (out.kind === 'found') expect(out.result.sources).toEqual(['scrapingdog:jane-doe:live']);
+    expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.get('id')).toBe('jane-doe');
+    if (out.kind === 'found') expect(out.result.sources).toEqual(['scrapingdog:jane-doe']);
   });
 
-  it('a thin live page is filled from the cached copy: two calls, the canonical linkId second, both sources', async () => {
-    const fetchMock = jest.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(mock(200, { ...shradhaLive, about: '' }))
-      .mockResolvedValueOnce(mock(200, shradhaCached));
+  it('a thin page with masked entries is returned as it is: still one call, no second read', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue(mock(200, { ...shradhaLive, about: '' }));
     const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(String(fetchMock.mock.calls[1][0])).toContain('&id=shradhadhikari&');
-    expect(out.kind).toBe('partial');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     if (out.kind !== 'partial') throw new Error('expected partial');
     expect(out.result.profile?.currentCompany).toBe('Vokt');
-    expect(out.result.profile?.pastRoles).toEqual(['at Raw Speed Networking | RSN', 'at misterraw']);
-    expect(out.result.profile?.certifications).toHaveLength(3);
-    expect(out.result.sources).toEqual(['scrapingdog:shradhadhikari:live', 'scrapingdog:shradhadhikari']);
+    expect(out.result.profile?.certifications).toHaveLength(2);
     expect(out.photoUrl).toBe('https://media.licdn.com/dms/image/shradha.jpg');
   });
 
-  it('when the live scrape fails outright, the cached copy is the answer', async () => {
-    jest.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(mock(500))
-      .mockResolvedValueOnce(mock(200, shradhaCached));
-    const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
-    expect(out.kind).toBe('partial');
-    if (out.kind === 'partial') {
-      expect(out.result.profile?.currentCompany).toBe('Raw Speed Networking | RSN');
-      expect(out.result.sources).toEqual(['scrapingdog:shradhadhikari']);
-    }
-  });
-
-  it('when both fail, the live verdict is reported', async () => {
-    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mock(404)).mockResolvedValueOnce(mock(500));
-    const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/nobody-here' });
-    expect(out.kind).toBe('not_found');
+  it.each([
+    [500, { kind: 'provider_error', reason: 'scrapingdog 500' }],
+    [404, { kind: 'not_found', reason: 'scrapingdog 404' }],
+  ])('HTTP %i: its verdict, after one call', async (status, verdict) => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue(mock(status));
+    expect(await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/nobody-here' })).toEqual(verdict);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

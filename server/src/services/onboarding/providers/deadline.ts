@@ -8,8 +8,8 @@
 import logger from '../../../config/logger';
 import type { ProviderOutcome } from './provider.types';
 
-/** The whole lookup. ScrapingDog's two calls together take at most SCRAPE_TOTAL_MS (105 s, scrapingdog.provider.ts),
- *  which leaves 45 s of this for the Anthropic gap fill. */
+/** The whole lookup. ScrapingDog's one call takes at most SCRAPE_TOTAL_MS (100 s, scrapingdog.provider.ts),
+ *  which leaves 50 s of this for the gap fill. */
 export const PROVIDER_DEADLINE_MS = 150 * 1000;
 
 /** The reason a lookup cut at the deadline reports: its persisted error text starts with this. */
