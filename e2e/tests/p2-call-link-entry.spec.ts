@@ -348,8 +348,14 @@ test(`12/05: an invitation-only event refuses an unlisted address after its code
   await identify(second, event, secondEmail);
   await expect(second.getByTestId('call-refusal')).toHaveText(INVITATION_ONLY, { timeout: 30_000 });
   await second.getByLabel('Admission code').fill(admission);
+  // The answer the press gets, named in the failure if the sentence does not show (which request, what it said).
+  const usedAnswer = second.waitForResponse((r: Response) => r.url().includes(`/call-links/${event.code}/`) && r.request().method() === 'POST');
   await second.getByRole('button', { name: 'Continue' }).click();
-  await expect(second.getByText('This admission code has already been used.', { exact: true })).toBeVisible({ timeout: 30_000 });
+  const answer = await usedAnswer;
+  const said = `${answer.request().method()} ${new URL(answer.url()).pathname} ${answer.status()} ${await answer.text().catch(() => '')}`;
+  expect(said, 'the used code goes with the 6-digit code to /verify, which answers 409 ADMISSION_CODE_USED')
+    .toMatch(/\/verify 409 .*"code":"ADMISSION_CODE_USED"/);
+  await expect(second.getByText('This admission code has already been used.', { exact: true }), said).toBeVisible({ timeout: 30_000 });
   await expect(second.getByTestId('call-waiting')).toHaveCount(0);
   const secondAccount = await pool.query<{ id: string }>('SELECT id FROM users WHERE email = $1', [secondEmail]);
   for (const r of secondAccount.rows) made.users.push(r.id);
