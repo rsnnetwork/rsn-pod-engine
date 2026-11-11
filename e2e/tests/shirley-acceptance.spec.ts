@@ -853,11 +853,17 @@ const compact = (iso: string) => new Date(iso).toISOString().replace(/[-:]/g, ''
 
 /** Opens the thread's scheduler: "Find a time to meet", from "More actions" where the phone keeps it. */
 async function openScheduler(page: Page): Promise<void> {
+  // At phone width the header's button is hidden and the same action is a menu item inside "More actions".
   const findTime = page.getByRole('button', { name: /Find a time to meet/i });
+  const findTimeItem = page.getByRole('menuitem', { name: /Find a time to meet/i });
   const more = page.getByRole('button', { name: 'More actions' });
   await findTime.or(more).first().waitFor({ state: 'visible', timeout: 30_000 });
-  if (await more.isVisible().catch(() => false)) await more.click();
-  await findTime.filter({ visible: true }).first().click();
+  if (await findTime.filter({ visible: true }).count()) {
+    await findTime.filter({ visible: true }).first().click();
+  } else {
+    await more.click();
+    await findTimeItem.filter({ visible: true }).first().click();
+  }
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('slot-grid').getByText('They can').first(), 'the time Both offered is on the grid').toBeVisible({ timeout: 20_000 });
 }
