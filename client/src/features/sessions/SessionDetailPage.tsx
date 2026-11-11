@@ -490,146 +490,145 @@ export default function SessionDetailPage() {
         </div>
       )}
 
-      {/* Actions — status-driven primary + overflow menu (April 17 item #10) */}
-      <div className="flex flex-col gap-3 animate-fade-in-up stagger-1">
-        {/* Primary Actions */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Non-host participant flows: Register / Join Late / Pending-invite notice */}
-          {!isHost && sessionStatusPhase(session.status) !== 'done' && sessionStatusPhase(session.status) !== 'cancelled' && !isRegistered && (
-            <EventAccessActions
-              sessionId={sessionId!}
-              access={access}
-              registerLabel={session.status === 'scheduled' ? 'Register' : 'Join Late'}
-              onRegister={register}
-              registering={registerMutation.isPending}
-              circleName={session.circle?.name}
-            />
-          )}
-          {!isHost && isRegistered && sessionStatusPhase(session.status) === 'live' && (
-            <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
+      {/* Actions: ONE bar for the event (11 Nov 2026, the owner's "???" over the gap). The primary actions first (Go Live,
+          Join, Register or the waiting list, then Add to calendar), then the organiser's tools in the same row, every one
+          left-aligned, 44px tall, one gap apart. Nothing is pushed to the right: on a phone they wrap line by line. */}
+      <div data-testid="event-actions" className="flex flex-wrap items-center gap-3 animate-fade-in-up stagger-1">
+        {/* Non-host participant flows: Register / Join Late / Pending-invite notice */}
+        {!isHost && sessionStatusPhase(session.status) !== 'done' && sessionStatusPhase(session.status) !== 'cancelled' && !isRegistered && (
+          <EventAccessActions
+            sessionId={sessionId!}
+            access={access}
+            registerLabel={session.status === 'scheduled' ? 'Register' : 'Join Late'}
+            onRegister={register}
+            registering={registerMutation.isPending}
+            circleName={session.circle?.name}
+          />
+        )}
+        {!isHost && isRegistered && sessionStatusPhase(session.status) === 'live' && (
+          <div data-testid="event-registered" className="flex min-h-[44px] items-center gap-2 px-4 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
+            <CheckCircle className="h-4 w-4" /> Registered
+          </div>
+        )}
+        {!isHost && isRegistered && sessionStatusPhase(session.status) === 'pre' && (
+          <>
+            <div data-testid="event-registered" className="flex min-h-[44px] items-center gap-2 px-4 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
               <CheckCircle className="h-4 w-4" /> Registered
             </div>
-          )}
-          {!isHost && isRegistered && sessionStatusPhase(session.status) === 'pre' && (
-            <>
-              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
-                <CheckCircle className="h-4 w-4" /> Registered
-              </div>
-              <Button variant="ghost" onClick={async () => {
-                if (!(await ask({ title: 'Unregister from this event?', body: 'To come back you register again, or ask for a new invite.', confirmLabel: 'Unregister', tone: 'danger' }))) return;
-                unregisterMutation.mutate();
-              }} isLoading={unregisterMutation.isPending}>
-                <UserMinus className="h-4 w-4 mr-2" /> Unregister
-              </Button>
-            </>
-          )}
+            <Button variant="ghost" onClick={async () => {
+              if (!(await ask({ title: 'Unregister from this event?', body: 'To come back you register again, or ask for a new invite.', confirmLabel: 'Unregister', tone: 'danger' }))) return;
+              unregisterMutation.mutate();
+            }} isLoading={unregisterMutation.isPending}>
+              <UserMinus className="h-4 w-4 mr-2" /> Unregister
+            </Button>
+          </>
+        )}
 
-          {/* Status-driven primary button:
-              pre  -> Enter Event   (host Go Live / participant Enter Event)
-              live -> Enter Live Event
-              done -> View Recap
-           */}
-          {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'pre' && !isDraft && (
-            <Button
-              variant="primary"
-              onClick={() => navigate(`/session/${sessionId}/live`)}
-              className="btn-glow"
-            >
-              <Play className="h-4 w-4 mr-2" />
-              {isHost ? 'Go Live' : 'Enter Event'}
-            </Button>
-          )}
-          {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'live' && (
-            <Button
-              variant="primary"
-              onClick={() => navigate(`/session/${sessionId}/live`)}
-              className="btn-glow"
-            >
-              <Play className="h-4 w-4 mr-2" /> Enter Live Event
-            </Button>
-          )}
-          {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). An
-              in-person event carries its place as where it is (30 Oct 2026, T12). The
-              entry links back to this page on this site. */}
-          {session.status === 'scheduled' && session.scheduledAt && !isDraft && (
-            <AddToCalendar
-              entry={eventEntry({
-                title: session.title || 'Event',
-                startAt: session.scheduledAt,
-                durationMin: eventDurationMinutes(eventFormat, session.config),
-                pageUrl: `${window.location.origin}/sessions/${session.id}`,
-                place,
-              })}
-              file={async () => icsFile(eventEntry({
-                title: session.title || 'Event',
-                startAt: session.scheduledAt,
-                durationMin: eventDurationMinutes(eventFormat, session.config),
-                pageUrl: `${window.location.origin}/sessions/${session.id}`,
-                place,
-              }), `event-${session.id}`)}
-              fileName="reason-event.ics"
-              className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 inline-flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
-            />
-          )}
-          {phase === 'done' && (
-            <Button variant="primary" className="btn-glow" onClick={openRecap}>
-              {isRoundsEvent ? 'View recap' : 'Who took part'}
-            </Button>
-          )}
+        {/* Status-driven primary button:
+            pre  -> Enter Event   (host Go Live / participant Enter Event)
+            live -> Enter Live Event
+            done -> View Recap
+         */}
+        {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'pre' && !isDraft && (
+          <Button
+            variant="primary"
+            onClick={() => navigate(`/session/${sessionId}/live`)}
+            className="btn-glow"
+          >
+            <Play className="h-4 w-4 mr-2" />
+            {isHost ? 'Go Live' : 'Enter Event'}
+          </Button>
+        )}
+        {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'live' && (
+          <Button
+            variant="primary"
+            onClick={() => navigate(`/session/${sessionId}/live`)}
+            className="btn-glow"
+          >
+            <Play className="h-4 w-4 mr-2" /> Enter Live Event
+          </Button>
+        )}
+        {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). An
+            in-person event carries its place as where it is (30 Oct 2026, T12). The
+            entry links back to this page on this site. */}
+        {session.status === 'scheduled' && session.scheduledAt && !isDraft && (
+          <AddToCalendar
+            entry={eventEntry({
+              title: session.title || 'Event',
+              startAt: session.scheduledAt,
+              durationMin: eventDurationMinutes(eventFormat, session.config),
+              pageUrl: `${window.location.origin}/sessions/${session.id}`,
+              place,
+            })}
+            file={async () => icsFile(eventEntry({
+              title: session.title || 'Event',
+              startAt: session.scheduledAt,
+              durationMin: eventDurationMinutes(eventFormat, session.config),
+              pageUrl: `${window.location.origin}/sessions/${session.id}`,
+              place,
+            }), `event-${session.id}`)}
+            fileName="reason-event.ics"
+            className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 inline-flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+          />
+        )}
+        {phase === 'done' && (
+          <Button variant="primary" className="btn-glow" onClick={openRecap}>
+            {isRoundsEvent ? 'View recap' : 'Who took part'}
+          </Button>
+        )}
 
-          {/* Overflow menu for host/admin. Host Controls button intentionally removed —
-              live host controls live inside the /live page once the host clicks Enter Live Event.
-              Co-hosts send invites too (26 Oct 2026), so they get the invite button and nothing else here. */}
-          {(isHost || isAdmin || mayInvite || mayPlanMeetings) && sessionStatusPhase(session.status) !== 'cancelled' && (
-            <div className="ml-auto flex items-center gap-2 flex-wrap">
-              {mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}
-              {mayPlanMeetings && (
-                <Link
-                  to={`/sessions/${sessionId}/board`}
-                  data-testid="matching-board-link"
-                  className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
-                >
-                  <LayoutGrid className="h-4 w-4" /> Matching board
-                </Link>
-              )}
-              {mayInvite && (
-                // Labelled on every width and 44px tall: on a phone it was a 36px envelope (25 Oct walkthrough).
+        {/* The organiser's tools, in the same row after the primary actions. Host Controls button intentionally
+            removed: live host controls live inside the /live page once the host clicks Enter Live Event.
+            Co-hosts send invites too (26 Oct 2026), so they get the invite button and nothing else here. */}
+        {(isHost || isAdmin || mayInvite || mayPlanMeetings) && sessionStatusPhase(session.status) !== 'cancelled' && (
+          <>
+            {mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}
+            {mayPlanMeetings && (
+              <Link
+                to={`/sessions/${sessionId}/board`}
+                data-testid="matching-board-link"
+                className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+              >
+                <LayoutGrid className="h-4 w-4" /> Matching board
+              </Link>
+            )}
+            {mayInvite && (
+              // Labelled on every width and 44px tall: on a phone it was a 36px envelope (25 Oct walkthrough).
+              <button
+                type="button"
+                onClick={() => setInviteOpen(true)}
+                className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+              >
+                <Mail className="h-4 w-4" /> Invite people
+              </button>
+            )}
+            {(isHost || isAdmin) && (
+              <>
                 <button
                   type="button"
-                  onClick={() => setInviteOpen(true)}
-                  className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+                  onClick={() => duplicateMutation.mutate()}
+                  disabled={duplicateMutation.isPending}
+                  className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors disabled:opacity-60"
+                  title="Duplicate this event"
                 >
-                  <Mail className="h-4 w-4" /> Invite people
+                  <CopyPlus className="h-4 w-4" /> <span className="hidden sm:inline">Copy</span>
                 </button>
-              )}
-              {(isHost || isAdmin) && (
-                <>
+                {sessionStatusPhase(session.status) === 'pre' && (
                   <button
                     type="button"
-                    onClick={() => duplicateMutation.mutate()}
-                    disabled={duplicateMutation.isPending}
-                    className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors disabled:opacity-60"
-                    title="Duplicate this event"
+                    onClick={() => openEdit()}
+                    className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                    title="Edit event"
                   >
-                    <CopyPlus className="h-4 w-4" /> <span className="hidden sm:inline">Copy</span>
+                    <Pencil className="h-4 w-4" /> <span className="hidden sm:inline">Edit</span>
                   </button>
-                  {sessionStatusPhase(session.status) === 'pre' && (
-                    <button
-                      type="button"
-                      onClick={() => openEdit()}
-                      className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                      title="Edit event"
-                    >
-                      <Pencil className="h-4 w-4" /> <span className="hidden sm:inline">Edit</span>
-                    </button>
-                  )}
-                  {/* Part 2 Task 11: no legacy Delete here. Cancel event (with a notice to everyone registered), Archive and
-                      Delete permanently are in the Event status card below, as the server's allowedActions say. */}
-                </>
-              )}
-            </div>
-          )}
-        </div>
+                )}
+                {/* Part 2 Task 11: no legacy Delete here. Cancel event (with a notice to everyone registered), Archive and
+                    Delete permanently are in the Event status card below, as the server's allowedActions say. */}
+              </>
+            )}
+          </>
+        )}
       </div>
 
       {/* Part 2 Task 11: the organiser's settings: status and lifecycle steps, the call link, admission, groups. */}
