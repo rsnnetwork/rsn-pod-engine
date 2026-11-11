@@ -7,6 +7,8 @@
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({
   query: (sql: string, params?: unknown[]) => mockQuery(sql, params),
+  // The schedule runs its lock and its statement on one transaction client: the same mock sees both, in order.
+  transaction: async (cb: (client: unknown) => unknown) => cb({ query: (sql: string, params?: unknown[]) => mockQuery(sql, params) }),
   __esModule: true,
 }));
 jest.mock('../../../config', () => ({ __esModule: true, default: { enrichProvider: 'scrapingdog' } }));

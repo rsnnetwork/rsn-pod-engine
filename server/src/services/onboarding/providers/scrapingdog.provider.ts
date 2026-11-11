@@ -113,7 +113,13 @@ function redact(msg: string): string {
   return key ? msg.split(key).join('[redacted]') : msg;
 }
 
-async function fetchOnce(linkId: string, timeoutMs: number): Promise<{ status: number; body?: any }> {
+/** A cut fetch (AbortSignal.timeout) or an abort, whether it came before the headers or while the body was read. */
+function isCut(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+}
+
+async function fetchOnce(linkId: string, timeoutMs: number): Promise<{ status: number; body?: any; unreadable?: boolean }> {
   // premium=true is the working parameter — private=true returns a hard 400
   // ("Try again or use premium=true") per the live A2 discovery call. Bare
   // no-flag also worked, but ScrapingDog's own error text recommends premium.
@@ -122,13 +128,14 @@ async function fetchOnce(linkId: string, timeoutMs: number): Promise<{ status: n
   // Parse the body regardless of status: ScrapingDog reports request/plan
   // problems (bad param, quota exhaustion) as a JSON `{success:false}` body,
   // which can arrive under a 200 OR a 400 — see the success:false check below.
-  let body: any;
+  // 12 Nov 2026 (review M2): a body that could not be read is not an empty body. A cut while reading it rethrows (an
+  // unknown outcome, retried later); any other unreadable body is marked, so a 200 never reads as "no such profile".
   try {
-    body = await res.json();
-  } catch {
-    body = undefined;
+    return { status: res.status, body: await res.json() };
+  } catch (err) {
+    if (isCut(err)) throw err;
+    return { status: res.status, body: undefined, unreadable: true };
   }
-  return { status: res.status, body };
 }
 
 // ─── Mapping ─────────────────────────────────────────────────────────────────
@@ -406,7 +413,7 @@ async function scrape(linkId: string, budget: ScrapeBudget): Promise<Scrape> {
   try {
     for (attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const timeoutMs = Math.max(1_000, Math.min(FETCH_TIMEOUT_MS, budget.hardCapMs - elapsed()));
-      const { status, body } = await fetchOnce(linkId, timeoutMs);
+      const { status, body, unreadable } = await fetchOnce(linkId, timeoutMs);
 
       // A body-level `success:false` is ScrapingDog's own signal for a
       // request/plan-level problem (bad param, quota exhausted) — never
@@ -424,6 +431,10 @@ async function scrape(linkId: string, budget: ScrapeBudget): Promise<Scrape> {
           return { kind: 'retry_exhausted', rateLimited: true };
         }
         return { kind: 'provider_error', reason: scrubMessage(message, linkId) };
+      }
+      if (status === 200 && unreadable) {
+        logAnswer(linkId, status, attempt, elapsed(), 'the answer could not be read');
+        return { kind: 'provider_error', reason: 'scrapingdog 200 with an unreadable body' };
       }
       if (status === 200) return { kind: 'ok', body };
       logAnswer(linkId, status, attempt, elapsed(), typeof body?.message === 'string' ? body.message : undefined);
@@ -452,8 +463,7 @@ async function scrape(linkId: string, budget: ScrapeBudget): Promise<Scrape> {
     logAnswer(linkId, 0, attempt, elapsed(), reason);
     // Cut at the hard cap: ScrapingDog said nothing, so the outcome is unknown, not "no such profile" (re-review N3).
     // A later attempt (while one is allowed); it costs nothing unless it finds the profile.
-    const name = (err as { name?: unknown } | null)?.name;
-    if (name === 'TimeoutError' || name === 'AbortError') return { kind: 'retry_exhausted', timedOut: true };
+    if (isCut(err)) return { kind: 'retry_exhausted', timedOut: true };
     return { kind: 'provider_error', reason };
   }
 }

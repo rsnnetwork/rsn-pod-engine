@@ -253,3 +253,26 @@ describe('reasons and log messages never carry the key or the profile', () => {
     }
   });
 });
+
+// ─── Review M2: a 200 whose body cannot be read is never "no such profile" ────────────────────────────────────────
+describe('a 200 whose body cannot be read', () => {
+  const unreadable = (status: number, err: Error) => ({ status, json: async () => { throw err; } } as unknown as Response);
+
+  it('cut while the body was read (the 100 s signal fired after the headers): retry_exhausted timedOut, one call', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch')
+      .mockResolvedValue(unreadable(200, new DOMException('The operation was aborted due to timeout', 'TimeoutError')));
+    expect(await scrapingdogProvider.enrich({ linkedinUrl: URL_IN })).toEqual({ kind: 'retry_exhausted', timedOut: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('not JSON at all: provider_error (an answer we could not read), logged, never not_found', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(unreadable(200, new SyntaxError('Unexpected token < in JSON')));
+    expect(await scrapingdogProvider.enrich({ linkedinUrl: URL_IN })).toEqual({ kind: 'provider_error', reason: 'scrapingdog 200 with an unreadable body' });
+    expect(answerLogs()).toEqual([expect.objectContaining({ status: 200, attempt: 1, message: 'the answer could not be read' })]);
+  });
+
+  it('an unreadable body on a non-200 keeps its status verdict, as before', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(unreadable(500, new SyntaxError('Unexpected end of JSON input')));
+    expect(await scrapingdogProvider.enrich({ linkedinUrl: URL_IN })).toEqual({ kind: 'provider_error', reason: 'scrapingdog 500' });
+  });
+});

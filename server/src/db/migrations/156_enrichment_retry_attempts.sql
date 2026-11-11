@@ -11,7 +11,8 @@
 --                               name is kept here.
 -- Exactly one of user_id / join_request_id is set; both delete with their request or member.
 --
--- Only adds: a column with a default, a CHECK dropped before it is added, one table and its indexes, each made only when
+-- Only adds: a column with a default, a CHECK dropped before it is added, one table and its indexes, a partial index on
+-- user_intent_profiles for the sweep, each made only when
 -- missing. Safe to run twice. No BEGIN/COMMIT: the runner wraps this file in its own transaction.
 
 ALTER TABLE enrichment_retries ADD COLUMN IF NOT EXISTS attempt SMALLINT NOT NULL DEFAULT 1;
@@ -31,3 +32,8 @@ CREATE INDEX IF NOT EXISTS idx_enrichment_retry_log_user
 CREATE INDEX IF NOT EXISTS idx_enrichment_retry_log_request
   ON enrichment_retry_log (join_request_id, created_at) WHERE join_request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_enrichment_retry_log_created ON enrichment_retry_log (created_at);
+
+-- The interrupted-lookup sweep (enrichment.repo failInterruptedLookups) reads, every minute on every instance, only the
+-- rows still 'searching': a partial index keeps that read to those rows however many members there are.
+CREATE INDEX IF NOT EXISTS idx_uip_enrichment_searching
+  ON user_intent_profiles (enrichment_started_at) WHERE enrichment_status = 'searching';

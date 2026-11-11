@@ -56,11 +56,14 @@ export interface EnrichmentDbState {
 
 const TERMINAL_ENRICHMENT_STATUSES = new Set<EnrichmentStatus>(['found', 'partial', 'not_found', 'failed']);
 
+/** The lookup record as written: a search's own time ("at") is the database's NOW(), like its started time. */
+const LOOKUP = "(CASE WHEN $13 THEN $12::jsonb || jsonb_build_object('at', NOW()) ELSE $12::jsonb END)";
+
 /**
  * Upsert enrichment state onto user_intent_profiles. Only fields present on
  * `state` are written — EXCEPT two behaviors enforced here (not left to
  * callers): status 'searching' always resets enrichment_error and
- * enrichment_completed_at to null and stamps enrichment_started_at (a fresh
+ * enrichment_completed_at to null and stamps enrichment_started_at with the database clock (a fresh
  * attempt, not finished yet); any terminal status always stamps
  * enrichment_completed_at.
  *
@@ -90,7 +93,9 @@ export async function setEnrichmentState(
 
   const source = sourceProvided ? state.source ?? null : null;
   const error = isSearching ? null : errorProvided ? state.error ?? null : null;
-  const startedAt = isSearching ? nowIso : startedAtProvided ? state.startedAt ?? null : null;
+  // 12 Nov 2026 (review M3): a search is stamped by the database clock (NOW() below, $13), the same clock the
+  // interrupted-lookup sweep compares it with, so a host clock running slow or fast cannot sweep a lookup in flight.
+  const startedAt = isSearching ? null : startedAtProvided ? state.startedAt ?? null : null;
   const completedAt = isTerminal ? nowIso : completedAtProvided ? state.completedAt ?? null : null;
   const lookup = lookupProvided
     ? JSON.stringify({ linkedinUrl: state.linkedinUrl ?? null, at: isSearching ? startedAt : isTerminal ? completedAt : nowIso })
@@ -100,20 +105,21 @@ export async function setEnrichmentState(
     `INSERT INTO user_intent_profiles
        (user_id, enrichment_status, enrichment_source, enrichment_error, enrichment_started_at, enrichment_completed_at,
         inferred_profile, updated_at)
-       VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz,
-               CASE WHEN $11 THEN jsonb_build_object('lastLookup', $12::jsonb) ELSE '{}'::jsonb END, NOW())
+       VALUES ($1, $2, $3, $4, CASE WHEN $13 THEN NOW() ELSE $5::timestamptz END, $6::timestamptz,
+               CASE WHEN $11 THEN jsonb_build_object('lastLookup', ${LOOKUP}) ELSE '{}'::jsonb END, NOW())
      ON CONFLICT (user_id) DO UPDATE SET
        enrichment_status = $2,
        enrichment_source = CASE WHEN $7 THEN $3 ELSE user_intent_profiles.enrichment_source END,
        enrichment_error = CASE WHEN $8 THEN $4 ELSE user_intent_profiles.enrichment_error END,
-       enrichment_started_at = CASE WHEN $9 THEN $5::timestamptz ELSE user_intent_profiles.enrichment_started_at END,
+       enrichment_started_at = CASE WHEN $9 THEN (CASE WHEN $13 THEN NOW() ELSE $5::timestamptz END)
+                                    ELSE user_intent_profiles.enrichment_started_at END,
        enrichment_completed_at = CASE WHEN $10 THEN $6::timestamptz ELSE user_intent_profiles.enrichment_completed_at END,
        inferred_profile = CASE WHEN $11
-         THEN COALESCE(user_intent_profiles.inferred_profile, '{}'::jsonb) || jsonb_build_object('lastLookup', $12::jsonb)
+         THEN COALESCE(user_intent_profiles.inferred_profile, '{}'::jsonb) || jsonb_build_object('lastLookup', ${LOOKUP})
          ELSE COALESCE(user_intent_profiles.inferred_profile, '{}'::jsonb) - 'lastLookup' END,
        updated_at = NOW()`,
     [userId, status, source, error, startedAt, completedAt, sourceProvided, errorProvided, startedAtProvided, completedAtProvided,
-     lookupProvided, lookup],
+     lookupProvided, lookup, isSearching],
   );
 }
 
@@ -149,7 +155,8 @@ export async function getEnrichmentState(userId: string): Promise<EnrichmentDbSt
 
 /**
  * A lookup still 'searching' this long after it started was cut off by a server that stopped under it (a deploy, a
- * crash): the lookup itself ends inside its 150 s deadline. Ten minutes also outlasts an extras pass that runs late.
+ * crash): the lookup itself ends inside its 150 s deadline. Ten minutes also
+ * outlasts the extras pass after it (EXTRAS_REQUEST_OPTIONS in the orchestrator: 30 s a try, one retry).
  */
 export const INTERRUPTED_LOOKUP_AFTER_MS = 10 * 60 * 1000;
 export const INTERRUPTED_LOOKUP_ERROR = 'interrupted before it finished';

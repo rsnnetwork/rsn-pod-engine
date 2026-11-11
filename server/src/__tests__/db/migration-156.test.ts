@@ -46,4 +46,10 @@ describe('migration 156 (enrichment retry attempts and log)', () => {
     expect(f).toContain('CREATE INDEX IF NOT EXISTS idx_enrichment_retry_log_request ON enrichment_retry_log (join_request_id, created_at) WHERE join_request_id IS NOT NULL;');
     expect(f).toContain('CREATE INDEX IF NOT EXISTS idx_enrichment_retry_log_created ON enrichment_retry_log (created_at);');
   });
+
+  it('gives the every-minute interrupted-lookup sweep a partial index on the searching rows only, made only when missing', () => {
+    expect(flat(sql)).toContain(
+      "CREATE INDEX IF NOT EXISTS idx_uip_enrichment_searching ON user_intent_profiles (enrichment_started_at) WHERE enrichment_status = 'searching';",
+    );
+  });
 });

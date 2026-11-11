@@ -10,7 +10,7 @@
 // Steps (task A5 spec, revised in fix round 1 — see the review findings this
 // file's tests are organized around):
 //   0. concurrency guards — an in-flight Map (same process) and a persisted
-//      'searching' state fresher than 5 minutes (crash-tolerant, cross-process)
+//      'searching' state fresher than SEARCHING_LOCK_MS, 3 minutes (crash-tolerant)
 //      both short-circuit a duplicate attempt before it can double-spend a
 //      provider call.
 //   1. fresh 90-day cache — evaluated BEFORE the no-URL branch below, using
@@ -203,6 +203,9 @@ function parseExtras(text: string): ExtrasFields | null {
  * Never throws into the orchestrator: any failure here is logged and the
  * enrichment proceeds to its success state without the extras.
  */
+/** The extras call's own bound: 30 s a try, one retry at most. */
+export const EXTRAS_REQUEST_OPTIONS = { timeout: 30_000, maxRetries: 1 } as const;
+
 async function runExtrasPass(profile: EnrichedProfile, userId: string): Promise<ExtrasFields | null> {
   try {
     const resp = await getClient().messages.create({
@@ -217,7 +220,9 @@ async function runExtrasPass(profile: EnrichedProfile, userId: string): Promise<
             JSON.stringify(profile),
         },
       ],
-    });
+    // 12 Nov 2026: bounded (the SDK's default is 10 minutes and 2 retries), so a slow pass can neither keep the row
+    // 'searching' until the interrupted-lookup sweep (enrichment.repo) nor be paid for three times.
+    }, EXTRAS_REQUEST_OPTIONS);
     const text = resp.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('\n');
     return parseExtras(text);
   } catch (err) {
@@ -288,8 +293,8 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // Crash-tolerant backstop for layer (i) above (which only protects a
     // single process/instance, and only for the lifetime of the in-memory
     // Map): if the DB already says 'searching' and that attempt started under
-    // 5 minutes ago, assume it's still genuinely running and skip rather than
-    // double-spend. Older than 5 minutes means that attempt crashed before
+    // SEARCHING_LOCK_MS (3 minutes) ago, assume it is still running and skip rather than
+    // double-spend. Older than that means that attempt crashed before
     // reaching a terminal state — safe (and necessary) to re-run.
     const existingState = await getEnrichmentState(userId).catch(() => null);
     if (existingState?.status === 'searching' && existingState.startedAt) {

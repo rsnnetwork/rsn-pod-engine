@@ -7,9 +7,11 @@
 // Up to two later attempts per lookup (migration 156, after the 12 Nov backfill found copies stored 12+ minutes on, not
 // 2-3): attempt 1 at +10 minutes, attempt 2 thirty minutes after that; attempt 2 schedules nothing. Every scheduled
 // attempt is written to enrichment_retry_log, and a fourth in 24 hours for the same request or member is refused, so a
-// run of corrected addresses (each of which restarts at attempt 1) cannot keep a chain going.
+// run of corrected addresses (each of which restarts at attempt 1) cannot keep a chain going. The bound is strict: each
+// schedule takes a transaction-scoped advisory lock on its request or member first (review M5), so two instances
+// scheduling for the same one at the same moment are counted one after the other.
 
-import { query } from '../../db';
+import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 
 /** Later attempts per lookup, and when each runs after the attempt before it: ScrapingDog asks for 2-3 minutes; the
@@ -43,7 +45,8 @@ export interface DueEnrichRetry {
 
 /**
  * A request keeps its first waiting row (its address does not change). Inserted, and logged, only while the request
- * has had fewer than $5 later attempts scheduled in 24 hours. One statement: the bound, the row and the log together.
+ * has had fewer than $5 later attempts scheduled in 24 hours. One statement (the bound, the row and the log together),
+ * run under SCHEDULE_LOCK_SQL in the same transaction.
  */
 export const SCHEDULE_REQUEST_RETRY_SQL = `WITH allowed AS (
        SELECT count(*) < $5 AS ok FROM enrichment_retry_log
@@ -58,7 +61,7 @@ export const SCHEDULE_REQUEST_RETRY_SQL = `WITH allowed AS (
 
 /**
  * A member's latest address wins: a corrected address replaces the waiting row, its time and its attempt (a new
- * address starts again at attempt 1), rather than losing its own retry. Bounded and logged like a request's.
+ * address starts again at attempt 1), rather than losing its own retry. Bounded, logged and locked like a request's.
  */
 export const SCHEDULE_USER_RETRY_SQL = `WITH allowed AS (
        SELECT count(*) < $5 AS ok FROM enrichment_retry_log
@@ -72,6 +75,15 @@ export const SCHEDULE_USER_RETRY_SQL = `WITH allowed AS (
        RETURNING id),
      logged AS (INSERT INTO enrichment_retry_log (user_id) SELECT $1 FROM ins RETURNING id)
      SELECT id FROM ins`;
+
+/** Taken first, in the schedule's own transaction, on 'enrich-retry:user:<id>' or 'enrich-retry:request:<id>'; released
+ *  at its commit. */
+export const SCHEDULE_LOCK_SQL = 'SELECT pg_advisory_xact_lock(hashtext($1))';
+
+/** The advisory-lock key of a subject: one per member, one per join request. */
+export function scheduleLockKey(subject: EnrichRetrySubject): string {
+  return subject.userId ? `enrich-retry:user:${subject.userId}` : `enrich-retry:request:${subject.joinRequestId}`;
+}
 
 export const CLAIM_DUE_RETRIES_SQL = `DELETE FROM enrichment_retries
       WHERE id IN (SELECT id FROM enrichment_retries
@@ -105,9 +117,12 @@ export async function scheduleEnrichmentRetry(
   const delayMs = ENRICH_RETRY_DELAYS_MS[attempt - 1];
   const secs = Math.round(delayMs / 1000);
   try {
-    const res = subject.userId
-      ? await query<{ id: string }>(SCHEDULE_USER_RETRY_SQL, [subject.userId, input.linkedinUrl, name, secs, ENRICH_RETRY_DAILY_LIMIT, attempt])
-      : await query<{ id: string }>(SCHEDULE_REQUEST_RETRY_SQL, [subject.joinRequestId, input.linkedinUrl, name, secs, ENRICH_RETRY_DAILY_LIMIT, attempt]);
+    const res = await transaction(async (client) => {
+      await client.query(SCHEDULE_LOCK_SQL, [scheduleLockKey(subject)]);
+      return subject.userId
+        ? client.query<{ id: string }>(SCHEDULE_USER_RETRY_SQL, [subject.userId, input.linkedinUrl, name, secs, ENRICH_RETRY_DAILY_LIMIT, attempt])
+        : client.query<{ id: string }>(SCHEDULE_REQUEST_RETRY_SQL, [subject.joinRequestId, input.linkedinUrl, name, secs, ENRICH_RETRY_DAILY_LIMIT, attempt]);
+    });
     const scheduled = res.rows.length > 0;
     logger.info({ ...subject, scheduled, attempt, delayMs }, scheduled
       ? 'enrichment: a later lookup scheduled'

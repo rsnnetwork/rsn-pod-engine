@@ -653,6 +653,8 @@ describe('runEnrichment', () => {
 
       expect(create).toHaveBeenCalledTimes(1);
       expect(create.mock.calls[0][0]).toMatchObject({ model: 'claude-haiku-4-5', max_tokens: 800 });
+      // Review M1: bounded, 30 s a try and one retry, not the SDK's 10 minutes and two.
+      expect(create.mock.calls[0][1]).toEqual({ timeout: 30_000, maxRetries: 1 });
       const saved = mockSaveEnrichedCandidate.mock.calls[0][1] as EnrichResult;
       expect(saved.profile?.likelyWantsToMeet).toEqual(['founders']);
       expect(saved.profile?.conversationStarters).toEqual(['Saw you worked at Acme!']);

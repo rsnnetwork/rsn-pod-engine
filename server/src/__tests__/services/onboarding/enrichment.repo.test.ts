@@ -36,7 +36,12 @@ describe('setEnrichmentState', () => {
     // [userId, status, source, error, startedAt, completedAt, sourceProvided, errorProvided, startedAtProvided, completedAtProvided]
     expect(params[1]).toBe('searching');
     expect(params[3]).toBeNull(); // error forced null
-    expect(params[4]).toMatch(ISO_RE); // startedAt stamped
+    // Review M3: stamped by the database clock in the statement ($13 true: NOW()), never the host's.
+    expect(params[4]).toBeNull();
+    expect(params[12]).toBe(true);
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain('VALUES ($1, $2, $3, $4, CASE WHEN $13 THEN NOW() ELSE $5::timestamptz END');
+    expect(sql).toContain('enrichment_started_at = CASE WHEN $9 THEN (CASE WHEN $13 THEN NOW() ELSE $5::timestamptz END)');
     // 12 Nov 2026: a retry in flight kept the previous attempt's completion time and read as stuck. A searching row has no end.
     expect(params[5]).toBeNull(); // completedAt cleared
     expect(params[7]).toBe(true); // errorProvided (forced)
@@ -125,11 +130,12 @@ describe('setEnrichmentState: the address the lookup ran for', () => {
   it('records it beside the state, with the time of the write', async () => {
     await setEnrichmentState('u1', { status: 'searching', linkedinUrl: 'https://www.linkedin.com/in/ana' });
     const [sql, params] = mockQuery.mock.calls[0];
-    expect(sql).toMatch(/jsonb_build_object\('lastLookup', \$12::jsonb\)/);
+    // A search's record takes the database's NOW() as its time, like the started time beside it (review M3).
+    expect(sql).toContain("jsonb_build_object('lastLookup', (CASE WHEN $13 THEN $12::jsonb || jsonb_build_object('at', NOW()) ELSE $12::jsonb END))");
     expect(params[10]).toBe(true);
+    expect(params[12]).toBe(true);
     const lookup = JSON.parse(params[11] as string);
     expect(lookup.linkedinUrl).toBe('https://www.linkedin.com/in/ana');
-    expect(lookup.at).toBe(params[4]); // the same instant the state was stamped with
   });
 
   it('a terminal state carries its address and its completion time', async () => {

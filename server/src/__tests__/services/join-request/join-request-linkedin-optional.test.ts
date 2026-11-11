@@ -136,7 +136,9 @@ describe('approving from the dashboard (reviewJoinRequest)', () => {
     expect(reviewed.status).toBe('approved');
     expect(sendJoinRequestWelcomeEmail).toHaveBeenCalledTimes(1);
     expect(enrichedWrites()).toHaveLength(0);
-    const retries = mockQuery.mock.calls.filter((c) => /INSERT INTO enrichment_retries/.test(String(c[0])));
+    // The schedule runs in its own transaction (its advisory lock first): it reaches the transaction client.
+    const retries = [...mockQuery.mock.calls, ...mockClientQuery.mock.calls].filter((c) => /INSERT INTO enrichment_retries/.test(String(c[0])));
+    expect(mockClientQuery.mock.calls.some((c) => /pg_advisory_xact_lock/.test(String(c[0])))).toBe(true);
     expect(retries).toHaveLength(1);
     expect(retries[0][1]).toEqual(['jr-1', 'https://www.linkedin.com/in/jane-doe', 'Jane Doe', 600, 3, 1]);
     const said = (logger.warn as jest.Mock).mock.calls.filter((c) => c[1] === 'join-request enrichment preload found nothing');
