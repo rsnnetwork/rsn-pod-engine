@@ -21,7 +21,8 @@
 //
 // Shirley pilot S7 (RSN 15), its admins and platform admins:
 // PUT    /entities/:id/services     { services: [{ category, description?, website? }] }  { services }   the whole list,
-//                                   in order (at most one per category); [] clears it. GET /entities/:id carries them.
+//                                   kept in the order sent (the editor sends the shared list's; admins do not reorder), at most
+//                                   one per category; [] clears it. GET /entities/:id carries them.
 //
 // A person's entities (GET /users/:id/entities) are in routes/users.ts; an entity's links to circles are made from
 // the circle (routes/circles.ts). The service decides who may do what; the routes check the shape of what was sent

@@ -1,7 +1,7 @@
 // client/src/features/spaces/space-export.ts
 // An organiser's export of their circle or pod (Shirley pilot S7, item 20; plan decision D6). The rules of who sees the
 // Export entry, the file's name and what a refusal says are pure, so the server's jest runs them:
-// server/src/__tests__/client/s7-space-export.test.ts. The download itself is in download-space-file.ts.
+// server/src/__tests__/client/s7-client.test.ts. The download itself is in download-space-file.ts.
 //
 // The server decides who may export (a circle's owner and moderators, a pod's director and hosts) and refuses anyone
 // else; the page only hides the entry from people it would refuse. A platform admin with no such role is refused too.
@@ -45,7 +45,8 @@ export async function refusalMessage(err: unknown): Promise<string | null> {
 /** One sentence for a download that failed: the server's own words when they are fit to show, else plain ones. */
 export function downloadFailedLine(status: number | undefined, serverMessage: string | null, kind: SpaceKind, gotNoAnswer: boolean): string {
   if (status === undefined) return gotNoAnswer ? 'Connection lost. Check your internet and try again.' : 'Could not download that file just now. Try again in a moment.';
-  if (status === 404) return `This ${kind} could not be found. It may have been archived.`;
+  // An archived circle stays exportable by its owner and moderators, so a 404 means it is gone or they no longer run it.
+  if (status === 404) return `This ${kind} could not be found, or you no longer run it.`;
   if (status === 403 || status === 429 || status === 400) {
     return memberSentence(serverMessage) ?? (status === 429 ? 'Slow down a moment, then try again.' : 'You cannot download this file.');
   }

@@ -148,7 +148,9 @@ describe('export: who sees it and what a refusal says (space-export.ts)', () => 
     expect(said).toBe("Only the circle's owner and moderators can export its data.");
     expect(downloadFailedLine(403, said, 'circle', false)).toBe(said);
     expect(await refusalMessage({ response: { status: 500, data: new Blob(['<html>']) } })).toBeNull();
-    expect(downloadFailedLine(404, null, 'pod', false)).toBe('This pod could not be found. It may have been archived.');
+    // Fix round 1: an archived circle stays exportable, so a 404 never says "it may have been archived".
+    expect(downloadFailedLine(404, null, 'pod', false)).toBe('This pod could not be found, or you no longer run it.');
+    expect(downloadFailedLine(404, null, 'circle', false)).not.toMatch(/archived/);
     expect(downloadFailedLine(429, 'You have downloaded a lot of files just now. Try again in a few minutes.', 'pod', false))
       .toBe('You have downloaded a lot of files just now. Try again in a few minutes.');
     expect(downloadFailedLine(undefined, null, 'circle', true)).toMatch(/Connection lost/);
@@ -184,6 +186,20 @@ describe('export: the screens', () => {
     expect(sheet).toContain('if (sending.current) return;');
   });
 
+  it('fix round 1: the Circles page lists the archived circles the member ran, each with Export (their pages stay closed)', () => {
+    const section = code('features/circles/ArchivedCirclesSection.tsx');
+    expect(code('features/circles/CirclesPage.tsx')).toContain('<ArchivedCirclesSection />');
+    expect(section).toContain("queryFn: () => api.get('/circles/archived/mine')");
+    expect(section).toContain('meta: { entities: me ? [E.userCircles(me)] : [] },');
+    expect(section).toContain('if (!data || data.length === 0) return null;');
+    expect(section).toContain('Circles you ran (archived)');
+    expect(section).toContain('<SpaceExportSheet kind="circle" spaceId={exporting.id} name={exporting.name}');
+    expect(section).toMatch(/We could not load the archived circles you ran\./);
+    expect(section).not.toMatch(/to=\{`\/circles\/\$\{c\.id\}`\}/); // never a link to the closed page
+    expect(section).not.toMatch(/size="sm"/); // the Button's md size is 44px tall
+    expect(code('features/circles/CirclesPage.tsx').split('\n').length).toBeLessThanOrEqual(200);
+  });
+
   it('the download carries the sign-in (lib/api.ts, as a blob), never a new tab', () => {
     expect(download).toContain("import api from '@/lib/api';");
     expect(download).toContain("responseType: 'blob'");
@@ -192,13 +208,30 @@ describe('export: the screens', () => {
 });
 
 describe('search help: one line, one word (item 21)', () => {
-  it('with searches, says where they came from and links to them; a paused one is said only when there is one', () => {
+  it('with searches looking: true for hand-made ones too (no claim that onboarding made them); a paused one only when there is one', () => {
     expect(searchesHelp([{ status: 'active' }])).toEqual({
-      text: 'When you joined, REASON set up searches from your answers. They keep looking as people join.',
+      text: 'Your searches keep looking as people join. REASON sets some up from your onboarding answers, and you can add, edit or pause any of them.',
       link: 'See or edit your searches',
     });
-    expect(searchesHelp([{ status: 'active' }, { status: 'paused' }]).text).toMatch(/a paused one starts again when you resume it\.$/);
-    expect(searchesHelp(undefined).link).toBe('See or edit your searches');
+    expect(searchesHelp([{ status: 'active' }, { status: 'paused' }]).text).toMatch(/ A paused one starts again when you resume it\.$/);
+    for (const states of [[{ status: 'active' }], [{ status: 'active' }, { status: 'paused' }], undefined] as const) {
+      expect(searchesHelp(states).text).not.toMatch(/When you joined|set up searches from your answers\./);
+    }
+  });
+
+  it('with every open search paused: says so, never "they keep looking"', () => {
+    expect(searchesHelp([{ status: 'paused' }])).toEqual({
+      text: 'Your search is paused. Resume one and it keeps looking as people join.', link: 'See your searches',
+    });
+    expect(searchesHelp([{ status: 'paused' }, { status: 'paused' }, { status: 'archived' }]).text)
+      .toBe('Your searches are paused. Resume one and it keeps looking as people join.');
+  });
+
+  it('while loading, a general line that holds for anyone', () => {
+    expect(searchesHelp(undefined)).toEqual({
+      text: 'Searches keep looking for the people you want to meet as they join REASON, which sets some up from your onboarding answers.',
+      link: 'See your searches',
+    });
   });
 
   it('with none (onboarding skipped, or all archived), offers to set one up', () => {

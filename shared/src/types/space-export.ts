@@ -16,6 +16,12 @@ export type SpaceExportSection = (typeof SPACE_EXPORT_SECTIONS)[number];
 export const SPACE_EXPORT_COPY: Record<SpaceExportSection, { label: string; holds: string }> = {
   space: { label: 'Details', holds: 'Its name, description, settings, when it was made and how many members it has.' },
   members: { label: 'Members', holds: 'Current members: name, role and the date they joined. No email addresses.' },
-  events: { label: 'Events', holds: 'Its events: title, time, status, and how many registered and came.' },
+  events: { label: 'Events', holds: 'Its own events: title, time, status, and how many registered and came. Each pod in a circle exports its own events.' },
   posts: { label: 'Your posts', holds: 'The posts you wrote on its wall. Other people\'s posts and comments stay on REASON.' },
 };
+
+/**
+ * GET /api/circles/archived/mine: an archived circle the member is still owner or moderator of (fix round 1). Its page
+ * stays closed; the Circles page lists it with its Export, so an organiser keeps their copy after archiving.
+ */
+export interface ArchivedCircleRun { id: string; name: string; archivedAt: string; myRole: 'owner' | 'moderator' }

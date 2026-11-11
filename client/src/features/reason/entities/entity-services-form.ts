@@ -3,7 +3,7 @@
 // checked one an optional description (280 characters, counted as the server counts them: one emoji is one) and an
 // optional https website. Flat field names (`<category>_on`, `_description`, `_website`) so formResolver, which reads
 // the first part of each problem's path, puts every message next to its own field. Pure on purpose, so a test can run
-// it: server/src/__tests__/client/s7-entity-services.test.ts. The server checks everything again.
+// it: server/src/__tests__/client/s7-client.test.ts. The server checks everything again.
 import { z } from 'zod';
 import {
   ENTITY_LIMITS, ENTITY_SERVICE_CATEGORIES, ENTITY_SERVICE_LABELS,
@@ -64,7 +64,7 @@ export const servicesSchema = z.object(shape).superRefine((v, ctx) => {
   }
 }) as unknown as z.ZodType<ServicesFormValues>;
 
-/** The categories checked, in the list's order: the order the page shows them in. */
+/** The categories checked, in the shared list's order: the order they are saved and shown in (admins do not reorder them). */
 export function checkedCategories(v: ServicesFormValues): EntityServiceCategory[] {
   return ENTITY_SERVICE_CATEGORIES.filter((c) => v[onField(c)] === true);
 }

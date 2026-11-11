@@ -4,8 +4,11 @@
 //
 // Who: a circle's owner and moderators; a pod's director and hosts (active rows). A platform admin who holds no such
 // role is refused like anyone else: the export is the organiser's own copy, not a staff tool. A private pod someone
-// may not see answers its own 404, so the route never confirms it exists; a circle (whose name is public) answers 403.
-// An archived circle is gone for everyone (404), as its page is.
+// may not see answers its own 404, so the route never confirms it exists; a live circle (whose name is public) answers
+// 403. An archived circle stays exportable by its owner and moderators (fix round 1, controller ruling: "if they
+// leave", an organiser keeps their copy); anyone else, a role-less platform admin included, gets 404, so nobody can
+// confirm an archived circle exists. Its owner and moderators reach it from the Circles page's list of archived circles
+// they ran (listArchivedCirclesIRan); the archived circle's own page stays closed.
 //
 // One transaction per file: the organiser's role row is read FOR SHARE (a role change waits until the file is
 // written, so nobody demoted mid-download takes it), the data is read, and the access-log row is written. Only once
@@ -14,8 +17,8 @@
 // with the transaction's own client and never through recordAudit, which swallows failures.
 
 import type { PoolClient } from 'pg';
-import type { SpaceExportSection, SpaceKind } from '@rsn/shared';
-import { transaction } from '../../db';
+import type { ArchivedCircleRun, SpaceExportSection, SpaceKind } from '@rsn/shared';
+import { query, transaction } from '../../db';
 import { ForbiddenError, NotFoundError, ValidationError } from '../../middleware/errors';
 import { canViewPod } from '../pods/pod-access';
 import { placesHeldSql, visibleEventsSql } from '../session/event-access';
@@ -42,7 +45,7 @@ const EXPORTER_ROLES: Record<SpaceKind, readonly string[]> = { circle: ['owner',
 
 export interface Exporter { userId: string; role: string }
 
-interface LockedSpace { kind: SpaceKind; id: string; role: string }
+interface LockedSpace { kind: SpaceKind; id: string; role: string; archived: boolean }
 
 /** The name a member goes by in a file: their display name, else their first and last name. */
 const NAME_SQL = (u: string) => `COALESCE(NULLIF(btrim(${u}.display_name), ''), NULLIF(btrim(concat_ws(' ', ${u}.first_name, ${u}.last_name)), ''), 'A member')`;
@@ -51,20 +54,27 @@ const NAME_SQL = (u: string) => `COALESCE(NULLIF(btrim(${u}.display_name), ''), 
 const NOT_BLOCKED = (person: string) => `NOT EXISTS (SELECT 1 FROM user_blocks b
   WHERE (b.blocker_id = $2 AND b.blocked_id = ${person}) OR (b.blocker_id = ${person} AND b.blocked_id = $2))`;
 
-/** 404 for a missing (or, for a circle, archived) space; 403 unless the exporter holds an organiser's role in it now. */
+/**
+ * 404 for a missing space; 403 unless the exporter holds an organiser's role in it now, except an archived circle,
+ * which answers 404 to anyone without one (its existence is not confirmed).
+ */
 async function lockExporter(client: PoolClient, kind: SpaceKind, spaceId: string, userId: string): Promise<LockedSpace> {
   const space = kind === 'circle'
-    ? await client.query(`SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL`, [spaceId])
-    : await client.query(`SELECT id FROM pods WHERE id = $1`, [spaceId]);
+    ? await client.query<{ archived: boolean }>(`SELECT (archived_at IS NOT NULL) AS archived FROM circles WHERE id = $1`, [spaceId])
+    : await client.query<{ archived: boolean }>(`SELECT (status::text = 'archived') AS archived FROM pods WHERE id = $1`, [spaceId]);
   if (space.rows.length === 0) throw notFound(kind, spaceId);
+  const archived = space.rows[0].archived === true;
   const role = kind === 'circle'
     ? await client.query<{ role: string }>(
       `SELECT role FROM circle_members WHERE circle_id = $1 AND user_id = $2 FOR SHARE`, [spaceId, userId])
     : await client.query<{ role: string }>(
       `SELECT role::text AS role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active' FOR SHARE`, [spaceId, userId]);
   const held = role.rows[0]?.role;
-  if (!held || !EXPORTER_ROLES[kind].includes(held)) throw new ForbiddenError(kind === 'circle' ? CIRCLE_EXPORT_REFUSED : POD_EXPORT_REFUSED);
-  return { kind, id: spaceId, role: held };
+  if (!held || !EXPORTER_ROLES[kind].includes(held)) {
+    if (kind === 'circle' && archived) throw notFound(kind, spaceId);
+    throw new ForbiddenError(kind === 'circle' ? CIRCLE_EXPORT_REFUSED : POD_EXPORT_REFUSED);
+  }
+  return { kind, id: spaceId, role: held, archived };
 }
 
 /** More rows than one file holds: said in words, never a file cut short without saying so. */
@@ -95,7 +105,7 @@ async function readDetails(client: PoolClient, s: LockedSpace, userId: string): 
     ]);
     const c = r.rows[0];
     return {
-      kind: 'circle', name: c.name, description: c.description, access: c.join_policy, createdAt: c.created_at,
+      kind: 'circle', name: c.name, description: c.description, access: c.join_policy, createdAt: c.created_at, status: s.archived ? 'archived' : 'active',
       currentMembers: c.members, formerMembers: c.removed, linked: pods.rows.map((p) => p.name), organisations: orgs.rows.map((o) => o.name),
     };
   }
@@ -205,4 +215,22 @@ export async function exportSpaceSection(
     );
     return file;
   });
+}
+
+/** The most archived circles the Circles page lists. */
+export const ARCHIVED_RUN_MAX = 50;
+
+/**
+ * The archived circles in which the member is owner or moderator, newest archived first (Circles page, "Circles you ran
+ * (archived)"). Their own pages stay closed; each opens the export sheet only. Nothing is listed for anyone else.
+ */
+export async function listArchivedCirclesIRan(userId: string): Promise<ArchivedCircleRun[]> {
+  const r = await query<{ id: string; name: string; archived_at: Date; role: 'owner' | 'moderator' }>(
+    `SELECT c.id, c.name, c.archived_at, m.role
+       FROM circle_members m JOIN circles c ON c.id = m.circle_id
+      WHERE m.user_id = $1 AND m.role IN ('owner', 'moderator') AND c.archived_at IS NOT NULL
+      ORDER BY c.archived_at DESC, c.id LIMIT ${ARCHIVED_RUN_MAX}`,
+    [userId],
+  );
+  return r.rows.map((c) => ({ id: c.id, name: c.name, archivedAt: new Date(c.archived_at).toISOString(), myRole: c.role }));
 }

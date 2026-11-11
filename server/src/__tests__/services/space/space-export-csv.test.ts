@@ -87,14 +87,14 @@ describe('members.csv', () => {
 
 describe('space.csv', () => {
   const circle: SpaceDetails = {
-    kind: 'circle', name: 'Curious Humans', description: '=1+1 is a formula', access: 'closed', createdAt: new Date('2026-10-01T00:00:00Z'),
+    kind: 'circle', name: 'Curious Humans', description: '=1+1 is a formula', access: 'closed', createdAt: new Date('2026-10-01T00:00:00Z'), status: 'archived',
     currentMembers: 12, formerMembers: 2, linked: ['Curious 12'], organisations: ['Acme Ltd'],
   };
   it('a circle: who can join, counts, the pods and organisations it names, and when it was taken', () => {
     const l = lines(exportFile('circle', 'space', spaceRows(circle, AT), AT).body);
     expect(l).toEqual([
       'Field,Value', 'Kind,Circle', 'Name,Curious Humans', "Description,'=1+1 is a formula",
-      'Who can join,Closed: people ask to join and an organiser lets them in', 'Created,2026-10-01', 'Current members,12',
+      'Who can join,Closed: people ask to join and an organiser lets them in', 'Status,Archived', 'Created,2026-10-01', 'Current members,12',
       'Members removed by an organiser,2', 'Pod,Curious 12', 'Organisation,Acme Ltd', 'Exported (UTC),2026-11-11 14:05', '',
     ]);
   });

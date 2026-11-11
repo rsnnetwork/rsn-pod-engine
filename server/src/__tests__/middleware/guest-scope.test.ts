@@ -191,6 +191,7 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   // Shirley pilot S7: an organiser's export is a member's (an organiser's) surface.
   ['get', `/api/circles/${OTHER}/export?section=members`],
   ['get', `/api/pods/${OTHER}/export?section=members`],
+  ['get', '/api/circles/archived/mine'],
   ['get', '/api/matches/platform'],
   ['get', '/api/agents'],
   ['get', '/api/pokes/received'],

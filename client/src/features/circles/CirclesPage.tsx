@@ -5,6 +5,7 @@
 // here (v1 is admin-created, per his answer "we do"). T14 (1 Nov 2026): a circle
 // is Open or Closed; each card's one button joins, asks to join, withdraws the ask
 // or leaves (CircleJoinButton), and the list follows the member's own circles.
+// Shirley pilot S7 (fix round 1): the archived circles the member ran, with their export, below the list.
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -20,6 +21,7 @@ import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import CircleJoinButton from './CircleJoinButton';
+import ArchivedCirclesSection from './ArchivedCirclesSection';
 import type { CircleSummary } from './circle-logic';
 
 export default function CirclesPage() {
@@ -135,6 +137,8 @@ export default function CirclesPage() {
           ))}
         </div>
       )}
+
+      <ArchivedCirclesSection />
     </div>
   );
 }

@@ -17,7 +17,10 @@ import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 //    Shirley); the owner makes a private pod in it. The owner downloads members.csv (BOM, no email address, the
 //    owner's name), and the download is in the access log; a plain member is refused (403), someone outside the
 //    private pod gets its 404, a second platform admin with no role is refused (403). At 360px the owner's Export
-//    button fits and its sheet saves a file named by date only; the plain member has no Export button.
+//    button fits and its sheet saves a file named by date only; the plain member has no Export button. Fix round 1:
+//    the admin archives the circle; the owner still downloads members.csv (Status Archived in space.csv), the plain
+//    member and the role-less admin get 404, and at 360px the owner's Circles page lists it under "Circles you ran
+//    (archived)" with an Export that saves members.csv; the member's page does not.
 // 3. Find people says where "your searches" came from, with a 44px link to them, at 360px.
 // Throwaway accounts (@rsn-e2e.invalid), the spec's own entity, circle and pod, deleted by id at the end.
 
@@ -228,6 +231,34 @@ test(`an organiser exports members (no emails, logged first); others are refused
   // The pod's director (the owner made it) has Export there too.
   await gotoRetry(op, `${APP}/pods/${podId}`);
   await fitsViewport(op, op.getByTestId('pod-export'));
+
+  // ── Fix round 1: an ARCHIVED circle stays exportable by its owner (and moderators); anyone else gets 404 ──────
+  expect((await api(admin!, 'POST', `/circles/${circleId}/archive`)).status).toBe(200);
+  const archivedFile = await api(o, 'GET', `/circles/${circleId}/export?section=members`);
+  expect(archivedFile.status).toBe(200);
+  expect(archivedFile.text).toContain(`${RUN} Owner,Owner,`);
+  expect(archivedFile.text).not.toMatch(/@/);
+  const archivedSpace = await api(o, 'GET', `/circles/${circleId}/export?section=space`);
+  expect(archivedSpace.text).toContain('\r\nStatus,Archived\r\n');
+  expect((await api(m, 'GET', `/circles/${circleId}/export?section=members`)).status).toBe(404);
+  expect((await api(otherAdmin!, 'GET', `/circles/${circleId}/export?section=members`)).status).toBe(404);
+  const ran = await api(o, 'GET', '/circles/archived/mine');
+  expect(ran.status).toBe(200);
+  expect(ran.json.data.map((c: { id: string }) => c.id)).toContain(circleId);
+  expect((await api(m, 'GET', '/circles/archived/mine')).json.data.map((c: { id: string }) => c.id)).not.toContain(circleId);
+  // At 360px the Circles page lists it under "Circles you ran (archived)", and its Export saves members.csv.
+  await gotoRetry(op, `${APP}/circles`);
+  const archivedExport = op.getByTestId(`circle-archived-export-${circleId}`);
+  await fitsViewport(op, archivedExport);
+  await noSidewaysScroll(op);
+  await archivedExport.click();
+  const archivedMembersButton = op.getByTestId('space-export-members');
+  await fitsViewport(op, archivedMembersButton);
+  const [archivedDownload] = await Promise.all([op.waitForEvent('download', { timeout: 30_000 }), archivedMembersButton.click()]);
+  expect(archivedDownload.suggestedFilename()).toMatch(/^reason-circle-members-\d{4}-\d{2}-\d{2}\.csv$/);
+  // The plain member's Circles page has no such section.
+  await gotoRetry(mp, `${APP}/circles`);
+  await expect(mp.getByTestId(`circle-archived-export-${circleId}`)).toHaveCount(0);
 });
 
 test(`Find people says where your searches came from, with a link to them, at 360px (${engineLabel()})`, async () => {

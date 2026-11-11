@@ -1,7 +1,8 @@
 // ─── An organiser's export: who may take it, what is read, and the access log (Shirley pilot S7; item 20, D6) ─────
 // Who: a circle's owner and moderators, a pod's active director and hosts. Not a plain member, not a stranger, and not
-// a platform admin who holds no such role. A private pod someone may not see answers its own 404; an archived circle
-// is a 404. Each file is read and logged in one transaction, the organiser's role row held FOR SHARE, and the log row
+// a platform admin who holds no such role. A private pod someone may not see answers its own 404. Fix round 1: an
+// archived circle stays exportable by its owner and moderators; anyone else (a role-less admin too) gets 404 there.
+// listArchivedCirclesIRan lists those circles for the Circles page. Each file is read and logged in one transaction, the organiser's role row held FOR SHARE, and the log row
 // written before anything is handed back: a failed log write means no file. The reads never select an email, list
 // only current members with active accounts and nobody blocked either way, and only the organiser's own posts.
 // The SQL ran for real on PGlite for the task report; here the database is a stand-in that answers by statement.
@@ -16,8 +17,10 @@ const mockCanViewPod = jest.fn();
 jest.mock('../../../services/pods/pod-access', () => ({ canViewPod: (...a: unknown[]) => mockCanViewPod(...a), __esModule: true }));
 
 import {
-  CIRCLE_EXPORT_REFUSED, EXPORT_LIMITS, POD_EXPORT_REFUSED, SPACE_EXPORT_ACTION, exportSpaceSection,
+  ARCHIVED_RUN_MAX, CIRCLE_EXPORT_REFUSED, EXPORT_LIMITS, POD_EXPORT_REFUSED, SPACE_EXPORT_ACTION, exportSpaceSection,
+  listArchivedCirclesIRan,
 } from '../../../services/space/space-export.service';
+import { query } from '../../../db';
 import { SPACE_EXPORT_SECTIONS, type SpaceExportSection, type SpaceKind } from '@rsn/shared';
 
 const SPACE = 'c0000000-0000-4000-8000-000000000001';
@@ -26,15 +29,16 @@ const AT = new Date('2026-11-11T10:00:00Z');
 
 interface World {
   exists?: boolean;
+  archived?: boolean;
   role?: string | null;
   members?: number;
   auditFails?: boolean;
 }
 
 function world(w: World) {
-  mockClientQuery.mockImplementation(async (sql: string, params: unknown[]) => {
+  mockClientQuery.mockImplementation(async (sql: string) => {
     const s = sql.replace(/\s+/g, ' ');
-    if (/^SELECT id FROM (circles|pods) WHERE id = \$1/.test(s.trim())) return { rows: w.exists === false ? [] : [{ id: params[0] }] };
+    if (/^SELECT \(.*\) AS archived FROM (circles|pods) WHERE id = \$1$/.test(s.trim())) return { rows: w.exists === false ? [] : [{ archived: !!w.archived }] };
     if (/FOR SHARE$/.test(s.trim())) return { rows: w.role ? [{ role: w.role }] : [] };
     if (s.includes('INSERT INTO audit_log')) {
       if (w.auditFails) throw Object.assign(new Error('could not extend file'), { code: '53100' });
@@ -88,10 +92,34 @@ describe('who may export a circle', () => {
     await expect(go('circle', 'space', 'super_admin')).resolves.toMatchObject({ filename: 'reason-circle-space-2026-11-11.csv' });
   });
 
-  it('an archived or missing circle: 404', async () => {
+  it('a missing circle: 404', async () => {
     world({ exists: false, role: 'owner' });
     await expect(go('circle')).rejects.toMatchObject({ statusCode: 404, message: "We couldn't find that circle." });
-    expect(run()[0]).toBe('SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL');
+    // Found whether or not it is archived (fix round 1): only a missing circle is gone for everyone.
+    expect(run()[0]).toBe('SELECT (archived_at IS NOT NULL) AS archived FROM circles WHERE id = $1');
+  });
+
+  it.each([['owner'], ['moderator']])('an ARCHIVED circle stays exportable by its %s, logged first, and says Archived', async (role) => {
+    world({ archived: true, role });
+    const file = await go('circle', 'space');
+    expect(file.body).toContain('\r\nStatus,Archived\r\n');
+    const audit = mockClientQuery.mock.calls.find((c) => String(c[0]).includes('INSERT INTO audit_log'));
+    expect(audit![1]).toEqual([ME, SPACE_EXPORT_ACTION, 'circle', SPACE, JSON.stringify({ section: 'space', rows: file.rows, role })]);
+  });
+
+  it.each([
+    ['a plain member', 'member', 'member'],
+    ['a stranger', null, 'member'],
+    ['a role-less super admin', null, 'super_admin'],
+  ])('an archived circle answers %s 404, never 403 (its existence is not confirmed); nothing logged', async (_who, role, platformRole) => {
+    world({ archived: true, role });
+    await expect(go('circle', 'members', platformRole)).rejects.toMatchObject({ statusCode: 404, message: "We couldn't find that circle." });
+    expect(run().some((s) => s.includes('INSERT INTO audit_log'))).toBe(false);
+  });
+
+  it("a live circle's space.csv says Active", async () => {
+    world({ role: 'owner' });
+    expect((await go('circle', 'space')).body).toContain('\r\nStatus,Active\r\n');
   });
 
   it('the role row is held FOR SHARE, so a demotion waits until the file is written', async () => {
@@ -129,6 +157,24 @@ describe('who may export a pod', () => {
   it('removed or left (no active row): 403, as anyone without the role', async () => {
     world({ role: null });
     await expect(go('pod')).rejects.toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe("the archived circles a member ran (the Circles page's way back to their export)", () => {
+  it('lists only archived circles where the member is owner or moderator, newest archived first, bounded', async () => {
+    (query as jest.Mock).mockResolvedValueOnce({ rows: [
+      { id: 'c1', name: 'Curious Humans', archived_at: new Date('2026-11-10T09:00:00Z'), role: 'owner' },
+      { id: 'c2', name: 'Old salon', archived_at: new Date('2026-10-01T09:00:00Z'), role: 'moderator' },
+    ] });
+    expect(await listArchivedCirclesIRan(ME)).toEqual([
+      { id: 'c1', name: 'Curious Humans', archivedAt: '2026-11-10T09:00:00.000Z', myRole: 'owner' },
+      { id: 'c2', name: 'Old salon', archivedAt: '2026-10-01T09:00:00.000Z', myRole: 'moderator' },
+    ]);
+    const [sql, params] = (query as jest.Mock).mock.calls[0];
+    const flat = String(sql).replace(/\s+/g, ' ');
+    expect(flat).toContain("WHERE m.user_id = $1 AND m.role IN ('owner', 'moderator') AND c.archived_at IS NOT NULL");
+    expect(flat).toContain(`ORDER BY c.archived_at DESC, c.id LIMIT ${ARCHIVED_RUN_MAX}`);
+    expect(params).toEqual([ME]);
   });
 });
 

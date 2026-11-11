@@ -25,8 +25,10 @@ jest.mock('../../db', () => ({
   __esModule: true,
 }));
 const mockExport = jest.fn();
+const mockArchived = jest.fn();
 jest.mock('../../services/space/space-export.service', () => ({
   exportSpaceSection: (...a: unknown[]) => mockExport(...a),
+  listArchivedCirclesIRan: (...a: unknown[]) => mockArchived(...a),
   __esModule: true,
 }));
 
@@ -112,6 +114,31 @@ describe('what the routes refuse', () => {
     expect(res.status).toBe(status);
     expect(res.headers['content-disposition']).toBeUndefined();
     expect(res.text).not.toContain('Shirley');
+  });
+});
+
+describe('fix round 1', () => {
+  it.each([['circles'], ['pods']])('HEAD /%s/:id/export is refused (405, Allow: GET) and writes no log row', async (base) => {
+    const res = await request(app).head(`/${base}/${ID}/export?section=members`).set(as('u-head'));
+    expect(res.status).toBe(405);
+    expect(res.headers.allow).toBe('GET');
+    expect(mockExport).not.toHaveBeenCalled();
+  });
+
+  it('GET /circles/archived/mine lists the archived circles the member ran, for that member only', async () => {
+    const rows = [{ id: ID, name: 'Curious Humans', archivedAt: '2026-11-10T09:00:00.000Z', myRole: 'owner' }];
+    mockArchived.mockResolvedValueOnce(rows);
+    const res = await request(app).get('/circles/archived/mine').set(as('u-ran'));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: rows });
+    expect(mockArchived).toHaveBeenCalledWith('u-ran');
+    expect((await request(app).get('/circles/archived/mine')).status).toBe(401);
+  });
+
+  it('the circle router never takes /archived/mine for a circle id (two segments; no /:id/:x GET there)', () => {
+    const circles = fs.readFileSync(path.join(__dirname, '../../routes/circles.ts'), 'utf8');
+    expect(circles).not.toMatch(/router\.get\('\/:id\/:/);
+    expect(circles).not.toMatch(/router\.get\('\/archived/);
   });
 });
 

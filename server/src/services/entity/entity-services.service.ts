@@ -4,7 +4,8 @@
 // person's profile carries them.
 //
 // Only the entity's active admins and platform admins set them (lockForAdmin: 404 for a missing or archived entity,
-// 403 for anyone else). A save replaces the whole list in the order given, under the entity's row lock, so two admins
+// 403 for anyone else). A save replaces the whole list, keeping the order sent (the editor sends the shared list's
+// order; admins do not reorder), under the entity's row lock, so two admins
 // saving at once land one after the other and the last one wins; both screens refetch on entity:<id>.
 
 import type { PoolClient } from 'pg';
@@ -62,7 +63,7 @@ interface ServiceRow { category: EntityServiceCategory; description: string | nu
 const LIST_SQL = `SELECT category, description, website FROM entity_services
                    WHERE entity_id = $1 ORDER BY position ASC, category ASC LIMIT ${ENTITY_LIMITS.servicesMax}`;
 
-/** An entity's services in its admins' order. The caller has already decided the entity is live and may be seen. */
+/** An entity's services in their saved order (the shared list's). The caller has decided the entity is live and may be seen. */
 export async function listEntityServices(entityId: string, client?: PoolClient): Promise<EntityService[]> {
   const r = client ? await client.query<ServiceRow>(LIST_SQL, [entityId]) : await query<ServiceRow>(LIST_SQL, [entityId]);
   return r.rows.map((row) => ({ category: row.category, description: row.description, website: row.website }));

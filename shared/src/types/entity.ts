@@ -115,7 +115,7 @@ export interface EntityService {
   website: string | null;
 }
 
-/** PUT /api/entities/:id/services: the whole list, in the order the page shows it. An empty list clears it. */
+/** PUT /api/entities/:id/services: the whole list, kept in the order sent (the editor sends the list's). [] clears it. */
 export interface SetEntityServicesBody {
   services: Array<{ category: EntityServiceCategory; description?: string | null; website?: string | null }>;
 }
@@ -235,7 +235,7 @@ export interface EntityPage {
   /** 30 Oct review, only when `canEdit`: the people waiting for an answer (at most 200), and how many wait. */
   requests?: EntityRequest[];
   requestCount?: number;
-  /** Shirley pilot S7 (RSN 15): what it offers, in its admins' order. Shown on the entity's page only. */
+  /** Shirley pilot S7 (RSN 15): what it offers, in the shared list's order. Shown on the entity's page only. */
   services?: EntityService[];
 }
 

@@ -6,7 +6,8 @@
 --                Removing one later is a new migration that maps the rows first, then narrows this CHECK.
 --   description  at most 280 characters (VARCHAR counts characters, as the route does); blank is stored as NULL.
 --   website      an https address only (the route also refuses javascript:, credentials and hosts without a dot).
---   position     the order the entity's admins chose.
+--   position     the order shown: the shared list's order today (the editor saves in that order; admins do not
+--                reorder). Kept so a later editor can let them.
 -- One row per category per entity. An entity is archived, never deleted; ON DELETE CASCADE only matters if one is
 -- ever deleted for good. Whoever added a row may close their account: created_by then becomes NULL.
 --

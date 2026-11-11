@@ -27,6 +27,7 @@ export interface SpaceDetails {
   formerMembers: number;
   /** A pod only. */
   podType?: string | null;
+  /** A pod's status; a circle's 'active' or 'archived'. */
   status?: string | null;
   rules?: string | null;
   /** The pods a circle lists, or the circles a pod is in. */
@@ -67,7 +68,7 @@ const ROLE_WORDS: Record<string, string> = {
 
 const LIVE = new Set(['lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby']);
 
-const POD_STATUS_WORDS: Record<string, string> = { draft: 'Draft', active: 'Active', archived: 'Archived', suspended: 'Suspended' };
+const STATUS_WORDS: Record<string, string> = { draft: 'Draft', active: 'Active', archived: 'Archived', suspended: 'Suspended' };
 
 const two = (n: number) => String(n).padStart(2, '0');
 
@@ -101,11 +102,9 @@ export function spaceRows(d: SpaceDetails, at: Date): CsvValue[][] {
     ['Description', d.description ?? ''],
     [d.kind === 'circle' ? 'Who can join' : 'Visibility', accessWords(d.kind, d.access)],
   ];
-  if (d.kind === 'pod') {
-    rows.push(['Type', d.podType ? podTypeRule(d.podType as PodType).label : '']);
-    rows.push(['Status', POD_STATUS_WORDS[d.status ?? ''] ?? '']);
-    rows.push(['Rules', d.rules ?? '']);
-  }
+  if (d.kind === 'pod') rows.push(['Type', d.podType ? podTypeRule(d.podType as PodType).label : '']);
+  rows.push(['Status', STATUS_WORDS[d.status ?? ''] ?? '']);
+  if (d.kind === 'pod') rows.push(['Rules', d.rules ?? '']);
   rows.push(['Created', utcDay(d.createdAt)]);
   rows.push(['Current members', d.currentMembers]);
   rows.push([d.kind === 'circle' ? 'Members removed by an organiser' : 'Former members (left or removed)', d.formerMembers]);
