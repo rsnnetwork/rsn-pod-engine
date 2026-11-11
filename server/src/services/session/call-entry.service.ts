@@ -32,7 +32,7 @@
 //   - A guest made by the link is named 'Guest' (users.display_name is NOT NULL); the details step replaces it.
 
 import {
-  ErrorCodes, callLinkPath, cleanCallDisplayName, eventZone,
+  ErrorCodes, cleanCallDisplayName, eventLinkPath, eventLinkSlug, eventZone,
   type AccountKind, type CallEntryState, type CallEventSummary, type EventAnswers, type EventLifecycle, type UserRole,
 } from '@rsn/shared';
 import { query, transaction } from '../../db';
@@ -45,9 +45,10 @@ import * as identity from '../identity/identity.service';
 import { clientOriginConfig, firstAllowedClientBaseUrl } from '../identity/client-origin';
 import { isEmailTypeEnabled, sendCallEntryCodeEmail } from '../email/email.service';
 import {
-  admissionModeOf, callLinkNotFound, ensureCallCode, eventForViewer, findCallEvent,
+  admissionModeOf, callLinkNotFound, ensureCallCode, entryKeyOf, eventForViewer, findCallEvent,
   lifecycleOfCallEvent, visibilityOf, type CallEventRow,
 } from './call-link.service';
+import { ensureEventLink, eventLinkNeedsTailSql, settledEventLink } from './event-link.service';
 import {
   EVENT_ADMISSION_REQUIRED_SENTENCE, canRegister, lineLooksStalled, needsApproval, readEventAccessFacts, runsEvent,
   type EventAccessFacts,
@@ -178,7 +179,8 @@ async function newcomerRefusal(event: CallEventRow, email: string, admissionCode
  * The send leaves the request path, so a slow or failing provider never tells one address from another (a failure is
  * logged). In development the code comes back in the answer too (never in production).
  * The email's button opens the site the person asked from (the page's `clientUrl`, else the request's Origin), when it
- * is one of our sites by sign-in's exact list (client-origin.ts): the preview opens the preview. Else the main app.
+ * is one of our sites by sign-in's exact list (client-origin.ts): the preview opens the preview. Else the main app. It
+ * opens the link they came by: the event link as it is now when they came by one, else the call link.
  */
 export async function sendCallEntryCode(
   code: string,
@@ -195,7 +197,8 @@ export async function sendCallEntryCode(
   const address = email.trim().toLowerCase();
   const { token, code: entryCode } = await identity.issueEventEntryLink(address, event.id);
   const base = firstAllowedClientBaseUrl([opts.clientUrl, opts.origin], clientOriginConfig());
-  const link = `${base}${callLinkPath(event.call_code)}?${new URLSearchParams({ entry: token }).toString()}`;
+  const { path } = await entryKeyOf(event);
+  const link = `${base}${path}?${new URLSearchParams({ entry: token }).toString()}`;
   const message = { eventTitle: event.title, code: entryCode, link };
 
   if (config.isDev && !config.resendApiKey) return { sent: true, devCode: entryCode };
@@ -523,6 +526,22 @@ interface MyCallEventRow {
   timezone: string | null;
   has_image: boolean | null;
   image_updated_at: Date | null;
+  /** The event link's columns (migration 154). */
+  link_name?: string | null;
+  link_number?: number | null;
+  link_tail?: string | null;
+  link_needs_tail?: boolean | null;
+}
+
+/** The event link of one of a person's events, or null when it cannot be read just now (the call code still opens it). */
+async function myEventLinkPath(row: MyCallEventRow): Promise<string | null> {
+  try {
+    const parts = settledEventLink(row) ?? await ensureEventLink(row.id);
+    return eventLinkPath(eventLinkSlug(parts));
+  } catch (err) {
+    logger.warn({ err, sessionId: row.id }, 'listMyCallEvents: the event link could not be read');
+    return null;
+  }
 }
 
 /** The step a row of listMyCallEvents shows (no reads: the list's own columns decide it). */
@@ -556,7 +575,8 @@ export async function listMyCallEvents(userId: string): Promise<CallEventSummary
      SELECT s.id, s.call_code, s.title, s.scheduled_at, s.status::text AS status, s.publication, s.archived_at,
             s.registration_opens_at, sp.status::text AS place, r.status AS request,
             EXISTS (SELECT 1 FROM event_waitlist w WHERE w.session_id = s.id AND w.user_id = $1 AND w.status = 'waiting') AS waiting,
-            s.timezone, ${eventImageColumns('s')}
+            s.timezone, ${eventImageColumns('s')},
+            s.link_name, s.link_number, s.link_tail, ${eventLinkNeedsTailSql('s')} AS link_needs_tail
        FROM mine
        JOIN sessions s ON s.id = mine.session_id
        LEFT JOIN session_participants sp ON sp.session_id = s.id AND sp.user_id = $1
@@ -579,6 +599,7 @@ export async function listMyCallEvents(userId: string): Promise<CallEventSummary
     out.push({
       code, title: row.title, scheduledAt: iso(row.scheduled_at), timezone: eventZone(row.timezone),
       imageUrl: eventImageUrlOf(row.id, row), lifecycle, step: stepOfRow(row, lifecycle),
+      linkPath: await myEventLinkPath(row),
     });
   }
   return out;

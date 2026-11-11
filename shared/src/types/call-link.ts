@@ -60,6 +60,11 @@ export interface CallLanding {
   };
   /** `sessionId` only for a signed-in viewer who holds a place or runs the event. */
   viewer: { signedIn: boolean; accountKind: AccountKind | null; sessionId: string | null; step: CallEntryStep };
+  /**
+   * The event link as it is now (absent on an older server): the page puts it in the address bar, so a call link or an
+   * event link the event has since changed shows the one to share. The path of `code` above when that is the event link.
+   */
+  link?: { slug: string; path: string };
 }
 
 /** A signed-in person's state on an event's link, and the answer to entering it. */
@@ -93,6 +98,8 @@ export interface CallEventSummary {
   imageUrl: string | null;
   lifecycle: EventLifecycle;
   step: CallEntryStep;
+  /** The event link's path (e.g. '/events/rsn-3'), or null on an older server: where the guest home opens the event. */
+  linkPath?: string | null;
 }
 
 /** What verifying the code (or the email's link) gives: a session, and whether a guest account was just made. */
@@ -102,4 +109,47 @@ export interface CallEntryVerification {
   expiresAt: number;
   accountKind: AccountKind;
   created: boolean;
+}
+
+/**
+ * GET /sessions/:id/call-link, for the event's organisers: the call link (`code`, `path`, `url`, as before) and the event
+ * link. `eventLink.url` is the address to show and copy: EVENT_LINK_BASE_URL on the server when it is set, else the site
+ * the organiser asked from (one of ours), else the main app.
+ */
+export interface EventLinksForOrganiser {
+  code: string;
+  path: string;
+  url: string;
+  eventLink?: EventLinkInfo;
+}
+
+/** An event's link as its organisers see it. */
+export interface EventLinkInfo {
+  /** The name part, e.g. 'rsn'. */
+  name: string;
+  /** The number under that name. */
+  number: number;
+  /** e.g. 'rsn-3' or 'rsn-3-k7m2q9'. */
+  slug: string;
+  /** e.g. '/events/rsn-3'. */
+  path: string;
+  url: string;
+  /** True when the link carries a random tail (a private, invitation-only or closed-circle event). */
+  private: boolean;
+}
+
+/** GET /sessions/event-link-name: what the event form shows under its link-name field. */
+export interface EventLinkNameCheck {
+  /** The name an event gets when its organiser leaves the field empty. */
+  defaultName: string;
+  /** The name checked (trimmed, lower-cased), or the default when none was sent. */
+  name: string;
+  /** Why the name cannot be used, or null. */
+  problem: string | null;
+  /** The number the event would most likely get (another event may take it first), or null with a problem. */
+  nextNumber: number | null;
+  /** The address the link would have, without its tail: e.g. 'https://app.rsn.network/events/rsn-9', or null. */
+  preview: string | null;
+  /** True when this event (or, creating one, the visibility sent) gets a random tail. */
+  private: boolean;
 }

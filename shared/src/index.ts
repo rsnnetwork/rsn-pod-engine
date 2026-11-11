@@ -202,6 +202,36 @@ export const CALL_DISPLAY_NAME_MAX = _CALL_DISPLAY_NAME_MAX;
 export const callLinkPath = _callLinkPath;
 export const normaliseCallCode = _normaliseCallCode;
 export const cleanCallDisplayName = _cleanCallDisplayName;
+// The event link (Stefan, 11 Nov 2026): /events/<name>-<n>[-<tail>]. Real VALUES the server and the client's router and
+// forms read, so each has its own named export.
+export * from './events/event-link';
+import {
+  EVENT_LINK_BASE_PATH as _EVENT_LINK_BASE_PATH, EVENT_LINK_DEFAULT_NAME as _EVENT_LINK_DEFAULT_NAME,
+  EVENT_LINK_NAME_MIN as _EVENT_LINK_NAME_MIN, EVENT_LINK_NAME_MAX as _EVENT_LINK_NAME_MAX,
+  EVENT_LINK_TAIL_ALPHABET as _EVENT_LINK_TAIL_ALPHABET, EVENT_LINK_TAIL_FIRST as _EVENT_LINK_TAIL_FIRST,
+  EVENT_LINK_TAIL_LENGTH as _EVENT_LINK_TAIL_LENGTH, EVENT_LINK_RESERVED_NAMES as _EVENT_LINK_RESERVED_NAMES,
+  EVENT_LINK_NAME_RULE as _EVENT_LINK_NAME_RULE, EVENT_LINK_SLUG_MAX as _EVENT_LINK_SLUG_MAX,
+  normaliseEventLinkName as _normaliseEventLinkName, eventLinkNameProblem as _eventLinkNameProblem,
+  isEventLinkName as _isEventLinkName, eventLinkSlug as _eventLinkSlug,
+  eventLinkPath as _eventLinkPath, isEventLinkTail as _isEventLinkTail, parseEventLinkSlug as _parseEventLinkSlug,
+} from './events/event-link';
+export const EVENT_LINK_BASE_PATH = _EVENT_LINK_BASE_PATH;
+export const EVENT_LINK_DEFAULT_NAME = _EVENT_LINK_DEFAULT_NAME;
+export const EVENT_LINK_NAME_MIN = _EVENT_LINK_NAME_MIN;
+export const EVENT_LINK_NAME_MAX = _EVENT_LINK_NAME_MAX;
+export const EVENT_LINK_TAIL_ALPHABET = _EVENT_LINK_TAIL_ALPHABET;
+export const EVENT_LINK_TAIL_FIRST = _EVENT_LINK_TAIL_FIRST;
+export const EVENT_LINK_TAIL_LENGTH = _EVENT_LINK_TAIL_LENGTH;
+export const EVENT_LINK_RESERVED_NAMES = _EVENT_LINK_RESERVED_NAMES;
+export const EVENT_LINK_NAME_RULE = _EVENT_LINK_NAME_RULE;
+export const EVENT_LINK_SLUG_MAX = _EVENT_LINK_SLUG_MAX;
+export const normaliseEventLinkName = _normaliseEventLinkName;
+export const eventLinkNameProblem = _eventLinkNameProblem;
+export const isEventLinkName = _isEventLinkName;
+export const eventLinkSlug = _eventLinkSlug;
+export const eventLinkPath = _eventLinkPath;
+export const isEventLinkTail = _isEventLinkTail;
+export const parseEventLinkSlug = _parseEventLinkSlug;
 export const formatRule = _formatRule;
 export const podTypeRule = _podTypeRule;
 export const isEventFormat = _isEventFormat;

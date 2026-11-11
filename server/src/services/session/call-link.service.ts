@@ -11,9 +11,10 @@
 import crypto from 'crypto';
 import {
   CALL_CODE_ALPHABET, CALL_CODE_LENGTH, DEFAULT_GROUP_QUESTION, ErrorCodes, callLinkPath, eventDurationMinutes,
-  eventLifecycleOf, eventZone, isEventPublication, normaliseCallCode, resolveEventFormat,
+  eventLifecycleOf, eventLinkPath, eventLinkSlug, eventZone, isEventPublication, normaliseCallCode, parseEventLinkSlug,
+  resolveEventFormat,
   type AccountKind, type AdmissionMode, type CallLanding, type CallLandingGroupAsk, type EffectiveAdmission,
-  type EventLifecycle, type EventVisibility, type UserRole,
+  type EventLifecycle, type EventLinksForOrganiser, type EventVisibility, type UserRole,
 } from '@rsn/shared';
 import { query, transaction } from '../../db';
 import { clientOriginConfig, firstAllowedClientBaseUrl } from '../identity/client-origin';
@@ -29,6 +30,10 @@ import { getEventGroupRules } from './event-groups.service';
 import { questionsToAsk } from './event-questions.service';
 import { readEventAccessFacts, runsEvent } from './event-access';
 import { eventImageColumns, eventImageUrlOf } from './event-image-url';
+import {
+  ensureEventLink, eventLinkInfo, eventLinkMatchSql, eventLinkNeedsTailSql, rotateEventLinkTail, settledEventLink,
+  type EventLinkColumns,
+} from './event-link.service';
 
 /** The one answer for a code that leads nowhere the asker may go: malformed, unknown, a hidden draft, a deleted event. */
 export const CALL_LINK_NOT_FOUND = "We couldn't find that event.";
@@ -97,23 +102,33 @@ async function requireOrganiser(sessionId: string, actor: Actor): Promise<void> 
 }
 
 /**
- * The event's link for its organisers: the code, the client path and the full address. The address is on the site they
- * asked from (the request's Origin) when it is one of ours by sign-in's exact list, else the main app.
+ * The event's links for its organisers: the call link (the code, the client path and the full address, on the site they
+ * asked from when it is one of ours by sign-in's exact list, else the main app) and the event link (event-link.service.ts:
+ * EVENT_LINK_BASE_URL when set, else the same site). A failure to read the event link leaves it out: the call link card
+ * still works.
  */
 export async function getCallLinkForOrganiser(
   sessionId: string,
   actor: Actor,
   opts: { origin?: string } = {},
-): Promise<{ code: string; path: string; url: string }> {
+): Promise<EventLinksForOrganiser> {
   await requireOrganiser(sessionId, actor);
   const code = await ensureCallCode(sessionId);
   const base = firstAllowedClientBaseUrl([opts.origin], clientOriginConfig());
-  return { code, path: callLinkPath(code), url: `${base}${callLinkPath(code)}` };
+  const callLink = { code, path: callLinkPath(code), url: `${base}${callLinkPath(code)}` };
+  try {
+    return { ...callLink, eventLink: await eventLinkInfo(sessionId, opts) };
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'getCallLinkForOrganiser: the event link could not be read');
+    return callLink;
+  }
 }
 
 /**
- * Give the event a new call code: the old link stops working at once (nothing else holds it). Organisers only, audited
- * `call_link.rotated` (the codes themselves are never written to the trail). The organisers' card redraws.
+ * Give the event a new call code: the old link stops working at once (nothing else holds it). An event link with a tail
+ * gets a new tail too, and its old tailed links are forgotten (event-link.service.ts, rotateEventLinkTail): the same
+ * leak stops by either door. Organisers only, audited `call_link.rotated` (the codes themselves are never written to the
+ * trail). The organisers' card redraws.
  */
 export async function rotateCallCode(sessionId: string, actor: Actor): Promise<string> {
   await requireOrganiser(sessionId, actor);
@@ -125,6 +140,7 @@ export async function rotateCallCode(sessionId: string, actor: Actor): Promise<s
           [sessionId, newCallCode()],
         );
         if (!set.rows[0]) throw callLinkNotFound();
+        await rotateEventLinkTail(client, sessionId);
         await recordEventAudit({ sessionId, actorId: actor.userId, action: 'call_link.rotated', automatic: false }, client);
         return set.rows[0].call_code;
       });
@@ -141,7 +157,7 @@ export async function rotateCallCode(sessionId: string, actor: Actor): Promise<s
 // ─── Reading a code ──────────────────────────────────────────────────────────
 
 /** The event row the link reads: what the landing shows and what decides who may see it. */
-export interface CallEventRow {
+export interface CallEventRow extends EventLinkColumns {
   id: string;
   call_code: string;
   title: string;
@@ -162,22 +178,67 @@ export interface CallEventRow {
   timezone?: string | null;
   has_image?: boolean | null;
   image_updated_at?: Date | null;
+  /** How the asker reached the event: its event link (/events/<slug>) or its call link (/call/<code>). Absent: the code. */
+  reached_by?: 'event_link' | 'call_code';
 }
 
-/** The event a well-formed, known code names, whatever its state, or null. Callers decide who may see a draft. */
+const CALL_EVENT_COLUMNS = `s.id, s.call_code, s.title, s.description, s.scheduled_at, s.config, s.event_format, s.status::text AS status,
+            s.publication, s.archived_at, s.registration_opens_at, s.visibility, s.admission_mode, s.host_user_id,
+            h.display_name AS host_name, h.avatar_url AS host_avatar, s.timezone, ${eventImageColumns('s')},
+            s.link_name, s.link_number, s.link_tail, ${eventLinkNeedsTailSql('s')} AS link_needs_tail`;
+
+/**
+ * The event a well-formed, known link names, whatever its state, or null. Callers decide who may see a draft. `raw` is an
+ * event link's slug ('rsn-3', 'rsn-3-k7m2q9', or one the event had before: event-link.service.ts decides which still
+ * open) or a call code; a slug that leads nowhere is read as a code once more (someone typed a code with a dash).
+ */
 export async function findCallEvent(raw: string): Promise<CallEventRow | null> {
+  const slug = parseEventLinkSlug(raw);
+  if (slug) {
+    const bySlug = await query<CallEventRow>(
+      `SELECT ${CALL_EVENT_COLUMNS}
+         FROM sessions s LEFT JOIN users h ON h.id = s.host_user_id WHERE s.id = (${eventLinkMatchSql()})`,
+      [slug.name, slug.number, slug.tail, eventLinkSlug(slug)],
+    );
+    if (bySlug.rows[0]) return { ...bySlug.rows[0], reached_by: 'event_link' };
+  }
   const code = normaliseCallCode(raw);
   if (!code) return null;
   const result = await query<CallEventRow>(
-    `SELECT s.id, s.call_code, s.title, s.description, s.scheduled_at, s.config, s.event_format, s.status::text AS status,
-            s.publication, s.archived_at, s.registration_opens_at, s.visibility, s.admission_mode, s.host_user_id,
-            h.display_name AS host_name, h.avatar_url AS host_avatar, s.timezone, ${eventImageColumns('s')}
-       FROM sessions s
-       LEFT JOIN users h ON h.id = s.host_user_id
-      WHERE s.call_code = $1`,
+    `SELECT ${CALL_EVENT_COLUMNS}
+       FROM sessions s LEFT JOIN users h ON h.id = s.host_user_id WHERE s.call_code = $1`,
     [code],
   );
-  return result.rows[0] ?? null;
+  return result.rows[0] ? { ...result.rows[0], reached_by: 'call_code' } : null;
+}
+
+/**
+ * The event's link as it is now, for a row findCallEvent read: from the row when it is settled, else put right first
+ * (ensureEventLink). Null when it cannot be read just now: the caller then goes on without it.
+ */
+export async function currentEventLinkOf(event: CallEventRow): Promise<{ slug: string; path: string } | null> {
+  try {
+    const parts = settledEventLink(event) ?? await ensureEventLink(event.id);
+    const slug = eventLinkSlug(parts);
+    return { slug, path: eventLinkPath(slug) };
+  } catch (err) {
+    logger.warn({ err, sessionId: event.id }, 'currentEventLinkOf: the event link could not be read');
+    return null;
+  }
+}
+
+/**
+ * The key the asker's next calls use, and the path an email sends them back to: the event link as it is now when they
+ * came by one (a public event's link never hands out its call code), else the call code, as before.
+ */
+export async function entryKeyOf(
+  event: CallEventRow, link?: { slug: string; path: string } | null,
+): Promise<{ key: string; path: string }> {
+  if (event.reached_by === 'event_link') {
+    const now = link === undefined ? await currentEventLinkOf(event) : link;
+    if (now) return { key: now.slug, path: now.path };
+  }
+  return { key: event.call_code, path: callLinkPath(event.call_code) };
 }
 
 /** The event a code leads to for anyone (a draft is hidden from everyone here), or null: one identical 404 for all. */
@@ -255,8 +316,12 @@ export async function getCallLanding(
   const format = resolveEventFormat({ format: event.event_format, config: event.config as object | null });
   const group = await groupAskOf(event.id);
   const mode = admissionModeOf(event);
+  // The event link as it is now: the page shows it in the address bar (an old call link or a renamed event's old link
+  // turns into the one to share). Reached by an event link, `code` is that link, never the call code.
+  const link = await currentEventLinkOf(event);
+  const { key } = await entryKeyOf(event, link);
   const base = {
-    code: event.call_code,
+    code: key,
     title: event.title,
     description: event.description,
     scheduledAt: event.scheduled_at ? new Date(event.scheduled_at).toISOString() : null,
@@ -275,6 +340,7 @@ export async function getCallLanding(
       ...base,
       asks: { displayName: true, group, admissionCode: mode === 'restricted', questions },
       viewer: { signedIn: false, accountKind: null, sessionId: null, step: 'identify' },
+      ...(link ? { link } : {}),
     };
   }
   // The signed-in viewer's own state: the same reading GET /call-links/:code/entry gives (a lazy import: call-entry
@@ -298,6 +364,7 @@ export async function getCallLanding(
       sessionId: state.sessionId,
       step: state.step,
     },
+    ...(link ? { link } : {}),
   };
 }
 
