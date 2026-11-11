@@ -43,11 +43,12 @@ describe('the event page has one action bar', () => {
       '<Play className="h-4 w-4 mr-2" /> Enter Live Event',
       '<AddToCalendar',
       "{isRoundsEvent ? 'View recap' : 'Who took part'}",
-      '{mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}',
       'data-testid="matching-board-link"',
       'Invite people',
       'title="Duplicate this event"',
       'title="Edit event"',
+      // The owner's order for the tools: Matching board, Invite people, Copy, Edit, End event.
+      '{mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}',
     ];
     const at = order.map((s) => bar.indexOf(s));
     for (const [i, s] of order.entries()) expect({ s, found: at[i] > -1 }).toEqual({ s, found: true });
