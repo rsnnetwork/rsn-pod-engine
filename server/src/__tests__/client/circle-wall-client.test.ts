@@ -227,6 +227,20 @@ describe('the screens', () => {
     expect(comments).toMatch(/\{!isReply && !c\.withdrawn && replyTo === c\.id && \(/);
   });
 
+  it('S5 on S4: Report post and Report comment on someone else\'s words, for moderators too (beside Remove), never on a placeholder', () => {
+    const actions = read('components/wall/WallPostActions.tsx');
+    expect(actions).toContain('const mayReport = !!config.reportKind && !!userId && p.authorId !== userId;');
+    expect(actions.indexOf('<ReportPostButton')).toBeGreaterThan(-1);
+    expect(actions.indexOf('<ReportPostButton')).toBeLessThan(actions.indexOf('{(mayDelete || mayPin || mayEdit) && ('));
+    expect(actions).not.toMatch(/mayReport = [^;]*canModerate/);
+    const row = read('components/wall/WallCommentRow.tsx');
+    const placeholder = row.slice(row.indexOf('if (c.withdrawn) {'), row.indexOf('const href = '));
+    expect(placeholder).not.toMatch(/ReportCommentButton/);
+    const live = row.slice(row.indexOf('const href = '));
+    expect(live.indexOf('<ReportCommentButton')).toBeLessThan(live.indexOf('canDeleteWallItem(viewer, c.authorId, userId)'));
+    expect(read('features/circles/CircleWall.tsx')).toContain("reportKind: 'circle_post',");
+  });
+
   it('fix round 10: no wall component is over 200 lines', () => {
     for (const f of ['Wall', 'WallPostCard', 'WallPostBody', 'WallPostActions', 'WallPostReactions', 'WallCommentRow', 'WallNotices', 'ClampedText', 'WallEditForm']) {
       const lines = read(`components/wall/${f}.tsx`).split(NL).length;

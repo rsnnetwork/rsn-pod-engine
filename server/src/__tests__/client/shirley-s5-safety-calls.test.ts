@@ -65,6 +65,8 @@ describe('safety words', () => {
     for (const rel of [
       'features/messages/MessagesPage.tsx', 'features/profile/PublicProfilePage.tsx', 'features/reason/human/ProfileMoreMenu.tsx',
       'features/reason/human/HumanProfilePage.tsx', 'components/ReportUserModal.tsx', 'components/wall/WallPostCard.tsx',
+      // S4 split the post card and the comment row; their report actions live in these now.
+      'components/wall/WallPostActions.tsx', 'components/wall/WallCommentRow.tsx',
     ]) {
       const src = readClientSource(rel);
       expect(src).not.toMatch(/<Flag\b|[{,]\s*Flag\s*[,}]/);
@@ -176,7 +178,8 @@ describe('the thread keeps the person in it (item 16)', () => {
   });
 
   it('wall posts by someone else can be reported from where they are; never your own', () => {
-    const card = readClientSource('components/wall/WallPostCard.tsx');
+    // S4 split the post card: its row of controls (Report post among them) is WallPostActions.
+    const card = readClientSource('components/wall/WallPostActions.tsx');
     expect(card).toContain('const mayReport = !!config.reportKind && !!userId && p.authorId !== userId;');
     expect(card).toMatch(/\{mayReport && config\.reportKind && \(\s*<ReportPostButton/);
     expect(readClientSource('features/pods/pod-wall-config.ts')).toContain("reportKind: 'pod_post',");
@@ -411,8 +414,13 @@ describe('Add manually', () => {
 
 describe('fix round 1: more to report, each where it is', () => {
   it('a comment on either wall: "Report comment" on someone else\'s, never your own, its kind from the wall', () => {
-    const comments = readClientSource('components/wall/WallComments.tsx');
+    // S4 split the comment row out of WallComments: Report comment is in WallCommentRow, and never on the placeholder of
+    // a comment its author withdrew (it has no author and no words; the server refuses it too).
+    const comments = readClientSource('components/wall/WallCommentRow.tsx');
     expect(comments).toMatch(/\{config\.reportKind && userId && c\.authorId !== userId && \(\s*<ReportCommentButton kind=\{config\.reportKind\} commentId=\{c\.id\} authorId=\{c\.authorId\} authorName=\{c\.authorName\} excerpt=\{c\.content\} \/>/);
+    const placeholder = comments.slice(comments.indexOf('if (c.withdrawn) {'), comments.indexOf('const href = '));
+    expect(placeholder).not.toMatch(/ReportCommentButton/);
+    expect(readClientSource('components/wall/WallComments.tsx')).toMatch(/<WallCommentRow\b/);
     const btn = readClientSource('components/wall/ReportCommentButton.tsx');
     expect(btn).toContain("subject={{ kind: kind === 'pod_post' ? 'pod_comment' : 'circle_comment', id: commentId, excerpt }}");
     expect(btn).toContain('{REPORT_COMMENT}');

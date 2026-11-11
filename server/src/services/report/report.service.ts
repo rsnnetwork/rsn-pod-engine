@@ -155,7 +155,8 @@ async function resolveCirclePost(reporter: Reporter, postId: string): Promise<Re
 }
 
 /**
- * A comment (or reply) on a pod wall post the reporter can read now: the comment and its post must stand, and the pod
+ * A comment (or reply) on a pod wall post the reporter can read now: the comment and its post must stand (S4: a comment
+ * its author withdrew is a placeholder with no author or words, and reads as no longer there), and the pod
  * wall's own read of that post decides (an active member of the pod, or a platform admin; a removed member is refused).
  */
 async function resolvePodComment(reporter: Reporter, commentId: string): Promise<ResolvedSubject> {
@@ -163,7 +164,7 @@ async function resolvePodComment(reporter: Reporter, commentId: string): Promise
     `SELECT c.author_id, c.content, c.post_id, p.pod_id
        FROM pod_post_comments c
        JOIN pod_posts p ON p.id = c.post_id
-      WHERE c.id = $1 AND c.deleted_at IS NULL AND p.deleted_at IS NULL`,
+      WHERE c.id = $1 AND c.deleted_at IS NULL AND c.withdrawn_at IS NULL AND p.deleted_at IS NULL`,
     [commentId],
   );
   const c = r.rows[0];
@@ -172,13 +173,16 @@ async function resolvePodComment(reporter: Reporter, commentId: string): Promise
   return { authorId: c.author_id, excerpt: excerptOf(c.content), conversationId: null };
 }
 
-/** A comment (or reply) on a circle wall post the reporter can read now, by the circle wall's own read of the post. */
+/**
+ * A comment (or reply) on a circle wall post the reporter can read now, by the circle wall's own read of the post. A
+ * withdrawn comment (S4: a placeholder with no author or words) reads as no longer there.
+ */
 async function resolveCircleComment(reporter: Reporter, commentId: string): Promise<ResolvedSubject> {
   const r = await query<{ author_id: string; content: string; post_id: string }>(
     `SELECT c.author_id, c.content, c.post_id
        FROM circle_post_comments c
        JOIN circle_posts p ON p.id = c.post_id
-      WHERE c.id = $1 AND c.deleted_at IS NULL AND p.deleted_at IS NULL`,
+      WHERE c.id = $1 AND c.deleted_at IS NULL AND c.withdrawn_at IS NULL AND p.deleted_at IS NULL`,
     [commentId],
   );
   const c = r.rows[0];

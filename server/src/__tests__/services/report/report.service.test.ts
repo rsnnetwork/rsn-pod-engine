@@ -46,6 +46,8 @@ interface World {
   /** Fix round 1: a wall comment (with its post's wall), a group message, an event chat message. */
   podComment?: { author_id: string; content: string } | null;
   circleComment?: { author_id: string; content: string } | null;
+  /** S4: the wall comment was withdrawn by its author (a "This comment was deleted" placeholder). */
+  withdrawn?: boolean;
   groupMessage?: { from_user_id: string; content: string; kind?: string } | null;
   eventMessage?: { sender_id: string | null; content: string; scope: 'lobby' | 'room'; audience_ids?: string[] | null } | null;
 }
@@ -62,8 +64,14 @@ function arm(w: World = {}) {
       return Promise.resolve({ rows: w.message ? [{ conversation_id: CONV, kind: 'user', attachment_type: null, attachment_url: null, ...w.message }] : [] });
     }
     if (/SELECT pod_id FROM pod_posts/.test(s)) return Promise.resolve({ rows: w.podPostOf ? [{ pod_id: w.podPostOf }] : [] });
-    if (/FROM pod_post_comments c JOIN pod_posts p/.test(s)) return Promise.resolve({ rows: w.podComment ? [{ ...w.podComment, post_id: 'post-9', pod_id: 'pod-9' }] : [] });
-    if (/FROM circle_post_comments c JOIN circle_posts p/.test(s)) return Promise.resolve({ rows: w.circleComment ? [{ ...w.circleComment, post_id: 'post-8' }] : [] });
+    // S4 rebase: a withdrawn comment (a placeholder) is found only by a read that does not ask c.withdrawn_at IS NULL.
+    const hidesWithdrawn = /c\.withdrawn_at IS NULL/.test(s);
+    if (/FROM pod_post_comments c JOIN pod_posts p/.test(s)) {
+      return Promise.resolve({ rows: w.podComment && !(w.withdrawn && hidesWithdrawn) ? [{ ...w.podComment, post_id: 'post-9', pod_id: 'pod-9' }] : [] });
+    }
+    if (/FROM circle_post_comments c JOIN circle_posts p/.test(s)) {
+      return Promise.resolve({ rows: w.circleComment && !(w.withdrawn && hidesWithdrawn) ? [{ ...w.circleComment, post_id: 'post-8' }] : [] });
+    }
     if (/JOIN dm_group_members gm/.test(s)) {
       return Promise.resolve({ rows: w.groupMessage ? [{ kind: 'user', attachment_type: null, attachment_url: null, ...w.groupMessage }] : [] });
     }
@@ -390,5 +398,22 @@ describe('a wall comment, a group message, an event chat message', () => {
   it("an event chat message whose sender's account is gone is \"no longer there\"", async () => {
     arm({ eventMessage: { sender_id: null, content: 'x', scope: 'lobby' } });
     await expect(submitReport(me, { reason: 'spam', subject: { kind: 'event_chat_message', id: 'x-1' } })).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+// ── S4 on main (rebase): a comment its author withdrew is a placeholder with no author or words ──────────────────
+describe('a withdrawn wall comment ("This comment was deleted")', () => {
+  it.each([
+    ['pod_comment' as const, { podComment: { author_id: REPORTED, content: '' }, withdrawn: true }],
+    ['circle_comment' as const, { circleComment: { author_id: REPORTED, content: '' }, withdrawn: true }],
+  ])('a %s placeholder cannot be reported: it is no longer there, and nothing is written', async (kind, w) => {
+    arm(w);
+    mockPodPost.mockResolvedValue({ id: 'post-9' });
+    mockCirclePost.mockResolvedValue({ id: 'post-8' });
+    await expect(submitReport(me, { reportedId: REPORTED, reason: 'spam', subject: { kind, id: MSG } }))
+      .rejects.toMatchObject({ statusCode: 404, message: REPORT_WORDS.commentGone });
+    expect(insert()).toBeUndefined();
+    const read = mockQuery.mock.calls.map((c) => String(c[0]).replace(/\s+/g, ' ')).find((s) => /post_comments c JOIN/.test(s))!;
+    expect(read).toContain('c.deleted_at IS NULL AND c.withdrawn_at IS NULL AND p.deleted_at IS NULL');
   });
 });
