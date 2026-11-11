@@ -256,12 +256,12 @@ for (const width of DEVICE ? [null] : MENU_WIDTHS) {
   test(`the meeting page's Add to calendar menu at ${label}: Google, Outlook.com and the file`, async () => {
     test.setTimeout(90_000);
     const page = await open(ana, `/meetings/${meetingId}`, width);
-    const button = page.getByRole('button', { name: 'Add to calendar' });
+    const button = page.getByRole('button', { name: 'Add manually' });
     await expect(button).toBeVisible({ timeout: 30_000 });
     await button.click();
     const menu = page.getByTestId('add-to-calendar-menu');
     for (const id of ['calendar-google', 'calendar-outlook', 'calendar-ics']) await reachable(page, menu.getByTestId(id), id);
-    await expect(menu.getByText("Already added from the email? You don't need to add it again.")).toBeVisible();
+    await expect(menu.getByText('You already have this in your email. Adding it here may create a second entry.')).toBeVisible();
     await noSidewaysScroll(page, label);
 
     const join = `${APP}/meet/${convId}?scheduled=1&kind=video`;

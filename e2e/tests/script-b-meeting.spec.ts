@@ -160,7 +160,7 @@ test('Script B: a request becomes a booked meeting both find under Events; both 
       await noSidewaysScroll(p, 'Events');
     }
     await gotoRetry(piaPage, `${APP}/meetings/${meetingId}`);
-    await piaPage.getByRole('button', { name: 'Add to calendar' }).click();
+    await piaPage.getByRole('button', { name: /Add manually|Add to calendar/ }).click();
     for (const id of ['calendar-google', 'calendar-outlook', 'calendar-ics']) await tall(piaPage.getByTestId('add-to-calendar-menu').getByTestId(id), id);
     await piaPage.keyboard.press('Escape');
   });
@@ -199,18 +199,21 @@ test('Script B: a request becomes a booked meeting both find under Events; both 
   await test.step('04 Pia leaves and is asked how it went; Ole stays in and is told; Pia comes back and Ole sees her again (a real room)', async () => {
     if (skipStep(!ROOMS, ROOM_SKIP)) return;
     await piaPage.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-    await expect(piaPage).toHaveURL(new RegExp(`/meetings/${meetingId}\\?feedback=1`), { timeout: 20_000 });
+    // 11 Nov 2026 (RSN 08): back in the conversation, the question asked over it.
+    await expect(piaPage).toHaveURL(new RegExp(`/messages/${conv}\\?feedback=${meetingId}`), { timeout: 20_000 });
     await expect(piaPage.getByRole('dialog', { name: `How did your meeting with ${ole.displayName} go?` })).toBeVisible({ timeout: LIVE });
     await expect(olePage.getByTestId('partner-left'), 'Ole is told').toBeVisible({ timeout: 30_000 });
     await olePage.waitForTimeout(6_000);
     await expect(olePage, 'Ole is not put out').toHaveURL(new RegExp(`/meet/${conv}`));
-    await piaPage.getByRole('dialog', { name: `How did your meeting with ${ole.displayName} go?` }).getByRole('button', { name: 'Skip', exact: true }).click();
+    await piaPage.getByRole('dialog', { name: `How did your meeting with ${ole.displayName} go?` }).getByRole('button', { name: 'Not now', exact: true }).click();
+    // She comes back from the meeting's page, where Join is a link.
+    await gotoRetry(piaPage, `${APP}/meetings/${meetingId}`);
     await piaPage.getByRole('link', { name: 'Join' }).filter({ visible: true }).first().click();
     await piaPage.waitForURL(new RegExp(`/meet/${conv}`), { timeout: 30_000 });
     await expect(olePage.locator('.lk-participant-tile'), 'Ole sees her again').toHaveCount(2, { timeout: 45_000 });
     for (const p of [piaPage, olePage]) {
       await p.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-      await expect(p).toHaveURL(new RegExp(`/meetings/${meetingId}\\?feedback=1|/messages/${conv}`), { timeout: 20_000 });
+      await expect(p).toHaveURL(new RegExp(`/messages/${conv}`), { timeout: 20_000 });
     }
   });
 

@@ -424,7 +424,7 @@ test(`a stored LinkedIn share link never blocks a save and is left as it was; an
   await pool.query('UPDATE users SET linkedin_url = NULL, job_title = $2 WHERE id = $1', [owner.id, OWNER.title]);
 });
 
-test(`More on the Human Profile: Report this member, and Block, which asks first and leaves; the notice then offers Unblock, which brings the profile back (${ENGINE})`, async () => {
+test(`More on the Human Profile: Report member, and Block member, which asks first and leaves; the notice then offers Unblock, which brings the profile back (${ENGINE})`, async () => {
   test.setTimeout(240_000);
   const { ctx, page, errors } = await signedIn(viewer, { width: 390, height: 844 });
   await gotoRetry(page, `${APP}/people/${owner.id}`);
@@ -433,13 +433,13 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   await expectReachable(page, more, 'More');
 
   await more.click();
-  await expectReachable(page, page.getByRole('button', { name: 'Block', exact: true }), 'Block');
-  await page.getByRole('button', { name: 'Report this member' }).click();
+  await expectReachable(page, page.getByRole('button', { name: 'Block member', exact: true }), 'Block');
+  await page.getByRole('button', { name: 'Report member' }).click();
   await expect(page.getByRole('heading', { name: `Report ${OWNER.name}` })).toBeVisible();
   // The move bar steps aside, so it cannot cover the dialog's buttons on a phone.
   await expect(page.getByRole('region', { name: 'Your move' })).toHaveCount(0);
   await page.waitForTimeout(700); // the dialog fades in
-  await expectReachable(page, page.getByRole('button', { name: 'Submit report' }), 'Submit report');
+  await expectReachable(page, page.getByRole('button', { name: 'Send report' }), 'Send report');
   await page.getByRole('button', { name: 'Cancel' }).click();
   await expect(page.getByRole('region', { name: 'Your move' })).toBeVisible();
 
@@ -447,16 +447,17 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   // The question is drawn in the page (T2, 1 Nov 2026), so it is answered here with its own buttons: arming
   // acceptConfirmDialogs would confirm the first question too, and the block would happen before the spec dismisses it.
   await more.click();
-  await page.getByRole('button', { name: 'Block', exact: true }).click();
+  await page.getByRole('button', { name: 'Block member', exact: true }).click();
   await expect(page.getByRole('dialog', { name: `Block ${OWNER.name}?` })).toBeVisible();
-  await expect(page.getByTestId('confirm-dialog-body')).toHaveText("They won't be able to message you, and you won't be matched together in future events.");
+  // 11 Nov 2026 (Shirley Palmer's item 16): every consequence, before it is done.
+  await expect(page.getByTestId('confirm-dialog-body')).toHaveText(`${OWNER.name} won't be able to message or call you, you won't be matched together, and you won't see each other's posts or comments. They aren't told. Your conversation stays, read-only. You can unblock them from the conversation or their profile.`);
   await page.getByTestId('confirm-dialog-cancel').click();
   await expect(page.getByTestId('confirm-dialog-body')).toHaveCount(0);
   await expect(page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible();
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(0);
   // Accepted: blocked, said, and the page leaves the profile (opened directly, so back is For You).
   await more.click();
-  await page.getByRole('button', { name: 'Block', exact: true }).click();
+  await page.getByRole('button', { name: 'Block member', exact: true }).click();
   await confirmInPage(page);
   await expect(page.getByText(`${OWNER.name} is blocked. They can no longer message you, and you won't be matched together.`)).toBeVisible({ timeout: 30_000 });
   await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
@@ -489,18 +490,21 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   await ctx.close();
 });
 
-test(`Report this member with "Also block" ticked: the report is sent, they are blocked, and Done leaves the profile (${ENGINE})`, async () => {
+test(`Report member with "Also block" ticked: the report is sent, they are blocked, and Done leaves the profile (${ENGINE})`, async () => {
   test.setTimeout(180_000);
   const { ctx, page, errors } = await signedIn(viewer, { width: 390, height: 844 });
   await gotoRetry(page, `${APP}/people/${reported.id}`);
   await expect(page.getByRole('heading', { level: 1, name: REPORTED_NAME })).toBeVisible({ timeout: SLOW });
   await page.getByRole('button', { name: 'More' }).click();
-  await page.getByRole('button', { name: 'Report this member' }).click();
+  await page.getByRole('button', { name: 'Report member' }).click();
   await expect(page.getByRole('heading', { name: `Report ${REPORTED_NAME}` })).toBeVisible();
+  // No reason is chosen for the person (11 Nov 2026): Send report waits for one.
+  await expect(page.getByRole('button', { name: 'Send report' })).toBeDisabled();
+  await page.getByLabel('Reason').selectOption('spam');
   await page.getByLabel('Details (optional)').fill(`spec ${run}`);
   await page.getByText(`Also block ${REPORTED_NAME}`).click();
-  await page.getByRole('button', { name: 'Submit report' }).click();
-  await expect(page.getByText(`You've also blocked ${REPORTED_NAME}.`)).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: 'Send report' }).click();
+  await expect(page.getByText(`You also blocked ${REPORTED_NAME}: they can no longer message or call you.`, { exact: false })).toBeVisible({ timeout: 30_000 });
   expect((await pool.query('SELECT 1 FROM user_reports WHERE reporter_id = $1 AND reported_id = $2', [viewer.id, reported.id])).rowCount).toBe(1);
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, reported.id])).rowCount).toBe(1);
   await page.getByRole('button', { name: 'Done' }).click();
@@ -576,7 +580,7 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     const more = other.page.getByRole('button', { name: 'More' });
     await expectReachable(other.page, more, `More at ${at}`);
     await more.click();
-    for (const label of ['Block', 'Report this member']) {
+    for (const label of ['Block member', 'Report member']) {
       await expectReachable(other.page, other.page.getByRole('button', { name: label, exact: true }), `${label} at ${at}`);
     }
     await noSidewaysScroll(other.page, `More open at ${at}`);

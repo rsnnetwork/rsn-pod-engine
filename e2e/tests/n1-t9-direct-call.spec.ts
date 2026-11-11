@@ -240,10 +240,18 @@ test.describe.serial('a direct video call with a connection', () => {
     await expect.poll(async () => (await apiAs(a!, 'GET', `/dm/conversations/${conv}/partner-presence`)).json?.data?.online, {
       message: 'the server reads B as offline once B has closed the app', timeout: 90_000, intervals: [500, 1_000, 2_000],
     }).toBe(false);
+    // The server's own refusal, in the plan's sentence.
+    const refused = await apiAs(a!, 'POST', `/calls/user/${b!.id}`, { durationMin: 15 });
+    expect(refused.status).toBe(409);
+    expect(refused.json?.error?.message).toBe(OFFLINE('Bo Brandt'));
+    // 11 Nov 2026 (Shirley Palmer's RSN 07): the profile's button follows B's presence; pressed while B is offline it
+    // opens the sheet with Try again, Find a time and Send a message instead of ringing.
     await gotoRetry(pageA, `${APP}/people/${b!.id}`);
     await pageA.getByTestId('video-call-button').click();
-    await pageA.getByRole('button', { name: 'Send request' }).click();
-    await expect(pageA.getByText(OFFLINE('Bo Brandt'))).toBeVisible({ timeout: 15_000 });
+    await expect(pageA.getByRole('dialog', { name: "Bo Brandt isn't on REASON right now." })).toBeVisible({ timeout: 15_000 });
+    for (const name of ['Try again', 'Find a time', 'Send a message']) {
+      await expect(pageA.getByRole('button', { name, exact: true })).toBeVisible();
+    }
     await expect(pageA.getByTestId('call-outgoing')).toHaveCount(0);
     await shot(pageA, 'a-offline-sentence');
   });

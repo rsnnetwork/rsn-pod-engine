@@ -196,7 +196,8 @@ test('1) leaving the 1:1 room after the other person was in it asks how it went'
     await expect(tiles(boRoom)).toHaveCount(2, { timeout: 45_000 });
 
     await anaRoom.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-    await expect(anaRoom).toHaveURL(new RegExp(`/meetings/${roomMeeting}\\?feedback=1`), { timeout: 15_000 })
+    // 11 Nov 2026 (RSN 08): leaving returns to the conversation, and the question is asked over it.
+    await expect(anaRoom).toHaveURL(new RegExp(`/messages/${convId}\\?feedback=${roomMeeting}`), { timeout: 15_000 })
       .catch((e: Error) => { throw withLog(e, 'Ana', log); });
     await expect(sheetOf(anaRoom, BO)).toBeVisible({ timeout: 20_000 });
     // Bo stays in the room after Ana has gone, past the notice's 5 s grace, and is never asked anything while he
@@ -206,7 +207,7 @@ test('1) leaving the 1:1 room after the other person was in it asks how it went'
     await expect(boRoom).toHaveURL(new RegExp(`/meet/${convId}`));
     await expect(sheetOf(boRoom, ANA)).toHaveCount(0);
     await boRoom.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-    await expect(boRoom).toHaveURL(new RegExp(`/meetings/${roomMeeting}\\?feedback=1`), { timeout: 15_000 })
+    await expect(boRoom).toHaveURL(new RegExp(`/messages/${convId}\\?feedback=${roomMeeting}`), { timeout: 15_000 })
       .catch((e: Error) => { throw withLog(e, 'Bo', log); });
     await expect(sheetOf(boRoom, ANA)).toBeVisible({ timeout: 20_000 });
     meetingId = roomMeeting;
@@ -334,7 +335,7 @@ test('6) the sheet and the card fit at every width; the admin page at 1280 and 3
     expect(await noSideways(page), `sheet ${tag}: sideways scroll`).toBe(true);
     const send = sheet.getByRole('button', { name: 'Send', exact: true });
     await expectReachable(page, send, `sheet ${tag}: Send`);
-    await expectReachable(page, sheet.getByRole('button', { name: 'Skip', exact: true }), `sheet ${tag}: Skip`);
+    await expectReachable(page, sheet.getByRole('button', { name: 'Not now', exact: true }), `sheet ${tag}: Not now`);
     for (const name of ['Yes', 'Maybe', 'No', 'Audio', 'Video', 'Connection', 'Behaviour', 'Other']) {
       const box = await sheet.getByRole('button', { name, exact: true }).boundingBox();
       expect(box!.height, `sheet ${tag}: ${name} is 44px tall`).toBeGreaterThanOrEqual(44);
@@ -343,9 +344,9 @@ test('6) the sheet and the card fit at every width; the admin page at 1280 and 3
     // The text box is the last field: scrolled to, Send is still pinned in reach.
     await sheet.getByLabel('Anything you want to tell us (optional)').scrollIntoViewIfNeeded();
     await expectReachable(page, send, `sheet ${tag}: Send after scrolling`);
-    await sheet.getByRole('button', { name: 'Skip', exact: true }).click();
+    await sheet.getByRole('button', { name: 'Not now', exact: true }).click();
     await expect(sheet).toHaveCount(0);
-    // Skip answers nothing: the card stays.
+    // Not now answers nothing: the card stays.
     await expect(card).toBeVisible();
     await page.context().close();
   }

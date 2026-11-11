@@ -661,7 +661,7 @@ test('5a, 5b, 5c: chat in the meeting room, Add to calendar, and the feedback th
     const page = (await openAs(browser, mia, `/meetings/${meetingId}`)).page;
     const maxPage = (await openAs(browser, max, `/meetings/${meetingId}`)).page;
     await markNotReloaded(maxPage);
-    await page.getByRole('button', { name: 'Add to calendar' }).click();
+    await page.getByRole('button', { name: /Add manually|Add to calendar/ }).click();
     const menu = page.getByTestId('add-to-calendar-menu');
     for (const id of ['calendar-google', 'calendar-outlook', 'calendar-ics']) await tall(menu.getByTestId(id), id);
     const google = new URL((await menu.getByTestId('calendar-google').getAttribute('href'))!);
@@ -680,7 +680,7 @@ test('5a, 5b, 5c: chat in the meeting room, Add to calendar, and the feedback th
       window: moved.toISOString().replace('.000Z', 'Z'), durationMin: 45, type: 'video',
     })).status).toBe(200);
     await expect.poll(async () => {
-      await maxPage.getByRole('button', { name: 'Add to calendar' }).click();
+      await maxPage.getByRole('button', { name: /Add manually|Add to calendar/ }).click();
       const href = await maxPage.getByTestId('add-to-calendar-menu').getByTestId('calendar-google').getAttribute('href').catch(() => null);
       await maxPage.keyboard.press('Escape');
       return href ? new URL(href).searchParams.get('dates')?.split('/')[0] : null;

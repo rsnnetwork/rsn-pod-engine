@@ -229,9 +229,9 @@ test('two people go from silence to a booked meeting, each step arriving on both
 
   const boCard = cards(boPage).filter({ hasText: confirmed });
   await expect(boCard.getByRole('button', { name: /Join meeting/i })).toBeVisible();
-  await expect(boCard.getByRole('button', { name: /Add to calendar/i })).toBeVisible();
+  await expect(boCard.getByRole('button', { name: /Add manually|Add to calendar/i })).toBeVisible();
   // 1 Nov 2026 (T7, L10): it opens the menu of Google Calendar, Outlook.com and a file.
-  await boCard.getByRole('button', { name: /Add to calendar/i }).click();
+  await boCard.getByRole('button', { name: /Add manually|Add to calendar/i }).click();
   await expect(boPage.getByTestId('add-to-calendar-menu').getByRole('menuitem', { name: 'Google Calendar' })).toBeVisible();
   await expect(boPage.getByTestId('add-to-calendar-menu').getByRole('menuitem', { name: 'Outlook.com' })).toBeVisible();
   await boPage.keyboard.press('Escape');
@@ -787,7 +787,8 @@ test('a card opened before the panel heard the member\'s own Move follows it qui
     await stillAt(t2Chip);
     await tapReachable(page, t2Chip, 'Pa: t2');
     await tapReachable(page, move, 'Pa: Move to t2');
-    await expect(toast(page, `Meeting moved: ${labelIn(t2, TZ)}`)).toBeVisible({ timeout: 20_000 });
+    // 11 Nov 2026 (RSN 09): the toast says what happened to the invitation; the time is on the card.
+    await expect(toast(page, 'Meeting moved. Updated invitation sent by email.')).toBeVisible({ timeout: 20_000 });
     await tapReachable(page, page.getByRole('button', { name: `Confirm ${labelIn(t3, TZ)}` }), 'Pa: t3, before the panel heard');
     await expect(card).toContainText(labelIn(t3, TZ));
     release();
