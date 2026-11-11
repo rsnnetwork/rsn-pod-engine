@@ -15,7 +15,7 @@ function answer(sql: string) {
   const s = sql.replace(/\s+/g, ' ');
   if (s.includes('FROM pods WHERE id = $1 FOR UPDATE')) return { rows: [podRow] };
   if (s.includes('SELECT COUNT(*) as count FROM pod_members')) return { rows: [{ count: '0' }] };
-  if (s.includes('SELECT id, status FROM pod_members')) return { rows: existingRow ? [existingRow] : [] };
+  if (s.includes('SELECT id, status, removal_kind, left_at FROM pod_members')) return { rows: existingRow ? [existingRow] : [] };
   if (s.startsWith('INSERT INTO pod_members') || s.startsWith('UPDATE pod_members')) {
     return { rows: [{ podId: 'p1', userId: 'u1', role: 'member', status: 'active' }] };
   }
@@ -75,7 +75,7 @@ describe('joinPod by a platform admin', () => {
       existingRow = { id: 'm1', status };
       await joinPod('p1', 'u1', UserRole.ADMIN);
       const update = txSql.find((t) => t.sql.startsWith('UPDATE pod_members'));
-      expect(update?.params).toEqual(['member', 'active', 'p1', 'u1']);
+      expect(update?.params).toEqual(['member', 'active', 'p1', 'u1', true]); // S2 fix round 1: back in, so the removal mark clears
       expect(txSql.some((t) => t.sql.startsWith('INSERT INTO pod_members'))).toBe(false);
     }
   );

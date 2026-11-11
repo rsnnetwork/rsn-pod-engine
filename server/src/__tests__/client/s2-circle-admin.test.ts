@@ -183,4 +183,13 @@ describe('the pod page (S2)', () => {
     expect(pod).toMatch(/To come back you need a new invitation\./);
     expect(pod).not.toMatch(/onClick=\{\(\) => leaveMutation\.mutate\(\)\}/);
   });
+
+  // Fix round 1: removing a member asks first, says they cannot come back by themselves, and shows the server's words.
+  it('Remove member asks first, in words that match the re-entry rule, and a refusal shows the server\'s sentence', () => {
+    expect(pod).toMatch(/onClick=\{\(\) => void removeMember\(m\.userId, m\.displayName \|\| 'this member'\)\}/);
+    expect(pod).not.toMatch(/onClick=\{\(\) => removeMemberMutation\.mutate\(m\.userId\)\}/);
+    expect(pod).toMatch(/They cannot rejoin by themselves/);
+    expect(pod).toMatch(/onError: \(err: any\) => addToast\(err\?\.response\?\.data\?\.error\?\.message \|\| 'They could not be removed\. Try again\.', 'error'\)/);
+    expect(read('features/circles/CircleMembersSection.tsx')).toMatch(/They cannot rejoin by themselves: only an invitation from you or a moderator brings them back\./);
+  });
 });

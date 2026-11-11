@@ -31,11 +31,15 @@ const router = Router();
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
-// Shirley pilot S2 (11 Nov 2026, D2): a pod is Private, Public with approval or Public open. "Invite only" is retired
-// (migration 148 maps it to Private and refuses it); asking for it, or any other value, is a 400 in words.
-const podVisibility = z.nativeEnum(PodVisibility).refine(
-  (v) => (POD_VISIBILITY_SETTINGS as readonly string[]).includes(v),
-  { message: 'Choose Private, Public with approval or Public open.' },
+// Shirley pilot S2 (11 Nov 2026, D2): a pod is Private, Public with approval or Public open. "Invite only" is retired:
+// one that still arrives (an old client, or a request during a deploy) is stored as Private, the more private setting
+// (fix round 1: migration 148 adds no CHECK, so nothing old breaks mid-deploy). Any other value is a 400 in words.
+const podVisibility = z.preprocess(
+  (v) => (v === PodVisibility.INVITE_ONLY ? PodVisibility.PRIVATE : v),
+  z.nativeEnum(PodVisibility).refine(
+    (v) => (POD_VISIBILITY_SETTINGS as readonly string[]).includes(v),
+    { message: 'Choose Private, Public with approval or Public open.' },
+  ),
 );
 
 const createPodSchema = z.object({
@@ -69,14 +73,18 @@ const updatePodSchema = z.object({
   allowMemberInvites: z.boolean().optional(),
 });
 
-// S2: a pod has one director, made when the pod is. Adding someone makes them a member or (by the director) a host;
-// 'director' is refused, so a host can no longer make a second director, nor make themselves one through a second
-// account.
+// S2: adding someone makes them a member or (by the director) a host. A director is added only by a platform admin
+// (fix round 1: super admin powers unchanged), so a host can no longer make a second director, nor make themselves one
+// through a second account.
 const addMemberSchema = z.object({
   userId: z.string().uuid(),
-  role:   z.enum(['host', 'member'], { errorMap: () => ({ message: 'Add them as a member or a host.' }) }).optional(),
+  role:   z.enum(['director', 'host', 'member'], { errorMap: () => ({ message: 'Add them as a member or a host.' }) }).optional(),
 });
 export const ONLY_DIRECTOR_ADDS_HOSTS = "Only the pod's director can add a host.";
+export const ONLY_ADMIN_ADDS_DIRECTOR = 'Only a platform admin can add a director.';
+const ASKED_ROLE: Record<string, PodMemberRole> = {
+  director: PodMemberRole.DIRECTOR, host: PodMemberRole.HOST, member: PodMemberRole.MEMBER,
+};
 
 const joinConfigSchema = z.object({
   rulesText:     z.string().max(5000).optional(),
@@ -398,8 +406,9 @@ router.post(
   auditMiddleware('add_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const asked = (req.body.role as 'host' | 'member' | undefined) === 'host' ? PodMemberRole.HOST : PodMemberRole.MEMBER;
+      const asked = ASKED_ROLE[(req.body.role as string | undefined) ?? 'member'];
       if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
+        if (asked === PodMemberRole.DIRECTOR) throw new ForbiddenError(ONLY_ADMIN_ADDS_DIRECTOR);
         const requesterRole = await podService.getMemberRole(req.params.id, req.user!.userId);
         if (!requesterRole || ![PodMemberRole.DIRECTOR, PodMemberRole.HOST].includes(requesterRole)) {
           throw new ForbiddenError('Only pod directors and hosts can add members');

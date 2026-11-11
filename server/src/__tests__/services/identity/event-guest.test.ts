@@ -289,7 +289,7 @@ describe('no pod_members row is ever written for an event guest', () => {
   /** The pod read, then whether they were ever in it, then the write (which a guest's account makes match nothing). */
   const podWorld = (existing: Array<{ id: string; status: string }>) => mockClientQuery.mockImplementation((sql: string) => {
     if (/FROM pods WHERE id = \$1 FOR UPDATE/.test(sql)) return Promise.resolve({ rows: [POD], rowCount: 1 });
-    if (/SELECT id, status FROM pod_members/.test(sql)) return Promise.resolve({ rows: existing, rowCount: existing.length });
+    if (/SELECT id, status, removal_kind, left_at FROM pod_members/.test(sql)) return Promise.resolve({ rows: existing, rowCount: existing.length });
     return Promise.resolve({ rows: [], rowCount: 0 }); // the guarded write matches no row for a guest
   });
 

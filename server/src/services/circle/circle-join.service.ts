@@ -264,7 +264,8 @@ const REMOVE_REFUSAL = 'Only the people who run this circle can remove members.'
  * (403), never yourself (you leave instead), and (S2, D3) a moderator only by the owner or a platform admin. The
  * circle row is locked first, and the actor's own role is read again under that lock, so a remover demoted a moment
  * ago, or two people removing at once, cannot act on a stale role. The count moves in the same transaction. A removed
- * member of an open circle may join again; of a closed one, ask again.
+ * member does not come back by themselves (S2 fix round 1: circle_removals): an open circle refuses their own join, a
+ * closed one takes their ask, and an organiser's personal invite lets them in.
  */
 export async function removeCircleMember(circleId: string, memberId: string, actor: CircleActor): Promise<void> {
   await assertCircleManager(circleId, actor.userId, actor.role, REMOVE_REFUSAL);
@@ -287,6 +288,11 @@ export async function removeCircleMember(circleId: string, memberId: string, act
       throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, ONLY_OWNER_REMOVES_MODERATORS);
     }
     await client.query(`DELETE FROM circle_members WHERE circle_id = $1 AND user_id = $2`, [circleId, memberId]);
+    // S2 fix round 1: they cannot come back by themselves (circle.service joinCircle reads this).
+    await client.query(
+      `INSERT INTO circle_removals (circle_id, user_id, removed_by) VALUES ($1, $2, $3)
+       ON CONFLICT (circle_id, user_id) DO UPDATE SET removed_by = EXCLUDED.removed_by, created_at = NOW()`,
+      [circleId, memberId, actor.userId]);
     await client.query(`UPDATE circles SET member_count = GREATEST(member_count - 1, 0) WHERE id = $1`, [circleId]);
   });
   logger.info({ circleId, memberId, actorId: actor.userId }, 'Circle member removed');

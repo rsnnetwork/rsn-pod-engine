@@ -288,16 +288,21 @@ describe('Pod Service', () => {
     it('should remove a member when requester has director role', async () => {
       // getMemberRole for removedBy (requirePodRole)
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
-      // UPDATE pod_members SET status = removed
+      // S2 fix round 1: the target's role (a plain member)
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'member' }], rowCount: 1 });
+      // UPDATE pod_members SET status = removed, removal_kind = removed
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
       await expect(podService.removeMember('pod-123', 'user-target', 'user-director'))
         .resolves.toBeUndefined();
+      expect(String(mockQuery.mock.calls[2][0])).toMatch(/SET status = 'removed', removal_kind = 'removed', left_at = NOW\(\)/);
     });
 
     it('should throw NotFoundError when member not found', async () => {
       // getMemberRole for removedBy
       mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
+      // S2 fix round 1: the target's role (none: not an active member)
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // UPDATE rowCount = 0 (no matching active member)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 

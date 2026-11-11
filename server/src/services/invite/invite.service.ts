@@ -854,6 +854,11 @@ async function followDatabaseAfterPersonalInvite(sessionId: string, userId: stri
 /** What an accept gave: the event, pod or circle; Part 3 Task 3: or a place in a full event's waiting list. */
 interface InviteRegistration { sessionId?: string; podId?: string; circleId?: string; waitlistPosition?: number }
 
+/** What a re-entry check needs to know about the invite being accepted. */
+function returningInvite(invite: Invite): podService.ReturningInvite {
+  return { inviterId: invite.inviterId, inviteeEmail: invite.inviteeEmail ?? null, maxUses: invite.maxUses, createdAt: invite.createdAt };
+}
+
 async function applyInviteRegistration(
   invite: Invite,
   userId: string,
@@ -865,13 +870,16 @@ async function applyInviteRegistration(
   if (invite.type === InviteType.CIRCLE && invite.circleId) {
     // T14: the invite is the doorway, so a closed circle takes them, and a pending ask of theirs is answered. Since the
     // final fix wave (S2, 2 Nov 2026) only while its maker still runs the circle; otherwise a closed circle refuses it.
-    await circleService.joinCircle(invite.circleId, userId, { invitedBy: invite.inviterId });
+    // S2 fix round 1: someone the circle's organisers removed comes back only through a personal invite one of them made
+    // after the removal (joinCircle checks it from these facts).
+    await circleService.joinCircle(invite.circleId, userId, { invitedBy: invite.inviterId, invite: returningInvite(invite) });
     out.circleId = invite.circleId;
   }
 
   if (invite.type === InviteType.POD && invite.podId) {
     try {
-      await podService.addMember(invite.podId, userId);
+      // S2 fix round 1: an organiser-removed person comes back only through an organiser's personal invite.
+      await podService.addMember(invite.podId, userId, undefined, undefined, { by: 'invite', invite: returningInvite(invite) });
     } catch (err) {
       // Already a member — that's fine, the invite still resolves to "you're in". A full pod is a refusal.
       if (!(err instanceof ConflictError && err.code === ErrorCodes.POD_MEMBER_EXISTS)) throw err;
@@ -897,7 +905,8 @@ async function applyInviteRegistration(
       out.podId = podId;
     } else if (podId) {
       try {
-        await podService.addMember(podId, userId);
+        // S2 fix round 1: an event invite does not bring someone the pod's organisers removed back into the pod.
+        await podService.addMember(podId, userId, undefined, undefined, { by: 'invite', invite: returningInvite(invite) });
       } catch (err) {
         // Already a member is fine — the invite still resolves to "you're in" — and so is a full pod:
         // registerParticipant decides whether the event needs its pod. These are the only two
@@ -1445,7 +1454,7 @@ export async function listCircleInvites(
        LEFT JOIN LATERAL (
          SELECT u.id, u.display_name FROM users u
           WHERE ${activeMemberSql('u')}
-            AND (u.id = i.accepted_by_user_id OR (i.invitee_email IS NOT NULL AND u.email = i.invitee_email))
+            AND (u.id = i.accepted_by_user_id OR (i.invitee_email IS NOT NULL AND lower(u.email) = lower(i.invitee_email)))
           ORDER BY (u.id = i.accepted_by_user_id) DESC NULLS LAST
           LIMIT 1
        ) m ON TRUE

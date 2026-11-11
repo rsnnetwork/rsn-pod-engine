@@ -15,8 +15,8 @@
 //
 // Resolution order (highest privilege wins):
 //   1. globalUserRole === SUPER_ADMIN    → 'pod_admin'  (only super admin auto-passes)
-//   2. pod's created_by === userId
-//      OR pod_members.role === 'director' → 'pod_admin'
+//   2. pod_members.role === 'director' (active) → 'pod_admin'. Shirley pilot S2 fix round 1: the role decides;
+//      having created the pod is no right of its own.
 //   3. sessions.host_user_id === userId  → 'event_host'
 //   4. session_cohosts entry             → 'cohost'
 //   5. session_participants (active)     → 'participant'
@@ -166,15 +166,15 @@ export async function getEffectiveRole(
   }
 
   if (podId) {
-    const podRow = await query<{ created_by: string; member_role: string | null }>(
-      `SELECT p.created_by, pm.role AS member_role
+    const podRow = await query<{ member_role: string | null }>(
+      `SELECT pm.role AS member_role
        FROM pods p
        LEFT JOIN pod_members pm ON pm.pod_id = p.id AND pm.user_id = $2 AND pm.status = 'active'
        WHERE p.id = $1`,
       [podId, userId],
     );
     const row = podRow.rows[0];
-    if (row && (row.created_by === userId || row.member_role === 'director')) {
+    if (row && row.member_role === 'director') {
       return 'pod_admin';
     }
   }

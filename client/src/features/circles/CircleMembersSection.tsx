@@ -56,7 +56,10 @@ export default function CircleMembersSection({ circle }: { circle: CircleDetail 
     }
     if (action === 'remove' && !(await ask({
       title: `Remove ${name}?`,
-      body: circle.joinPolicy === 'closed' ? 'They leave the circle. To come back they ask to join again.' : 'They leave the circle. They can join again.',
+      // S2 fix round 1: an organiser's removal is final unless an organiser lets them back in.
+      body: circle.joinPolicy === 'closed'
+        ? 'They leave the circle. To come back they ask to join again, and you decide, or you invite them.'
+        : 'They leave the circle. They cannot rejoin by themselves: only an invitation from you or a moderator brings them back.',
       confirmLabel: 'Remove',
       tone: 'danger',
     }))) return;

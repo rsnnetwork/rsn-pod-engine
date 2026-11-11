@@ -22,6 +22,7 @@ import {
   CircleAccessRow, circleAccessColumns, isCircleManager, isPlatformAdmin, toCircleAccess,
 } from './circle-managers';
 import { entitiesOfCircle } from './circle-entities.service';
+import type { ReturningInvite } from '../pod/pod.service';
 
 /** What joinCircle answers someone outside a closed circle (30 Oct review, 7.5). */
 export const CIRCLE_CLOSED_JOIN = 'This circle is closed. Ask to join and its owner will let you in.';
@@ -249,6 +250,7 @@ async function admitEveryoneWaiting(client: PoolClient, circleId: string, decide
   if (added.rowCount && added.rowCount > 0) {
     await client.query(`UPDATE circles SET member_count = member_count + $2 WHERE id = $1`, [circleId, added.rowCount]);
   }
+  await client.query(`DELETE FROM circle_removals WHERE circle_id = $1 AND user_id = ANY($2::uuid[])`, [circleId, ids]);
   return ids;
 }
 
@@ -335,6 +337,8 @@ export async function admitToCircle(client: PoolClient, circleId: string, userId
     await client.query(
       `UPDATE circles SET member_count = member_count + 1 WHERE id = $1`, [circleId]);
   }
+  // S2 fix round 1: let back in, so no longer "removed" (an organiser approved, invited or reopened for them).
+  await client.query(`DELETE FROM circle_removals WHERE circle_id = $1 AND user_id = $2`, [circleId, userId]);
   await client.query(
     `UPDATE circle_join_requests SET status = 'approved', decided_by = $3, decided_at = NOW()
       WHERE circle_id = $1 AND user_id = $2 AND status = 'pending'`,
@@ -359,19 +363,57 @@ async function inviterRunsCircle(circleId: string, inviterId: string): Promise<b
 export async function joinCircle(
   circleId: string,
   userId: string,
-  opts: { role?: string; invitedBy?: string } = {},
+  opts: { role?: string; invitedBy?: string; invite?: ReturningInvite } = {},
 ): Promise<void> {
   const circle = await query<{ id: string; join_policy: CircleJoinPolicy | null }>(
     `SELECT id, join_policy FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
+  const closed = circle.rows[0].join_policy === 'closed';
 
-  if (circle.rows[0].join_policy === 'closed'
+  // S2 fix round 1 (controller ruling): someone the circle's organisers removed does not come back by themselves. An
+  // open circle refuses their own join; a closed one tells them to ask (an organiser decides). Only a personal invite
+  // made after the removal by someone who runs the circle now lets them straight back in. Platform admins are exempt.
+  if (!isPlatformAdmin(opts.role) && !(await isCircleMember(circleId, userId))) {
+    const removedAt = await circleRemovalOf(circleId, userId);
+    if (removedAt && !(await organiserInvitedBack(circleId, removedAt, opts))) {
+      if (closed) throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_JOIN);
+      throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, REMOVED_FROM_CIRCLE);
+    }
+  }
+
+  if (closed
       && !(await isCircleMember(circleId, userId)) && !(await isCircleManager(circleId, userId, opts.role))
       && !(opts.invitedBy !== undefined && await inviterRunsCircle(circleId, opts.invitedBy))) {
     throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, opts.invitedBy !== undefined ? CIRCLE_CLOSED_INVITE : CIRCLE_CLOSED_JOIN);
   }
 
   await transaction((client) => admitToCircle(client, circleId, userId));
+}
+
+/** S2 fix round 1: what someone an organiser removed from a circle is told when they try to join it again. */
+export const REMOVED_FROM_CIRCLE = 'You were removed from this circle. Ask its owner or a moderator for an invitation.';
+
+/** The invite an accept would let someone in with: who made it, for whom, and when (pod.service's shape). */
+export type { ReturningInvite };
+
+/** When this person was removed from the circle by its organisers, or null (never, or let back in since). */
+async function circleRemovalOf(circleId: string, userId: string): Promise<Date | null> {
+  const r = await query<{ created_at: Date }>(
+    `SELECT created_at FROM circle_removals WHERE circle_id = $1 AND user_id = $2`, [circleId, userId]);
+  return r.rows[0]?.created_at ?? null;
+}
+
+/** A personal invite (one address, one use), made after the removal, by someone who runs the circle now. */
+async function organiserInvitedBack(
+  circleId: string,
+  removedAt: Date,
+  opts: { invitedBy?: string; invite?: ReturningInvite },
+): Promise<boolean> {
+  const inv = opts.invite;
+  if (!inv || opts.invitedBy === undefined) return false;
+  if (!inv.inviteeEmail || inv.maxUses > 1) return false;
+  if (new Date(inv.createdAt).getTime() <= new Date(removedAt).getTime()) return false;
+  return inviterRunsCircle(circleId, opts.invitedBy);
 }
 
 /** Is this member in the circle? The gate for circle-level invites (C3). */
@@ -393,6 +435,10 @@ export const OWNER_CANNOT_LEAVE = 'Hand the circle to someone else before you le
  */
 export async function leaveCircle(circleId: string, userId: string): Promise<void> {
   await transaction(async (client) => {
+    // S2 fix round 1: lock the circle row FIRST, the order every circle write takes (role change, handover, removal),
+    // so a Leave at the same moment as one of them waits its turn instead of deadlocking.
+    const locked = await client.query(`SELECT id FROM circles WHERE id = $1 FOR UPDATE`, [circleId]);
+    if (!locked.rows[0]) throw new NotFoundError('Circle', circleId);
     const mine = await client.query<{ role: string }>(
       `SELECT role FROM circle_members WHERE circle_id = $1 AND user_id = $2 FOR UPDATE`, [circleId, userId]);
     if (mine.rows[0]?.role === 'owner') throw new ValidationError(OWNER_CANNOT_LEAVE);

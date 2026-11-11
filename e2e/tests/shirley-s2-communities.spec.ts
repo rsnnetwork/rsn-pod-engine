@@ -29,6 +29,8 @@ let invitee: TestUser | undefined, removed: TestUser | undefined;
 let circleId = '';
 let podA = '';
 let podB = '';
+let podLegacy = '';
+let podOpen = '';
 const contexts: BrowserContext[] = [];
 
 /** A throwaway on the reserved test domain whose token carries that address (accepting an invite checks it). */
@@ -105,6 +107,8 @@ test.afterAll(async () => {
     () => (podB ? pool.query(`DELETE FROM invites WHERE pod_id = $1`, [podB]) : Promise.resolve()),
     () => (circleId ? pool.query(`DELETE FROM circles WHERE id = $1`, [circleId]) : Promise.resolve()),
     () => (podB ? cleanup(pool, { ids: [], podId: podB }) : Promise.resolve()),
+    () => (podLegacy ? cleanup(pool, { ids: [], podId: podLegacy }) : Promise.resolve()),
+    () => (podOpen ? cleanup(pool, { ids: [], podId: podOpen }) : Promise.resolve()),
     // The pods by their ids, then the people by theirs: never by a name.
     () => cleanup(pool, { ids: idsOf(admin, owner, mod, invitee, removed), podId: podA || undefined }),
   );
@@ -120,8 +124,12 @@ test(`an owner with no admin rights runs the circle, hands it over, and private 
     expect(made.status, JSON.stringify(made.json)).toBe(201);
     set(made.json.data.id);
   }
-  // "Invite only" is retired: asking for it is a 400.
-  expect((await api(o, 'POST', '/pods', { name: `${RUN} nope`, visibility: 'invite_only' })).status).toBe(400);
+  // "Invite only" is retired: one that still arrives is stored as Private (fix round 1), and the pod is not listed.
+  const legacy = await api(o, 'POST', '/pods', { name: `${RUN} legacy`, visibility: 'invite_only' });
+  expect(legacy.status, JSON.stringify(legacy.json)).toBe(201);
+  podLegacy = legacy.json.data.id;
+  expect(legacy.json.data.visibility).toBe('private');
+  expect((await api(r, 'GET', `/pods/${podLegacy}`)).status).toBe(404);
 
   // ── 2. Roles on the circle page: the owner at 1280, the moderator-to-be at 360 (never reloaded) ───────────────
   const op = await signedIn(o, { width: 1280, height: 900 });
@@ -194,6 +202,26 @@ test(`an owner with no admin rights runs the circle, hands it over, and private 
   const rp = await signedIn(r, { width: 360, height: 780 });
   await gotoRetry(rp, `${APP}/pods/${podA}`);
   await expect(rp.getByRole('heading', { name: 'Pod not found' })).toBeVisible({ timeout: 30_000 });
+
+  // ── 5. Removed is final unless an organiser decides (fix round 1): a public open pod and the open circle ──────
+  const open = await api(o, 'POST', '/pods', { name: `${RUN} Open pod`, podType: 'chat', visibility: 'public' });
+  expect(open.status).toBe(201);
+  podOpen = open.json.data.id;
+  expect((await api(r, 'POST', `/pods/${podOpen}/join`)).status).toBe(201);
+  expect((await api(o, 'DELETE', `/pods/${podOpen}/members/${r.id}`)).status).toBe(200);
+  const rejoin = await api(r, 'POST', `/pods/${podOpen}/join`);
+  expect(rejoin.status).toBe(403);
+  expect(rejoin.json.error.message).toBe('You were removed from this pod. Ask its director for an invitation.');
+  expect((await api(r, 'POST', `/pods/${podOpen}/request-join`)).status).toBe(403);
+  // The new owner (m) removes r from the open circle: r cannot join again; m's personal invite brings r back.
+  expect((await api(m, 'DELETE', `/circles/${circleId}/members/${r.id}`)).status).toBe(200);
+  const again = await api(r, 'POST', `/circles/${circleId}/join`);
+  expect(again.status).toBe(403);
+  expect(again.json.error.message).toBe('You were removed from this circle. Ask its owner or a moderator for an invitation.');
+  const back = await api(m, 'POST', '/invites', { type: 'circle', circleId, inviteeEmail: r.email });
+  expect(back.status, JSON.stringify(back.json)).toBe(201);
+  expect((await api(r, 'POST', `/invites/${back.json.data.code}/accept`)).status).toBe(200);
+  expect((await api(r, 'POST', `/circles/${circleId}/join`)).status).toBe(200); // already back in: a no-op
 
   // The pod's director sees its circle chip with a Remove beside it (1280).
   await gotoRetry(op, `${APP}/pods/${podA}`);

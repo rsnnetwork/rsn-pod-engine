@@ -61,9 +61,12 @@ describe('T1-5 — effective-role.service', () => {
       expect(layerOne).not.toMatch(/hasRoleAtLeast\([^)]*UserRole\.ADMIN\)/);
     });
 
-    it('layer 2 — pod creator OR pod_members.role=director maps to pod_admin', () => {
-      expect(src).toMatch(/p\.created_by\s*=\s*\$2|created_by === userId/);
-      expect(src).toMatch(/member_role\s*===\s*['"]director['"]/);
+    // Shirley pilot S2 fix round 1: the role decides; having created the pod is no right of its own (a creator removed
+    // from the pod, or no longer its director, is not its admin).
+    it('layer 2 — an ACTIVE pod_members.role=director maps to pod_admin; creating the pod does not', () => {
+      expect(src).not.toMatch(/created_by === userId/);
+      expect(src).toMatch(/pm\.user_id = \$2 AND pm\.status = 'active'/);
+      expect(src).toMatch(/if \(row && row\.member_role === 'director'\)/);
     });
 
     it('layer 3 — sessions.host_user_id maps to event_host', () => {

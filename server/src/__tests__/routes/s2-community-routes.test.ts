@@ -298,12 +298,21 @@ describe('a private pod\'s read routes, by who asks (S2)', () => {
 });
 
 describe('a pod\'s director stays the only director (S2)', () => {
-  it('nobody adds a director: role "director" is a 400 in words, before anything is written', async () => {
-    for (const user of [OWNER, HOST, STEFAN]) {
+  // Fix round 1 (controller ruling: super admin powers unchanged): a platform admin may still add a director.
+  it('the director and a host cannot add a director (403 in words); a super admin can', async () => {
+    for (const user of [OWNER, HOST, PMEMBER]) {
       const res = await request(app).post(`/pods/${PRIVATE_POD}/members`).set(who(user)).send({ userId: STRANGER, role: 'director' });
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(403);
+      expect(res.body.error.message).toBe('Only a platform admin can add a director.');
     }
     expect(podService.addMember).not.toHaveBeenCalled();
+    const admin = await request(app).post(`/pods/${PRIVATE_POD}/members`).set(who(STEFAN)).send({ userId: STRANGER, role: 'director' });
+    expect(admin.status).toBe(201);
+    expect(podService.addMember).toHaveBeenCalledWith(PRIVATE_POD, STRANGER, PodMemberRole.DIRECTOR);
+  });
+
+  it('any other role word is a 400 in words', async () => {
+    expect((await request(app).post(`/pods/${PRIVATE_POD}/members`).set(who(OWNER)).send({ userId: STRANGER, role: 'owner' })).status).toBe(400);
   });
 
   it('a host adds a member, but not a host (403 in words); the director adds a host', async () => {
@@ -324,7 +333,17 @@ describe('a pod\'s director stays the only director (S2)', () => {
 });
 
 describe('the pod settings (S2, D2)', () => {
-  it.each(['invite_only', 'request_to_join', 'secret'])('"%s" is refused when making or editing a pod (400 in words)', async (visibility) => {
+  // Fix round 1: an "invite only" that still arrives (an old client, a request mid-deploy) is stored as Private.
+  it('"invite_only" is accepted and stored as private, when making and when editing a pod', async () => {
+    jest.mocked(podService.createPod).mockResolvedValueOnce({ id: PRIVATE_POD } as never);
+    jest.mocked(podService.updatePod).mockResolvedValueOnce({ id: PRIVATE_POD } as never);
+    expect((await request(app).post('/pods').set(who(OWNER)).send({ name: 'Curious 12', visibility: 'invite_only' })).status).toBe(201);
+    expect(jest.mocked(podService.createPod).mock.calls[0][1]).toMatchObject({ visibility: 'private' });
+    expect((await request(app).put(`/pods/${PRIVATE_POD}`).set(who(OWNER)).send({ visibility: 'invite_only' })).status).toBe(200);
+    expect(jest.mocked(podService.updatePod).mock.calls[0][2]).toMatchObject({ visibility: 'private' });
+  });
+
+  it.each(['request_to_join', 'secret'])('"%s" is refused when making or editing a pod (400 in words)', async (visibility) => {
     const made = await request(app).post('/pods').set(who(OWNER)).send({ name: 'Curious 12', visibility });
     expect(made.status).toBe(400);
     const edited = await request(app).put(`/pods/${PRIVATE_POD}`).set(who(OWNER)).send({ visibility });

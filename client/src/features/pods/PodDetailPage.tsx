@@ -132,8 +132,23 @@ export default function PodDetailPage() {
   const removeMemberMutation = useMutation({
     mutationFn: (userId: string) => api.delete(`/pods/${podId}/members/${userId}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pod-members', podId] }); addToast('Member removed', 'success'); },
-    onError: () => addToast('Failed to remove member', 'error'),
+    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'They could not be removed. Try again.', 'error'),
   });
+
+  // S2 fix round 1: removing asks first and says what it means: an organiser's removal is final unless the director
+  // invites them back (an approval pod also takes a new request, which the director decides).
+  const removeMember = async (memberId: string, name: string) => {
+    if (removeMemberMutation.isPending) return;
+    if (!(await ask({
+      title: `Remove ${name}?`,
+      body: pod?.visibility === 'public_with_approval'
+        ? 'They leave the pod. They cannot rejoin by themselves: they can ask again, and you decide, or you can invite them back.'
+        : 'They leave the pod. They cannot rejoin by themselves: only an invitation from you brings them back.',
+      confirmLabel: 'Remove',
+      tone: 'danger',
+    }))) return;
+    removeMemberMutation.mutate(memberId);
+  };
 
   const changeRoleMutation = useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: string }) =>
@@ -713,7 +728,9 @@ export default function PodDetailPage() {
                       )}
                       {canManage && m.userId !== user?.id && (
                         <button
-                          onClick={() => removeMemberMutation.mutate(m.userId)}
+                          onClick={() => void removeMember(m.userId, m.displayName || 'this member')}
+                          disabled={removeMemberMutation.isPending}
+                          data-testid={`pod-remove-${m.userId}`}
                           className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all"
                           title="Remove member"
                           aria-label="Remove member"

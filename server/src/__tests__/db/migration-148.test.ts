@@ -50,19 +50,50 @@ describe('migration 148 (community authority and pod visibility)', () => {
     expect(f).toMatch(/RAISE NOTICE '148: % invite-only pod\(s\) became private; % request-to-join pod\(s\) became public with approval', retired, merged;/);
   });
 
-  it('holds pods to the three settings with a CHECK added only once, and makes Private the default', () => {
+  // Fix round 1: no CHECK here. During a deploy the old instance may still write 'invite_only' for a few minutes after
+  // this file runs; the new code reads and writes such a value as Private. A later migration may add the CHECK.
+  it('makes Private the default and adds no CHECK that an old instance could trip over mid-deploy', () => {
     const f = flat(sql);
-    expect(f).toContain("IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pods_visibility_three_settings') THEN ALTER TABLE pods ADD CONSTRAINT pods_visibility_three_settings CHECK (visibility::text IN ('private', 'public_with_approval', 'public'));");
     expect(f).toContain("ALTER TABLE pods ALTER COLUMN visibility SET DEFAULT 'private';");
-    // The data is mapped before the CHECK, so no existing row can fail it.
-    expect(f.indexOf("visibility::text = 'invite_only'")).toBeLessThan(f.indexOf('ADD CONSTRAINT pods_visibility_three_settings'));
+    expect(f).not.toMatch(/ADD CONSTRAINT pods_visibility/);
+    expect(f).not.toMatch(/CHECK \(visibility/);
   });
 
   it('adds users.show_communities, guarded, on by default', () => {
     expect(flat(sql)).toContain('ALTER TABLE users ADD COLUMN IF NOT EXISTS show_communities BOOLEAN NOT NULL DEFAULT TRUE;');
   });
 
-  it('drops nothing and deletes nothing', () => {
-    expect(flat(sql)).not.toMatch(/\bDROP\b|\bDELETE\b|\bTRUNCATE\b/i);
+  it('drops nothing and deletes nothing (ON DELETE clauses aside)', () => {
+    expect(flat(sql)).not.toMatch(/\bDROP\b|\bDELETE FROM\b|\bTRUNCATE\b/i);
+  });
+
+  // Fix round 1 (controller ruling): removed is not the same as turned down.
+  it('adds pod_members.removal_kind, guarded, held to its two values', () => {
+    expect(flat(sql)).toContain(
+      "ALTER TABLE pod_members ADD COLUMN IF NOT EXISTS removal_kind TEXT NULL CHECK (removal_kind IS NULL OR removal_kind IN ('removed', 'rejected'));");
+  });
+
+  it('backfills from audit_log: a request turned down (and not removed since) is rejected, every other removed row removed', () => {
+    const f = flat(sql);
+    expect(f).toContain("WHERE rj.action = 'reject_pod_member' AND rj.entity_id = pm.pod_id");
+    expect(f).toContain("lower(rj.details->>'path') = '/' || pm.pod_id::text || '/members/' || pm.user_id::text || '/reject'");
+    expect(f).toContain("WHERE rm.action = 'remove_pod_member' AND rm.entity_id = pm.pod_id");
+    expect(f).toContain('AND rm.created_at > rj.created_at');
+    // Whatever the log cannot tell is the safer side.
+    expect(f).toContain("UPDATE pod_members SET removal_kind = 'removed' WHERE status = 'removed' AND removal_kind IS NULL;");
+    expect(f.indexOf("SET removal_kind = 'rejected'")).toBeLessThan(f.indexOf("SET removal_kind = 'removed'"));
+    expect(f).toContain("RAISE NOTICE '148: % turned-down request(s) marked rejected; % removal(s) marked removed', rejected, removed;");
+  });
+
+  it('keeps circle removals in circle_removals: id, created_at, both foreign keys stating what a delete does, one row per pair', () => {
+    const f = flat(sql);
+    expect(f).toContain('CREATE TABLE IF NOT EXISTS circle_removals (');
+    expect(f).toContain('id UUID PRIMARY KEY DEFAULT gen_random_uuid()');
+    expect(f).toContain('circle_id UUID NOT NULL REFERENCES circles(id) ON DELETE CASCADE');
+    expect(f).toContain('user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE');
+    expect(f).toContain('removed_by UUID NULL REFERENCES users(id) ON DELETE SET NULL');
+    expect(f).toContain('created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()');
+    expect(f).toContain('UNIQUE (circle_id, user_id)');
+    expect(f).toContain('CREATE INDEX IF NOT EXISTS idx_circle_removals_user ON circle_removals (user_id);');
   });
 });

@@ -15,7 +15,9 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 import { PodVisibility, UserRole } from '@rsn/shared';
-import { ONLY_DIRECTOR_SETS_ACCESS, createPod, joinPod, requestToJoin, updatePod } from '../../../services/pod/pod.service';
+import {
+  ONLY_DIRECTOR_SETS_ACCESS, createPod, getPodById, joinPod, normalisePodVisibility, requestToJoin, updatePod,
+} from '../../../services/pod/pod.service';
 
 const flat = (sql: unknown) => String(sql).replace(/\s+/g, ' ').trim();
 const POD = { id: 'p1', name: 'Curious 12', visibility: 'private', status: 'active' };
@@ -75,4 +77,43 @@ describe('the retired "invite only" (D2)', () => {
     await expect(requestToJoin('p1', 'stranger')).rejects.toMatchObject({ statusCode: 403, message: 'This is a private pod. You need an invite to join.' });
     await expect(joinPod('p1', 'stranger', UserRole.MEMBER)).rejects.toMatchObject({ statusCode: 403 });
   });
+});
+
+// Fix round 1 (minor 7): a pod's admin over its events is its ACTIVE director; creating the pod gives nothing.
+describe('pod admin over its events comes from the role', () => {
+  it('podAdminSql asks for an active director row only, never the pod\'s creator', () => {
+    const { podAdminSql } = jest.requireActual('../../../services/session/event-access') as typeof import('../../../services/session/event-access');
+    const sql = flat(podAdminSql('s', '$2'));
+    expect(sql).toBe("EXISTS (SELECT 1 FROM pod_members pam WHERE pam.pod_id = s.pod_id AND pam.user_id = $2 AND pam.role = 'director' AND pam.status = 'active')");
+    expect(sql).not.toMatch(/created_by/);
+  });
+});
+
+// Fix round 1: no CHECK in 148 (an old instance may still write invite_only mid-deploy); the new code normalises.
+describe("an incoming or stored 'invite_only' is Private, on write and on read", () => {
+  it('normalisePodVisibility maps only invite_only', () => {
+    expect(normalisePodVisibility('invite_only')).toBe('private');
+    expect(['private', 'public_with_approval', 'public', undefined].map(normalisePodVisibility))
+      .toEqual(['private', 'public_with_approval', 'public', undefined]);
+  });
+
+  it('a pod made with invite_only is stored private', async () => {
+    world('director');
+    await createPod('u1', { name: 'Old client', visibility: 'invite_only' } as never);
+    const insert = mockQuery.mock.calls.find(([s]) => /^INSERT INTO pods/.test(flat(s)))!;
+    expect((insert[1] as unknown[])[6]).toBe('private');
+  });
+
+  it('an edit to invite_only is stored private', async () => {
+    world('director');
+    await updatePod('p1', 'dir', { visibility: 'invite_only' } as never, UserRole.MEMBER);
+    expect(updates()[0][1]).toContain('private');
+    expect(updates()[0][1]).not.toContain('invite_only');
+  });
+
+  it('every read of a pod says private for a stored invite_only (its page, the lists, an edit\'s answer)', async () => {
+    world('director');
+    await getPodById('p1');
+    const read = flat(mockQuery.mock.calls.find(([s]) => /FROM pods LEFT JOIN/.test(flat(s)))![0]);
+    expect(read).toContain("CASE WHEN visibility::text = 'invite_only' THEN 'private' ELSE visibility::text END AS visibility");  });
 });

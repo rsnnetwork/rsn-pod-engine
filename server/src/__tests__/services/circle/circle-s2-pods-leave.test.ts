@@ -78,9 +78,10 @@ describe('detachPod (S2)', () => {
 });
 
 describe('leaveCircle (S2): the owner stays', () => {
-  function arm(role: string | null) {
+  function arm(role: string | null, circleExists = true) {
     mockQuery.mockImplementation(async (sql: string) => {
       const text = flat(sql);
+      if (text === 'SELECT id FROM circles WHERE id = $1 FOR UPDATE') return { rows: circleExists ? [{ id: 'c1' }] : [] };
       if (text === 'SELECT role FROM circle_members WHERE circle_id = $1 AND user_id = $2 FOR UPDATE') return { rows: role ? [{ role }] : [] };
       if (/^DELETE FROM circle_members/.test(text)) return { rowCount: role ? 1 : 0, rows: [] };
       return { rowCount: 1, rows: [] };
@@ -96,9 +97,36 @@ describe('leaveCircle (S2): the owner stays', () => {
   it.each(['moderator', 'member'])('a %s leaves, the count moving in the same transaction; the role is read under a lock', async (role) => {
     arm(role);
     await leaveCircle('c1', 'someone');
-    expect(mockClientSql[0]).toBe('SELECT role FROM circle_members WHERE circle_id = $1 AND user_id = $2 FOR UPDATE');
+    // Fix round 1: the circle row first, then the member row, the one lock order of every circle write (no deadlock
+    // with a handover, a role change or a removal at the same moment).
+    expect(mockClientSql[0]).toBe('SELECT id FROM circles WHERE id = $1 FOR UPDATE');
+    expect(mockClientSql[1]).toBe('SELECT role FROM circle_members WHERE circle_id = $1 AND user_id = $2 FOR UPDATE');
     expect(mockClientSql.some((s) => /^DELETE FROM circle_members/.test(s))).toBe(true);
     expect(mockClientSql.some((s) => /GREATEST\(member_count - 1, 0\)/.test(s))).toBe(true);
+  });
+
+  it('a missing circle is a 404 before any member row is read', async () => {
+    arm('member', false);
+    await expect(leaveCircle('c1', 'someone')).rejects.toMatchObject({ statusCode: 404 });
+    expect(mockClientSql).toEqual(['SELECT id FROM circles WHERE id = $1 FOR UPDATE']);
+  });
+
+  it('every circle write takes the circle row before any member row (one lock order)', () => {
+    const fsx = jest.requireActual('fs') as typeof import('fs');
+    const pathx = jest.requireActual('path') as typeof import('path');
+    const src = (f: string) => fsx.readFileSync(pathx.join(__dirname, '../../../services/circle', f), 'utf8');
+    const body = (text: string, fn: string) => text.slice(text.indexOf(`export async function ${fn}`), text.indexOf('\n}\n', text.indexOf(`export async function ${fn}`)));
+    const checks: Array<[string, string]> = [
+      ['circle.service.ts', 'leaveCircle'], ['circle-join.service.ts', 'removeCircleMember'],
+      ['circle-roles.service.ts', 'setCircleMemberRole'], ['circle-roles.service.ts', 'transferCircleOwnership'],
+    ];
+    for (const [file, fn] of checks) {
+      const b = body(src(file).replace(/\r\n/g, '\n'), fn);
+      const circleLock = Math.max(b.indexOf('FROM circles WHERE id = $1'), b.indexOf('lockCircle(client'));
+      const memberLock = b.search(/FROM circle_members[^`]*FOR UPDATE|lockMembers\(client/);
+      expect(circleLock).toBeGreaterThan(-1);
+      expect(memberLock).toBeGreaterThan(circleLock);
+    }
   });
 
   it('someone not in it leaves nothing, with no error (as before)', async () => {

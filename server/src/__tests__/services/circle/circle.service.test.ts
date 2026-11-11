@@ -65,6 +65,8 @@ describe('membership counters (transactional, never double-counted)', () => {
       if (/SELECT id, join_policy FROM circles/.test(sql)) return Promise.resolve({ rows: [{ id: 'c1', join_policy: 'open' }] });
       if (/INSERT INTO circle_members/.test(sql)) return Promise.resolve({ rowCount: insertedRows, rows: [] });
       if (/DELETE FROM circle_members/.test(sql)) return Promise.resolve({ rowCount: insertedRows, rows: [] });
+      // S2 fix round 1: Leave locks the circle row first (it exists here).
+      if (/SELECT id FROM circles WHERE id = \$1 FOR UPDATE/.test(sql)) return Promise.resolve({ rowCount: 1, rows: [{ id: 'c1' }] });
       return Promise.resolve({ rowCount: 1, rows: [] });
     });
   }
