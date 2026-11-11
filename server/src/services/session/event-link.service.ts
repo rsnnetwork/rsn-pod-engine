@@ -50,11 +50,16 @@ const ALIAS = /^[a-z_][a-z0-9_]*$/;
  * writes the same rule out. Never NULL: `NULL IN (...)` is NULL, which NOT keeps NULL, so the visibility is tested for
  * NULL first, and anything still unknown reads as needing a tail (COALESCE ..., TRUE): a doubt never drops a tail.
  */
-export function eventLinkNeedsTailSql(s: string): string {
+export function eventLinkNeedsTailSql(s: string, visibilityParam?: string): string {
   if (!ALIAS.test(s)) throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'eventLinkNeedsTailSql takes a plain alias');
+  if (visibilityParam !== undefined && !/^\$[1-9][0-9]*$/.test(visibilityParam)) {
+    throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'eventLinkNeedsTailSql takes a placeholder for the visibility');
+  }
+  // `visibilityParam` (the event form's preview): the visibility the form would save, read in place of the event's own.
+  const v = visibilityParam === undefined ? `${s}.visibility` : `COALESCE(${visibilityParam}::text, ${s}.visibility)`;
   return `COALESCE(NOT (
-    ((${s}.visibility IS NOT NULL AND ${s}.visibility IN ('public', 'public_with_approval'))
-      OR (${s}.visibility IS NULL AND EXISTS (SELECT 1 FROM pods el_p WHERE el_p.id = ${s}.pod_id AND el_p.visibility = 'public')))
+    ((${v} IS NOT NULL AND ${v} IN ('public', 'public_with_approval'))
+      OR (${v} IS NULL AND EXISTS (SELECT 1 FROM pods el_p WHERE el_p.id = ${s}.pod_id AND el_p.visibility = 'public')))
     AND ${s}.admission_mode IS DISTINCT FROM 'restricted'
     AND NOT (${s}.circle_id IS NOT NULL
              AND EXISTS (SELECT 1 FROM circles el_c WHERE el_c.id = ${s}.circle_id AND el_c.join_policy = 'closed'))
@@ -337,7 +342,9 @@ export async function checkEventLinkName(
   const typed = normaliseEventLinkName(input.name ?? '');
   const name = typed || defaultName;
   const problem = eventLinkNameProblem(name);
-  const isPrivate = at.event ? at.event.needs_tail : await wouldNeedTail(at.podId, circleId, input.visibility);
+  const isPrivate = at.event
+    ? (isEventVisibility(input.visibility) ? await eventWouldNeedTail(at.event.id, input.visibility) : at.event.needs_tail)
+    : await wouldNeedTail(at.podId, circleId, input.visibility);
   if (problem) return { defaultName, name, problem, nextNumber: null, preview: null, private: isPrivate };
   const nextNumber = await likelyNumber(name, at.event);
   return {
@@ -357,6 +364,14 @@ async function likelyNumber(name: string, event: LinkRow | null): Promise<number
   }
   const counter = await query<{ last_number: number }>(`SELECT last_number FROM event_link_counters WHERE name = $1`, [name]);
   return (counter.rows[0]?.last_number ?? 0) + 1;
+}
+
+/** Whether this event would need a tail with the visibility its edit form now shows (its admission and circle as stored). */
+async function eventWouldNeedTail(sessionId: string, visibility: EventVisibility): Promise<boolean> {
+  const r = await query<{ needs_tail: boolean }>(
+    `SELECT ${eventLinkNeedsTailSql('s', '$2')} AS needs_tail FROM sessions s WHERE s.id = $1`, [sessionId, visibility],
+  );
+  return r.rows[0]?.needs_tail ?? true;
 }
 
 /**

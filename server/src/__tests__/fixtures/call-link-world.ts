@@ -411,6 +411,10 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     world.counters.set(String(params[0]), n);
     return rows([{ last_number: n }]);
   }
+  if (sql.startsWith('SELECT COALESCE(NOT ( ((COALESCE($2::text, s.visibility)') && sql.endsWith('AS needs_tail FROM sessions s WHERE s.id = $1')) {
+    const e = eventById(params[0]);
+    return rows(e ? [{ needs_tail: needsTail({ ...e, visibility: (params[1] as EventVisibility | null) ?? e.visibility }) }] : []);
+  }
   if (sql === 'SELECT last_number FROM event_link_counters WHERE name = $1') {
     const n = world.counters.get(String(params[0]));
     return rows(n === undefined ? [] : [{ last_number: n }]);
