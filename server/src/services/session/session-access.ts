@@ -151,7 +151,13 @@ export async function canViewSession(
     if (s.pod_visibility === 'public') return true;
   }
 
-  return false;
+  // Part 3 Task 3 (controller ruling): someone on the event's waiting list opens its page (canSeeEvent's rule for an event
+  // with its own visibility). Only a row still 'waiting': a left, lapsed, removed or promoted one gives nothing here.
+  const waiting = await query<{ waiting: number }>(
+    `SELECT 1 AS waiting FROM event_waitlist WHERE session_id = $1 AND user_id = $2 AND status = 'waiting' LIMIT 1`,
+    [sessionId, userId],
+  );
+  return (waiting?.rows?.length ?? 0) > 0;
 }
 
 // ─── Who joins an event's live room (H1, 26 Oct 2026) ────────────────────────

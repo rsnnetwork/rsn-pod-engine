@@ -91,4 +91,34 @@ describe('canViewSession', () => {
     const result = await canViewSession('me', 'missing', 'member');
     expect(result).toBe(false);
   });
+
+  // Part 3 Task 3 (controller ruling after the 11 Nov prod smoke): an event that follows its pod (NULL visibility) opens
+  // to someone on its waiting list, read last, only for a row still 'waiting'.
+  it('grants access to someone waiting on a NULL event in an invite-only pod, and reads only a waiting row', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ host_user_id: 'other', pod_id: 'pod-1', pod_visibility: 'invite_only' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // no place
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // not a pod member
+    mockQuery.mockResolvedValueOnce({ rows: [{ waiting: 1 }] }); // on the waiting list
+    const { canViewSession } = await import('../../../services/session/session-access');
+    expect(await canViewSession('me', 'sess-1', 'member')).toBe(true);
+    const [sql, params] = mockQuery.mock.calls[3];
+    expect(String(sql).replace(/\s+/g, ' ')).toContain("FROM event_waitlist WHERE session_id = $1 AND user_id = $2 AND status = 'waiting'");
+    expect(params).toEqual(['sess-1', 'me']);
+  });
+
+  it('a left, lapsed or removed waiting row (no waiting row) gives nothing', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ host_user_id: 'other', pod_id: 'pod-1', pod_visibility: 'invite_only' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const { canViewSession } = await import('../../../services/session/session-access');
+    expect(await canViewSession('me', 'sess-1', 'member')).toBe(false);
+  });
+
+  it('a draft never opens to someone waiting (the waiting list is not even read)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ host_user_id: 'other', pod_id: 'pod-1', pod_visibility: 'public', publication: 'draft' }] });
+    const { canViewSession } = await import('../../../services/session/session-access');
+    expect(await canViewSession('me', 'sess-1', 'member')).toBe(false);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
 });
