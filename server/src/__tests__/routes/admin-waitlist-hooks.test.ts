@@ -29,7 +29,8 @@ const mockQuery = jest.fn(async (sql: string) => {
   mockTrail.push(sql.replace(/\s+/g, ' ').trim().slice(0, 200));
   if (sql === 'SELECT status, account_kind FROM users WHERE id = $1') return { rows: [{ status: 'active', account_kind: 'member' }] };
   if (/^UPDATE users SET status = \$1, updated_at = NOW\(\) WHERE id = ANY/.test(sql)) return { rows: [{ id: 'u-a' }, { id: 'u-b' }], rowCount: 2 };
-  if (sql.startsWith('SELECT reported_id FROM user_reports')) return { rows: [{ reported_id: 'u-reported' }] };
+  // The reported account (Part 3 Task 2 reads it first, as user_id, to check who may act on them).
+  if (sql.startsWith('SELECT reported_id AS user_id FROM user_reports')) return { rows: [{ user_id: 'u-reported' }] };
   return { rows: [], rowCount: 0 };
 });
 jest.mock('../../db', () => ({

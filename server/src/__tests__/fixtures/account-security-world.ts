@@ -144,6 +144,9 @@ export function answer(sqlRaw: string, params: unknown[] = []): { rows: unknown[
   // ── deleteUser's memberships (nobody here is in a pod or an event) ──
   if (/^UPDATE pod_members SET status = 'removed'/.test(sql) || /^UPDATE session_participants SET status = 'removed'/.test(sql)) return ok([], 0);
   if (/^SELECT session_id FROM session_participants WHERE user_id = \$1/.test(sql)) return ok([]);
+  // Part 3 Task 3: the upcoming and live events a closed or suspended account held a place in (its waiting lists move on).
+  // Nobody in this world holds a place, so none.
+  if (/^SELECT DISTINCT sp\.session_id FROM session_participants sp JOIN sessions s ON s\.id = sp\.session_id/.test(sql)) return ok([]);
 
   // ── refresh_tokens ──
   if (sql === 'INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)') {
