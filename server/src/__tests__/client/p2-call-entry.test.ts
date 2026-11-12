@@ -600,7 +600,7 @@ describe('the wiring', () => {
     expect(home).toMatch(/`\/request-to-join\?email=\$\{encodeURIComponent\(email\)\}`/);
     expect(home).toMatch(/\{guest && <BecomeMember email=\{user\?\.email\} \/>\}/);
     // The event link (11 Nov 2026) first; the call link for an answer from an older server.
-    expect(home).toMatch(/navigate\(event\.linkPath \?\? callLinkPath\(event\.code\)\)/);
+    expect(home).toMatch(/const target = event\.linkPath \?\? \(event\.code \? callLinkPath\(event\.code\) : null\);/);
     expect(read('features/auth/RequestToJoinPage.tsx')).toMatch(/const knownEmail = \(params\.get\('email'\) \?\? ''\)\.trim\(\)\.slice\(0, 255\);/);
   });
 

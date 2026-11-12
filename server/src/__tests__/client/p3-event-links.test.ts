@@ -94,7 +94,16 @@ describe('the entry page puts the event link as it is now in the address bar', (
   });
 
   it('the guest home opens each event by its event link, else by its call link (an older server)', () => {
-    expect(read('features/call/GuestHome.tsx')).toContain('onClick={() => navigate(event.linkPath ?? callLinkPath(event.code))}');
+    const home = read('features/call/GuestHome.tsx');
+    expect(home).toContain('const target = event.linkPath ?? (event.code ? callLinkPath(event.code) : null);');
+    expect(home).toContain('onClick={() => { if (target) navigate(target); }}');
+  });
+
+  it('with neither link (none could be read just now: rereview 2 minor 3) the button waits, says so, and links nothing dead', () => {
+    const home = read('features/call/GuestHome.tsx');
+    expect(home).toContain('disabled={!target}');
+    expect(home).toContain("{!target ? 'Try again in a moment' : event.step === 'enter' ? 'Join now' : 'Open'}");
+    expect(home).toContain('key={event.linkPath ?? event.code ?? `${event.title}:${event.scheduledAt ?? i}`}');
   });
 });
 

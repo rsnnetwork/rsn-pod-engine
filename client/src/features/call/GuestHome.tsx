@@ -40,6 +40,9 @@ function EventCard({ event }: { event: CallEventSummary }) {
   const chip = STEP_CHIP[event.step];
   const when = eventTimeLabel(event.scheduledAt, event.timezone);
   const over = event.step === 'ended' || event.step === 'cancelled';
+  // Its event link, else its call link; neither when no link that opens the event could be read just now (the server
+  // sends no code rather than a dead one): the button then waits and says so, and the list reads again on its next change.
+  const target = event.linkPath ?? (event.code ? callLinkPath(event.code) : null);
   return (
     <li className="flex flex-col gap-3 rounded-2xl border border-reason-line bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5" data-testid="guest-event">
       <div className="min-w-0 sm:flex-1">
@@ -55,10 +58,11 @@ function EventCard({ event }: { event: CallEventSummary }) {
         variant={event.step === 'enter' ? 'primary' : over ? 'ghost' : 'secondary'}
         size="lg"
         className="w-full shrink-0 rounded-2xl sm:w-auto"
-        onClick={() => navigate(event.linkPath ?? callLinkPath(event.code))}
+        onClick={() => { if (target) navigate(target); }}
+        disabled={!target}
       >
-        {event.step === 'enter' ? 'Join now' : 'Open'}
-        <ArrowRight aria-hidden="true" className="ml-2 h-4 w-4" />
+        {!target ? 'Try again in a moment' : event.step === 'enter' ? 'Join now' : 'Open'}
+        {target && <ArrowRight aria-hidden="true" className="ml-2 h-4 w-4" />}
       </Button>
     </li>
   );
@@ -123,7 +127,7 @@ export default function GuestHome() {
 
       {events.data && events.data.length > 0 && (
         <ul className="space-y-3">
-          {events.data.map((event) => <EventCard key={event.code} event={event} />)}
+          {events.data.map((event, i) => <EventCard key={event.linkPath ?? event.code ?? `${event.title}:${event.scheduledAt ?? i}`} event={event} />)}
         </ul>
       )}
 
