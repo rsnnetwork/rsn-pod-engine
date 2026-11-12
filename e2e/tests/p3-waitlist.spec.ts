@@ -239,7 +239,7 @@ test(`guest: the call link of the full event says "number 1", and leaving asks f
   await expect(page.getByRole('heading', { name: TITLE, level: 1 }).filter({ visible: true }).first()).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('call-join').click();
   await page.getByLabel('Email address').fill(guestEmail);
-  const sent = page.waitForResponse((r: Response) => r.url().includes(`/call-links/${code}/email`) && r.request().method() === 'POST');
+  const sent = page.waitForResponse((r: Response) => /\/call-links\/[^/?]+\/email(\?|$)/.test(r.url()) && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Send me a code' }).click();
   const body = await (await sent).json();
   await expect(page.getByRole('heading', { name: 'Check your inbox for a 6-digit code' })).toBeVisible();

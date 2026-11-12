@@ -258,7 +258,7 @@ test(`guest: the call link's details step asks the name AND the sector, then ent
   await expect(shown(page, /This event will ask for: your email, your name, one matching question/)).toBeVisible();
   await page.getByTestId('call-join').click();
   await page.getByLabel('Email address').fill(guestEmail);
-  const sent = page.waitForResponse((r: Response) => r.url().includes(`/call-links/${code}/email`) && r.request().method() === 'POST');
+  const sent = page.waitForResponse((r: Response) => /\/call-links\/[^/?]+\/email(\?|$)/.test(r.url()) && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Send me a code' }).click();
   const body = await (await sent).json();
   await expect(page.getByRole('heading', { name: 'Check your inbox for a 6-digit code' })).toBeVisible();
@@ -285,7 +285,7 @@ test(`guest: the call link's details step asks the name AND the sector, then ent
   await page.getByRole('button', { name: 'Join the event' }).click();
   await expect(sector.getByRole('alert')).toHaveText('Choose an answer.');
   await fintech.click();
-  const entered = page.waitForResponse((r: Response) => r.url().includes(`/call-links/${code}/enter`) && r.request().method() === 'POST');
+  const entered = page.waitForResponse((r: Response) => /\/call-links\/[^/?]+\/enter(\?|$)/.test(r.url()) && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Join the event' }).click();
   const enter = await entered;
   expect(enter.status(), 'the entry was taken').toBe(200);

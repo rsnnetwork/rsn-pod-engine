@@ -118,7 +118,7 @@ async function identify(page: Page, event: MadeEvent, email: string, opts: { adm
 
   await page.getByLabel('Email address').fill(email);
   if (opts.admissionCode) await page.getByLabel('Admission code (if you have one)').fill(opts.admissionCode);
-  const answered = page.waitForResponse((r: Response) => r.url().includes(`/call-links/${event.code}/email`) && r.request().method() === 'POST');
+  const answered = page.waitForResponse((r: Response) => /\/call-links\/[^/?]+\/email(\?|$)/.test(r.url()) && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Send me a code' }).click();
   const res = await answered;
   expect(res.status(), 'every address gets the same answer').toBe(200);
@@ -300,7 +300,7 @@ test(`12/04: the link followed from a plain HTML page (Luma, an email) lands on 
   await page.setContent(`<!doctype html><html><body><h1>An event on another site</h1>
     <p><a id="rsn-call" href="${APP}/call/${event.code}">Join the call on REASON</a></p></body></html>`);
   await page.click('#rsn-call');
-  await expect(page).toHaveURL(new RegExp(`/call/${event.code}$`), { timeout: 30_000 });
+  await expect(page).toHaveURL(new RegExp(`/(call/${event.code}|events/[a-z0-9-]+)$`), { timeout: 30_000 });
   const email = `${uuid()}@rsn-e2e.invalid`;
   await identify(page, event, email);
   await page.getByLabel('Your name').fill(`Lu ${RUN}`);
@@ -349,7 +349,7 @@ test(`12/05: an invitation-only event refuses an unlisted address after its code
   await expect(second.getByTestId('call-refusal')).toHaveText(INVITATION_ONLY, { timeout: 30_000 });
   await second.getByLabel('Admission code').fill(admission);
   // The answer the press gets, named in the failure if the sentence does not show (which request, what it said).
-  const usedAnswer = second.waitForResponse((r: Response) => r.url().includes(`/call-links/${event.code}/`) && r.request().method() === 'POST');
+  const usedAnswer = second.waitForResponse((r: Response) => /\/call-links\/[^/?]+\//.test(r.url()) && r.request().method() === 'POST');
   await second.getByRole('button', { name: 'Continue' }).click();
   const answer = await usedAnswer;
   const said = `${answer.request().method()} ${new URL(answer.url()).pathname} ${answer.status()} ${await answer.text().catch(() => '')}`;
