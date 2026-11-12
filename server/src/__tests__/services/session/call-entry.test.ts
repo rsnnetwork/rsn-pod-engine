@@ -753,7 +753,7 @@ describe('the landing for a signed-in viewer, and their events', () => {
     world.requests.set(key(uuid(101), MEMBER), 'pending');
     world.places.set(key(uuid(102), MEMBER), { status: 'left', admitted_via: null });
     const list = await listMyCallEvents(MEMBER);
-    expect(list.map((e) => [e.title && e.code.length, e.step, e.lifecycle])).toEqual([
+    expect(list.map((e) => [e.title && e.code?.length, e.step, e.lifecycle])).toEqual([
       [10, 'pending_approval', 'registration_open'],
       [10, 'wait_for_start', 'registration_open'],
       [10, 'ended', 'completed'],
@@ -805,7 +805,38 @@ describe('the event link (/events/<name>-<n>[-<tail>], Stefan 11 Nov 2026) is a 
     expect(listed.code).not.toBe(CODE);
     expect(listed.code).toBe(world.events[0].call_code);
     expect(listed.linkPath).toBe(`/events/rsn-1-${world.events[0].link_tail}`);
-    expect((await getCallLanding(listed.code, null)).title).toBe('Founders breakfast');
+    expect((await getCallLanding(listed.code!, null)).title).toBe('Founders breakfast');
+  });
+
+  it('when the links cannot be put right and the stored tail is wrong, the guest gets no code rather than a dead one (rereview 2, minor 3)', async () => {
+    addEvent({ id: EVENT, call_code: CODE, visibility: 'public' });
+    world.places.set(key(EVENT, MEMBER), { status: 'registered', admitted_via: 'open' });
+    world.events[0].visibility = 'private';
+    const links = jest.requireActual('../../../services/session/event-link.service');
+    const spy = jest.spyOn(links, 'ensureEventLinkState').mockRejectedValue(new Error('connection reset'));
+    try {
+      const [listed] = await listMyCallEvents(MEMBER);
+      expect(listed.code).toBeNull();
+      expect(listed.linkPath).toBeNull();
+      expect(listed.title).toBe('Founders breakfast');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('when the fix-up fails but the stored tail is right, the tailed link is listed and a code only if it still opens', async () => {
+    addEvent({ id: EVENT, call_code: CODE, visibility: 'private' });
+    world.places.set(key(EVENT, MEMBER), { status: 'registered', admitted_via: 'open' });
+    world.events[0].call_code_private = false; // a public code on a private event: it 404s
+    const links = jest.requireActual('../../../services/session/event-link.service');
+    const spy = jest.spyOn(links, 'ensureEventLinkState').mockRejectedValue(new Error('connection reset'));
+    try {
+      const [listed] = await listMyCallEvents(MEMBER);
+      expect(listed.linkPath).toBe(`/events/rsn-1-${world.events[0].link_tail}`);
+      expect(listed.code).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('a person\'s events carry each event\'s link (its tail when private), beside the code as before', async () => {

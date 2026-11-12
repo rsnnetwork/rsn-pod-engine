@@ -245,31 +245,57 @@ export async function fanoutEventLink(sessionId: string): Promise<void> {
  */
 export async function fanoutEventLinks(sessionIds: string[]): Promise<void> {
   const io = getRealtimeIo();
-  if (!io || sessionIds.length === 0) return;
-  try {
-    const r = await query<{ session_id: string; user_id: string | null }>(
-      `SELECT el_s.id AS session_id, el_who.user_id
-         FROM sessions el_s
-         CROSS JOIN LATERAL (
-           SELECT el_s.host_user_id AS user_id
-           UNION SELECT c.user_id FROM session_cohosts c WHERE c.session_id = el_s.id
-           UNION SELECT pm.user_id FROM pod_members pm
-                  WHERE pm.pod_id = el_s.pod_id AND pm.role IN ('director', 'host') AND pm.status = 'active'
-           UNION SELECT sp.user_id FROM session_participants sp WHERE sp.session_id = el_s.id
-           UNION SELECT jr.user_id FROM event_join_requests jr
-                  WHERE jr.session_id = el_s.id AND jr.status IN ('pending', 'approved', 'declined')
-           UNION SELECT w.user_id FROM event_waitlist w WHERE w.session_id = el_s.id AND w.status = 'waiting'
-         ) el_who
-        WHERE el_s.id = ANY($1::uuid[])`,
-      [sessionIds],
-    );
-    for (const { session_id: sessionId, user_id: userId } of r.rows) {
-      if (!userId) continue;
-      await emitEntities(io, [userId], [E.sessionCallLink(sessionId), E.session(sessionId), E.userSessions(userId)]);
+  const unique = [...new Set(sessionIds)];
+  if (!io || unique.length === 0) return;
+  // Each person once, with all their tags (rereview 2 minor 2): the events read in chunks, each read capped.
+  const tagsOf = new Map<string, Set<string>>();
+  for (let i = 0; i < unique.length; i += FANOUT_EVENTS_CHUNK) {
+    const chunk = unique.slice(i, i + FANOUT_EVENTS_CHUNK);
+    try {
+      for (const { session_id: sessionId, user_id: userId } of await fanoutRecipients(chunk)) {
+        if (!userId) continue;
+        const tags = tagsOf.get(userId) ?? new Set<string>([E.userSessions(userId)]);
+        tags.add(E.sessionCallLink(sessionId));
+        tags.add(E.session(sessionId));
+        tagsOf.set(userId, tags);
+      }
+    } catch (err) {
+      logger.warn({ err, sessionIds: chunk }, 'fanoutEventLinks: the recipients were not read');
     }
-  } catch (err) {
-    logger.warn({ err, sessionIds }, 'fanoutEventLinks: failed to fan out');
   }
+  const people = [...tagsOf.entries()];
+  for (let i = 0; i < people.length; i += FANOUT_SEND_BATCH) {
+    await Promise.all(people.slice(i, i + FANOUT_SEND_BATCH).map(([userId, tags]) =>
+      emitEntities(io, [userId], [...tags]).catch((err: unknown) => logger.warn({ err, userId }, 'fanoutEventLinks: one send failed'))));
+  }
+}
+
+/** Events read per recipients query, and the most rows one read returns (a cap, never an unbounded read). */
+const FANOUT_EVENTS_CHUNK = 50;
+const FANOUT_RECIPIENTS_MAX = 10_000;
+/** Sends in flight at once. */
+const FANOUT_SEND_BATCH = 100;
+
+/** The people who may be looking at these events' links: organisers, places of any status, requests, the waiting list. */
+async function fanoutRecipients(sessionIds: string[]): Promise<Array<{ session_id: string; user_id: string | null }>> {
+  const r = await query<{ session_id: string; user_id: string | null }>(
+    `SELECT el_s.id AS session_id, el_who.user_id
+       FROM sessions el_s
+       CROSS JOIN LATERAL (
+         SELECT el_s.host_user_id AS user_id
+         UNION SELECT c.user_id FROM session_cohosts c WHERE c.session_id = el_s.id
+         UNION SELECT pm.user_id FROM pod_members pm
+                WHERE pm.pod_id = el_s.pod_id AND pm.role IN ('director', 'host') AND pm.status = 'active'
+         UNION SELECT sp.user_id FROM session_participants sp WHERE sp.session_id = el_s.id
+         UNION SELECT jr.user_id FROM event_join_requests jr
+                WHERE jr.session_id = el_s.id AND jr.status IN ('pending', 'approved', 'declined')
+         UNION SELECT w.user_id FROM event_waitlist w WHERE w.session_id = el_s.id AND w.status = 'waiting'
+       ) el_who
+      WHERE el_s.id = ANY($1::uuid[])
+      LIMIT ${FANOUT_RECIPIENTS_MAX}`,
+    [sessionIds],
+  );
+  return r.rows;
 }
 
 /**

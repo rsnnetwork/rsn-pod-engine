@@ -241,7 +241,10 @@ sessionCallLinkRoutes.post('/:id/call-link/rotate', authenticate, callLinkManage
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await callLink.rotateCallCode(req.params.id, actorOf(req));
-      const data = await callLink.getCallLinkForOrganiser(req.params.id, actorOf(req), { origin: req.get('origin') });
+      // The rotation has happened: its answer is never a failure (the event link is left out if it cannot be read).
+      const data = await callLink.getCallLinkForOrganiser(
+        req.params.id, actorOf(req), { origin: req.get('origin') }, { eventLinkOptional: true },
+      );
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);
