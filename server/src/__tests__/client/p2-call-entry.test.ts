@@ -582,7 +582,7 @@ describe('the wiring', () => {
 
   it('in: straight to the live room, writing down the link that led there', () => {
     const page = read('features/call/CallLinkPage.tsx');
-    expect(page).toMatch(/if \(state\?\.sessionId\) rememberCallLink\(state\.sessionId, code\);\s*navigate\(livePath, \{ replace: true, state: FROM_CALL_LINK \}\);/);
+    expect(page).toMatch(/if \(state\?\.sessionId\) rememberCallLink\(state\.sessionId, wayBack\);\s*navigate\(livePath, \{ replace: true, state: FROM_CALL_LINK \}\);/);
   });
 
   it('a guest the live room refuses goes back to the event\'s call page; "back" is the guest home', () => {

@@ -393,7 +393,7 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
 
       <Card className="animate-fade-in-up stagger-1">
         <EventAccessField value={visibility} onChange={setChosenVisibility} podName={pod?.name} podVisibility={pod?.visibility} circleName={circle?.name} />
-        <EventLinkNameField className="mt-5" form={ev.form} podId={pod?.id} visibility={visibility} circleId={circle?.id} />
+        <EventLinkNameField className="mt-5" form={ev.form} podId={pod?.id} visibility={visibility} circleId={circle?.id} isAdmin={isAdmin} />
       </Card>
 
       <Card className="animate-fade-in-up stagger-1">

@@ -26,7 +26,7 @@ import CallCodeStep from './CallCodeStep';
 import CallDetailsStep, { type DetailsAnswer } from './CallDetailsStep';
 import CallWaitingStep from './CallWaitingStep';
 import CallNotice from './CallNotice';
-import { GUEST_HOME_PATH, isEventGuest, rememberCallLink } from './guest-routes';
+import { GUEST_HOME_PATH, isEventGuest, rememberCallLink, strongerKey } from './guest-routes';
 import { useCallActions, useCallLink } from './useCallLink';
 
 type Closed = NonNullable<EntryFailure['closed']>;
@@ -125,8 +125,10 @@ export default function CallLinkPage() {
 
   // The event link as it is now, in the address bar (Stefan, 11 Nov 2026): an old call link (/call/<code>) or a renamed
   // event's old link becomes the link to share, in place. Only before anything is asked on this page and never while the
-  // email's button (?entry=) is being read, so nothing typed or proved is lost.
-  const linkPath = landing.data?.link?.path ?? null;
+  // email's button (?entry=) is being read, so nothing typed or proved is lost. Never a weaker link than the one held:
+  // someone who came by a tailed link keeps it when the event's own is untailed (strongerKey).
+  const wayBack = strongerKey(code, landing.data?.link?.slug);
+  const linkPath = landing.data?.link && wayBack === landing.data.link.slug ? landing.data.link.path : null;
   useEffect(() => {
     if (!linkPath || linkPath === location.pathname) return;
     if (entryToken || tokenPending || phase !== 'summary' || started) return;
@@ -137,9 +139,9 @@ export default function CallLinkPage() {
   const livePath = state?.step === 'enter' ? state.livePath : null;
   useEffect(() => {
     if (screen !== 'live' || !livePath) return;
-    if (state?.sessionId) rememberCallLink(state.sessionId, code);
+    if (state?.sessionId) rememberCallLink(state.sessionId, wayBack);
     navigate(livePath, { replace: true, state: FROM_CALL_LINK });
-  }, [screen, livePath, state?.sessionId, code, navigate]);
+  }, [screen, livePath, state?.sessionId, wayBack, navigate]);
 
   // Nothing missing once they asked: enter at once (once; a second try is their own press).
   useEffect(() => {
@@ -217,7 +219,7 @@ export default function CallLinkPage() {
       throw err;
     }
     if (now.step === 'enter' && now.livePath && now.sessionId) {
-      rememberCallLink(now.sessionId, code);
+      rememberCallLink(now.sessionId, wayBack);
       navigate(now.livePath, { replace: true, state: FROM_CALL_LINK });
     }
   };

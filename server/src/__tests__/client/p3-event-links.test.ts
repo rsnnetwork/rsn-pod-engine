@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { EVENT_LINK_BASE_PATH, EVENT_LINK_NAME_RULE } from '@rsn/shared';
 import { isGateExempt } from '../../../../client/src/components/layout/onboarding-gate';
-import { callPathForEvent, guestAllowedPath, rememberCallLink } from '../../../../client/src/features/call/guest-routes';
+import { callPathForEvent, guestAllowedPath, rememberCallLink, strongerKey } from '../../../../client/src/features/call/guest-routes';
 import {
   editEventValues, eventBody, eventChanges, eventProblems, linkNameProblem, newEventValues, problemSummary, shownEventKeys,
 } from '../../../../client/src/features/sessions/event-format-form';
@@ -47,9 +47,29 @@ describe('the route, the onboarding gate and a guest\'s reach', () => {
       expect(callPathForEvent('s2')).toBe('/call/k7m2x9q4ra');
       expect(callPathForEvent('s3')).toBeNull();
       expect(callPathForEvent('s4')).toBeNull();
+      // A tailed way back is never replaced by an untailed one for the same event (review minor, 12 Nov 2026).
+      rememberCallLink('s1', 'rsn-3');
+      expect(callPathForEvent('s1')).toBe('/events/rsn-3-k7m2q9');
+      rememberCallLink('s1', 'founders-1-abcdef');
+      expect(callPathForEvent('s1')).toBe('/events/founders-1-abcdef');
+      // A long name with many hyphens is still remembered.
+      const long = `${'ab-'.repeat(13)}x-12-k7m2q9`;
+      rememberCallLink('s5', long);
+      expect(callPathForEvent('s5')).toBe(`/events/${long}`);
     } finally {
       delete g.localStorage;
     }
+  });
+
+  it('the way back and the address bar never get a weaker link than the one held', () => {
+    // The event's own link carries a tail: it wins (a code, a bare or an old link all become it).
+    expect(strongerKey('k7m2x9q4ra', 'rsn-3-k7m2q9')).toBe('rsn-3-k7m2q9');
+    expect(strongerKey('rsn-3', 'rsn-3-k7m2q9')).toBe('rsn-3-k7m2q9');
+    // They came by a tailed link and the event's own is untailed now (it turned public): they keep theirs.
+    expect(strongerKey('rsn-3-k7m2q9', 'rsn-3')).toBe('rsn-3-k7m2q9');
+    // Nothing tailed either way: the event's own link, else what they came by.
+    expect(strongerKey('k7m2x9q4ra', 'rsn-3')).toBe('rsn-3');
+    expect(strongerKey('k7m2x9q4ra', null)).toBe('k7m2x9q4ra');
   });
 });
 
@@ -57,11 +77,15 @@ describe('the entry page puts the event link as it is now in the address bar', (
   const page = read('features/call/CallLinkPage.tsx');
 
   it('from the landing\'s link, in place, only before anything is asked and never while the email\'s button is read', () => {
-    expect(page).toContain('const linkPath = landing.data?.link?.path ?? null;');
+    expect(page).toContain('const wayBack = strongerKey(code, landing.data?.link?.slug);');
+    expect(page).toContain('const linkPath = landing.data?.link && wayBack === landing.data.link.slug ? landing.data.link.path : null;');
+    // Both ways back write the stronger key, never the URL's as typed.
+    expect(page).not.toMatch(/rememberCallLink\([^)]*, code\)/);
+    expect((page.match(/rememberCallLink\(\w+(?:\.\w+)?(?:!)?, wayBack\)/g) ?? []).length).toBe(2);
     expect(page).toContain("if (entryToken || tokenPending || phase !== 'summary' || started) return;");
     expect(page).toContain('navigate(`${linkPath}${location.search}${location.hash}`, { replace: true });');
     // Declared with the page's other effects, before the first early return (hooks run in the same order every time).
-    expect(page.indexOf('const linkPath = landing.data?.link?.path')).toBeLessThan(page.indexOf('return <Loading />;'));
+    expect(page.indexOf('const linkPath = landing.data?.link')).toBeLessThan(page.indexOf('return <Loading />;'));
   });
 
   it('the guest home opens each event by its event link, else by its call link (an older server)', () => {
@@ -113,16 +137,18 @@ describe('the link name on the event forms', () => {
 
   it('both forms draw the field beside Who can join, and the field reads the link as the organiser pauses', () => {
     expect(read('features/sessions/CreateSessionPage.tsx'))
-      .toContain('<EventLinkNameField className="mt-5" form={ev.form} podId={pod?.id} visibility={visibility} circleId={circle?.id} />');
+      .toContain('<EventLinkNameField className="mt-5" form={ev.form} podId={pod?.id} visibility={visibility} circleId={circle?.id} isAdmin={isAdmin} />');
     expect(read('features/sessions/EditEventModal.tsx'))
-      .toContain('<EventLinkNameField form={ev.form} sessionId={session.id} visibility={visibility} />');
+      .toContain('<EventLinkNameField form={ev.form} sessionId={session.id} visibility={visibility} isAdmin={isAdmin} currentName={session.linkName} />');
     const field = read('features/sessions/EventLinkNameField.tsx');
     expect(field).toContain("api.get('/sessions/event-link-name', {");
     expect(field).toContain("// realtime: skip — the form's as-you-type check of a name, asked again on every pause in typing\n  const check = useQuery");
     expect(field).toContain("{...register('linkName')}");
     // Never a request for a name the form already refuses; the shape is said at once.
     expect(field).toContain('const askable = !!(podId || sessionId) && !(paused && eventLinkNameProblem(paused));');
-    expect(field).toContain('const shapeProblem = typed ? eventLinkNameProblem(typed) : null;');
+    // "rsn" is RSN's own (ruling b): "This name is reserved." at once, to anyone but a platform admin; never for the
+    // event's own name.
+    expect(field).toContain('const shapeProblem = typed && typed !== currentName ? eventLinkNameProblemFor(typed, { platform: isAdmin }) : null;');
   });
 
   it('the field is a 44px control that wraps a long address (no sideways scroll at 360px)', () => {
@@ -138,6 +164,7 @@ describe('the words: an event link, never a call', () => {
     const card = read('features/sessions/CallLinkCard.tsx');
     expect(card).toContain("title: 'Event link'");
     expect(card).toContain("error: 'The event link could not be read just now.'");
+    expect(card).toContain('Links shared while it was public no longer work.');
     expect(historySentence({
       id: '1', at: '', actor: { id: 'h', displayName: 'Ana' }, automatic: false, action: 'call_link.rotated',
       round: null, scheduleVersion: null, subjects: [], reason: null,
@@ -168,7 +195,18 @@ describe('the words: an event link, never a call', () => {
           if (/\bcall link\b|\bRSN Call\b|\bJoin call\b/i.test(text)) found.push(`${path.relative(CLIENT, file)}:${i + 1}: ${text}`);
         }
       });
+      // JSX text too (between > and <, across lines), comments taken out first.
+      const jsx = fs.readFileSync(file, 'utf8').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+      for (const m of jsx.matchAll(/>([^<>{}]+)</g)) {
+        const text = m[1].replace(/\s+/g, ' ').trim();
+        if (text && /\bcall link\b|\bRSN Call\b|\bJoin call\b/i.test(text)) found.push(`${path.relative(CLIENT, file)} (JSX): ${text}`);
+      }
     }
     expect(found).toEqual([]);
+  });
+
+  it('the JSX pass would catch text between tags', () => {
+    const text = '<p>Share the call link</p>'.match(/>([^<>{}]+)</)?.[1] ?? '';
+    expect(/\bcall link\b/i.test(text)).toBe(true);
   });
 });

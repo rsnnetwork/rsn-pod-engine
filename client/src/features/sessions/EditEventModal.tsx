@@ -157,7 +157,7 @@ function EditEventSheet({ onClose, session, podType, podVisibility, podName, isA
           editing
         />
 
-        <EventLinkNameField form={ev.form} sessionId={session.id} visibility={visibility} />
+        <EventLinkNameField form={ev.form} sessionId={session.id} visibility={visibility} isAdmin={isAdmin} currentName={session.linkName} />
 
         <EventFormatFields
           format={ev.format}

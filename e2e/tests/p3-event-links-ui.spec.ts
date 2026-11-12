@@ -12,6 +12,8 @@ import { primePreview } from '../helpers/preview-bypass';
 //      card shows the event link with Copy (copied to the clipboard on Chromium).
 //   2. A signed-out guest opens /events/<name>-1 and reaches the event's entry ("Join with your email").
 //   3. The event's old call link (/call/<code>) still opens it, and the address bar turns into the event link.
+//   4. A private event: the preview ends "-······" with the note on the random code, and the card shows the tailed link
+//      with its note and "Make a new link". "rsn" is refused at the field to this organiser (not a platform admin).
 // At 360px (or the phone's own screen with E2E_DEVICE) the field, the preview and the entry fit: no sideways scroll,
 // the field and the buttons at least 44px and inside the screen.
 // Throwaway accounts only (@rsn-e2e.invalid); every row deleted by id at the end; the run's link-name counter deleted by
@@ -47,7 +49,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await cleanupRun([() => pool.query('DELETE FROM event_link_counters WHERE name = $1', [NAME])]);
+  await cleanupRun([() => pool.query('DELETE FROM event_link_counters WHERE name = ANY($1::text[])', [[NAME, `${NAME}-p`]])]);
   await browser?.close();
 });
 
@@ -156,4 +158,36 @@ test(`the old call link still opens the event, and the address bar shows the eve
   } finally {
     await ctx.close();
   }
+});
+
+test(`a private event's link ends with a random code, said under the field and on the card (${where()})`, async () => {
+  test.setTimeout(240_000);
+  const h = await openAs(browser, host, `/sessions/new?podId=${podId}`, { width: WIDTH });
+  const page = h.page;
+  const field = page.getByTestId('event-link-name-input');
+  await expect(field).toBeVisible({ timeout: 30_000 });
+  // RSN's own name is refused at once to an organiser who is not a platform admin.
+  await field.fill('rsn');
+  await expect(page.getByTestId('event-link-name-problem')).toHaveText('This name is reserved.');
+  await page.getByTestId('event-access-private').click();
+  await field.fill(`${NAME}-p`);
+  await expect(page.getByTestId('event-link-preview')).toContainText(`/events/${NAME}-p-1-······`, { timeout: 15_000 });
+  await expect(page.getByTestId('event-link-private-note')).toBeVisible();
+  await fits(page, 'event-link-preview', 'the private link preview');
+  await noSidewaysScroll(page, 'the form with a private link');
+  const created = page.waitForResponse((r: Response) => r.url().endsWith('/api/sessions') && r.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Schedule Event' }).click();
+  const res = await created;
+  expect(res.status(), await res.text()).toBe(201);
+  const id: string = (await res.json()).data.id;
+  made.sessions.push(id);
+  await page.goto(`${APP}/sessions/${id}`, { waitUntil: 'domcontentloaded' });
+  const card = page.getByTestId('call-link-card');
+  await expect(card).toContainText('Event link', { timeout: 30_000 });
+  await card.scrollIntoViewIfNeeded();
+  await expect(card.getByTestId('call-link-address')).toHaveText(new RegExp(`/events/${NAME}-p-1-[a-km-np-z][2-9a-km-np-z]{5}$`));
+  await expect(card.getByTestId('event-link-private-note')).toContainText('Links shared while it was public no longer work.');
+  await tall(card.getByTestId('call-link-rotate'), 'Make a new link');
+  await noSidewaysScroll(page, 'the event page with a private link');
+  await shot(page, 'event-link-card-private');
 });

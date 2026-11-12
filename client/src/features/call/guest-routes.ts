@@ -61,7 +61,21 @@ export function guestAllowedPath(pathname: string): boolean {
 const CALL_LINKS_KEY = 'rsn_call_links';
 const CALL_LINKS_KEPT = 20;
 /** A call code, or an event link's slug ('rsn-3', 'rsn-3-k7m2q9'): lower-case letters and digits in hyphenated runs. */
-const CODE_SHAPE = /^[0-9a-z]{1,40}(?:-[0-9a-z]{1,40}){0,8}$/;
+const CODE_SHAPE = /^[0-9a-z]{1,40}(?:-[0-9a-z]{1,40}){0,22}$/;
+
+/** Whether a key is an event link that carries its random tail (the strongest way back an event has). */
+const tailed = (key: string) => !!parseEventLinkSlug(key)?.tail;
+
+/**
+ * The key a page writes down as its way back, and puts in the address bar: never weaker than the one the person holds.
+ * The event link as it is now when it carries a tail; else the tailed link they came by (a renamed or once-private
+ * event's old link keeps working, its untailed form may not); else the event link as it is now; else what they came by.
+ */
+export function strongerKey(heldKey: string, currentSlug: string | null | undefined): string {
+  if (currentSlug && tailed(currentSlug)) return currentSlug;
+  if (tailed(heldKey)) return heldKey;
+  return currentSlug || heldKey;
+}
 
 interface KeyValueStore { getItem(key: string): string | null; setItem(key: string, value: string): void }
 
@@ -86,6 +100,9 @@ function readKept(): Array<[string, string]> {
 /** Write down that `code`'s link leads to event `sessionId` (the newest twenty are kept). */
 export function rememberCallLink(sessionId: string, code: string): void {
   if (!sessionId || !CODE_SHAPE.test(code)) return;
+  // A tailed way back is never replaced by an untailed one for the same event (it may stop when the event turns private).
+  const held = readKept().find(([id]) => id === sessionId)?.[1];
+  if (held && tailed(held) && !tailed(code)) return;
   const kept = [[sessionId, code] as [string, string], ...readKept().filter(([id]) => id !== sessionId)].slice(0, CALL_LINKS_KEPT);
   try {
     storage()?.setItem(CALL_LINKS_KEY, JSON.stringify(kept));

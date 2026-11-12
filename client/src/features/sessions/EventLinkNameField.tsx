@@ -1,6 +1,7 @@
 // ─── The event link's name, on Schedule an Event and Edit Event (Stefan, 11 Nov 2026) ─────────────────────────────────
 // Every event has a link people read and share: /events/<name>-<n>. The organiser chooses the name (empty: the name the
-// pod's latest event uses, else "rsn"), and each event under it gets the next number. A private or invitation-only
+// pod's latest public event uses, else "event", or "rsn" for a platform admin), and each event under it gets the next
+// number. "rsn" is RSN's own: only platform admins may choose it (controller ruling, 12 Nov 2026). A private or invitation-only
 // event's link ends with a random code, so nobody finds it by trying the next number.
 //
 // Under the field, the link as it will look, read from the server as the organiser pauses typing
@@ -12,7 +13,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { UseFormReturn } from 'react-hook-form';
 import { Link2 } from 'lucide-react';
 import {
-  EVENT_LINK_NAME_MAX, eventLinkNameProblem, normaliseEventLinkName,
+  EVENT_LINK_NAME_MAX, eventLinkNameProblem, eventLinkNameProblemFor, normaliseEventLinkName,
   type EventLinkNameCheck, type EventVisibility,
 } from '@rsn/shared';
 import api from '@/lib/api';
@@ -43,6 +44,10 @@ interface Props {
   circleId?: string;
   /** Spacing from the field above, where the form needs it. */
   className?: string;
+  /** A platform admin may choose RSN's own name ("rsn"). */
+  isAdmin: boolean;
+  /** Editing: the event's own name, which is never a problem to keep. */
+  currentName?: string | null;
 }
 
 /** The name the organiser typed, as the server will store it, after they pause. */
@@ -55,13 +60,13 @@ function usePausedName(typed: string): string {
   return paused;
 }
 
-export default function EventLinkNameField({ form, podId, sessionId, visibility, circleId, className }: Props) {
+export default function EventLinkNameField({ form, podId, sessionId, visibility, circleId, className, isAdmin, currentName }: Props) {
   const fieldId = useId();
   const hintId = useId();
   const { register, watch, formState: { errors } } = form;
   const typed = normaliseEventLinkName(watch('linkName') ?? '');
   const paused = usePausedName(typed);
-  const shapeProblem = typed ? eventLinkNameProblem(typed) : null;
+  const shapeProblem = typed && typed !== currentName ? eventLinkNameProblemFor(typed, { platform: isAdmin }) : null;
   const askable = !!(podId || sessionId) && !(paused && eventLinkNameProblem(paused));
 
   // The number is only likely (another event may take it first); the server decides it when the event is saved.

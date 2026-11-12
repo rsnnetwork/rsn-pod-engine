@@ -16,7 +16,7 @@ import { ErrorRow, LoadingRows, OrganiserCard, PRIMARY_BUTTON, QUIET_BUTTON } fr
 export const CALL_LINK_COPY = {
   title: 'Event link',
   hint: 'Share it anywhere. People open it to join this event; who gets a place still follows Admission below.',
-  privateNote: 'It ends with a random code because the event is private or invitation-only, so nobody finds it by guessing.',
+  privateNote: 'It ends with a random code because the event is private or invitation-only, so nobody finds it by guessing. Links shared while it was public no longer work.',
   renameNote: 'Change its name when you edit the event. The old link keeps working.',
   draftNote: 'The link works once the event is published.',
   copy: 'Copy link',
