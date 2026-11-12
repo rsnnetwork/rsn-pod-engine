@@ -531,6 +531,7 @@ interface MyCallEventRow {
   link_number?: number | null;
   link_tail?: string | null;
   link_needs_tail?: boolean | null;
+  call_code_private?: boolean | null;
 }
 
 /** The event link of one of a person's events, or null when it cannot be read just now (the call code still opens it). */
@@ -576,7 +577,7 @@ export async function listMyCallEvents(userId: string): Promise<CallEventSummary
             s.registration_opens_at, sp.status::text AS place, r.status AS request,
             EXISTS (SELECT 1 FROM event_waitlist w WHERE w.session_id = s.id AND w.user_id = $1 AND w.status = 'waiting') AS waiting,
             s.timezone, ${eventImageColumns('s')},
-            s.link_name, s.link_number, s.link_tail, ${eventLinkNeedsTailSql('s')} AS link_needs_tail
+            s.link_name, s.link_number, s.link_tail, ${eventLinkNeedsTailSql('s')} AS link_needs_tail, s.call_code_private
        FROM mine
        JOIN sessions s ON s.id = mine.session_id
        LEFT JOIN session_participants sp ON sp.session_id = s.id AND sp.user_id = $1

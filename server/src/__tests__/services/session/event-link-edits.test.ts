@@ -6,9 +6,10 @@
 // who calls it, with what, and that the reply carries the name.
 
 const mockQuery = jest.fn();
+const mockTransaction = jest.fn();
 jest.mock('../../../db', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
-  transaction: (cb: (c: unknown) => Promise<unknown>) => cb({ query: (...args: unknown[]) => mockQuery(...args) }),
+  transaction: (cb: (c: unknown) => Promise<unknown>) => mockTransaction(cb),
   __esModule: true,
 }));
 jest.mock('../../../config/logger', () => ({
@@ -16,9 +17,12 @@ jest.mock('../../../config/logger', () => ({
   __esModule: true,
 }));
 const mockEnsureEventLink = jest.fn();
+const mockEnsureEventLinkIn = jest.fn();
 jest.mock('../../../services/session/event-link.service', () => ({
   ...jest.requireActual('../../../services/session/event-link.service'),
   ensureEventLink: (...a: unknown[]) => mockEnsureEventLink(...a),
+  ensureEventLinkIn: (...a: unknown[]) => mockEnsureEventLinkIn(...a),
+  fanoutEventLink: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock('../../../services/session/call-link.service', () => ({
   ...jest.requireActual('../../../services/session/call-link.service'),
@@ -40,7 +44,9 @@ const row = {
 
 beforeEach(() => {
   mockQuery.mockReset();
+  mockTransaction.mockReset().mockImplementation((cb: (c: unknown) => Promise<unknown>) => cb({ query: (...a: unknown[]) => mockQuery(...a) }));
   mockEnsureEventLink.mockReset().mockResolvedValue({ name: 'founders', number: 3, tail: null });
+  mockEnsureEventLinkIn.mockReset().mockResolvedValue({ parts: { name: 'founders', number: 3, tail: null }, changed: true });
 });
 
 describe('the route\'s link-name field', () => {
@@ -113,18 +119,51 @@ describe('editing an event', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
-  it('a visibility change brings the link up to date after the event\'s own write (the tail reads the new access)', async () => {
+  it('a visibility change brings the link up to date after the event\'s own write, in the same transaction (review M4)', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [row], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [{ ...row, visibility: 'private' }], rowCount: 1 });
-    mockEnsureEventLink.mockImplementation(async () => {
-      // The UPDATE of sessions has already run when the link is looked at.
+    const client = { query: (...a: unknown[]) => mockQuery(...a) };
+    mockTransaction.mockImplementation((cb: (c: unknown) => Promise<unknown>) => cb(client));
+    mockEnsureEventLinkIn.mockImplementation(async (c: unknown) => {
+      // The UPDATE of sessions has already run, on the same transaction's client, when the link is looked at.
+      expect(c).toBe(client);
       expect(mockQuery.mock.calls.some(([sql]) => String(sql).startsWith('UPDATE sessions SET visibility'))).toBe(true);
-      return { name: 'rsn', number: 4, tail: 'k7m2q9' };
+      return { parts: { name: 'rsn', number: 4, tail: 'k7m2q9' }, changed: true };
     });
     const updated = await sessionService.updateSession(SESSION, 'host', { visibility: 'private' });
-    expect(mockEnsureEventLink).toHaveBeenCalledWith(SESSION, undefined);
+    expect(mockEnsureEventLinkIn).toHaveBeenCalledWith(client, SESSION, undefined);
     expect(updated.linkName).toBe('rsn');
+  });
+
+  it('a link that cannot be written fails the edit as a whole: the transaction rolls the row back with it', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [row], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ ...row, visibility: 'private' }], rowCount: 1 });
+    let rolledBack = false;
+    mockTransaction.mockImplementation(async (cb: (c: unknown) => Promise<unknown>) => {
+      try { return await cb({ query: (...a: unknown[]) => mockQuery(...a) }); } catch (err) { rolledBack = true; throw err; }
+    });
+    mockEnsureEventLinkIn.mockRejectedValueOnce(new Error('connection reset'));
+    await expect(sessionService.updateSession(SESSION, 'host', { visibility: 'private' })).rejects.toThrow('connection reset');
+    expect(rolledBack).toBe(true);
+  });
+
+  it('ruling (b): a non-admin may not name an event rsn, creating or editing; an admin may; a kept rsn is no problem', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...row, linkName: 'founders' }], rowCount: 1 });
+    await expect(sessionService.updateSession(SESSION, 'host', { linkName: 'rsn' })).rejects.toMatchObject({
+      statusCode: 400, message: 'This name is reserved.', details: { linkName: ['This name is reserved.'] },
+    });
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...row, linkName: 'rsn' }], rowCount: 1 });
+    await sessionService.updateSession(SESSION, 'host', { linkName: 'rsn' });
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...row, linkName: 'founders' }], rowCount: 1 });
+    await sessionService.updateSession(SESSION, 'someone', { linkName: 'rsn' }, 'admin' as never);
+    expect(mockEnsureEventLink).toHaveBeenCalledWith(SESSION, 'rsn');
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: POD, name: 'Pod', status: 'active', podType: 'speed_networking' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
+    await expect(sessionService.createSession('host', { podId: POD, title: 'T', scheduledAt: '2026-12-01T10:00:00.000Z', linkName: 'rsn' }))
+      .rejects.toMatchObject({ statusCode: 400, message: 'This name is reserved.' });
   });
 
   it('a title-only edit leaves the link alone', async () => {

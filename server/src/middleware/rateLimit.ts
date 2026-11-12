@@ -1073,10 +1073,16 @@ export const callLinkVerifyLimiter = rateLimit({
   handler: callLinkLimited('Too many codes tried. Please wait 15 minutes, then try again.'),
 });
 
-/** The per-link, per-address bucket for codes emailed: the link's stored spelling and a hash of the address. */
-export function callLinkEmailTargetKey(req: Request): string {
+/**
+ * The per-event, per-address bucket for codes emailed: the event the link names (res.locals.callEventId, set by the
+ * route's emailBucketEvent: its call code, its event link and its old links share one bucket), else the link's stored
+ * spelling; and a hash of the address.
+ */
+export function callLinkEmailTargetKey(req: Request, res?: Response): string {
   const email = typeof req.body?.email === 'string' ? req.body.email : '';
-  return `c:${linkOf(req)}:${signInCodeEmailKey(email)}`;
+  const eventId = res?.locals?.callEventId;
+  const target = typeof eventId === 'string' && eventId ? `e:${eventId}` : linkOf(req);
+  return `c:${target}:${signInCodeEmailKey(email)}`;
 }
 
 export const callLinkEmailTargetLimiter = rateLimit({

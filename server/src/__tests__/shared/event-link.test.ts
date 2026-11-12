@@ -5,7 +5,7 @@
 // tail is 6 symbols from the operating system's random source, a letter first, never 0, o, 1 or l.
 
 import {
-  EVENT_LINK_BASE_PATH, EVENT_LINK_DEFAULT_NAME, EVENT_LINK_RESERVED_NAMES, EVENT_LINK_SLUG_MAX, EVENT_LINK_TAIL_ALPHABET,
+  EVENT_LINK_BASE_PATH, EVENT_LINK_DEFAULT_NAME, EVENT_LINK_PLATFORM_NAME, eventLinkNameProblemFor, EVENT_LINK_RESERVED_NAMES, EVENT_LINK_SLUG_MAX, EVENT_LINK_TAIL_ALPHABET,
   EVENT_LINK_TAIL_FIRST, EVENT_LINK_TAIL_LENGTH, eventLinkNameProblem, eventLinkPath, eventLinkSlug,
   isEventLinkName, isEventLinkTail, normaliseEventLinkName, parseEventLinkSlug,
 } from '@rsn/shared';
@@ -41,15 +41,25 @@ describe('the name', () => {
     expect(eventLinkNameProblem(name)).toContain(words);
   });
 
-  it('every reserved word is refused, the app\'s own paths among them; rsn (the platform default) is not reserved', () => {
-    for (const word of ['admin', 'api', 'new', 'call', 'events', 'event', 'login', 'settings', 'my-events', 'sessions', 'reason']) {
+  it('every reserved word is refused, the app\'s own paths among them; "event" (the default) and "rsn" are not here', () => {
+    for (const word of ['admin', 'api', 'new', 'call', 'events', 'login', 'settings', 'my-events', 'sessions', 'reason']) {
       expect(EVENT_LINK_RESERVED_NAMES).toContain(word);
     }
     for (const word of EVENT_LINK_RESERVED_NAMES) {
       expect(eventLinkNameProblem(word)).toBe('That name is kept for REASON itself. Choose another.');
     }
-    expect(EVENT_LINK_DEFAULT_NAME).toBe('rsn');
+    expect(EVENT_LINK_DEFAULT_NAME).toBe('event');
+    expect(eventLinkNameProblem('event')).toBeNull();
     expect(eventLinkNameProblem('rsn')).toBeNull();
+  });
+
+  it('"rsn" is RSN\'s own (controller ruling, 12 Nov 2026): only a platform admin may choose it', () => {
+    expect(EVENT_LINK_PLATFORM_NAME).toBe('rsn');
+    expect(eventLinkNameProblemFor('rsn', { platform: false })).toBe('This name is reserved.');
+    expect(eventLinkNameProblemFor('rsn', { platform: true })).toBeNull();
+    expect(eventLinkNameProblemFor('rsn-team', { platform: false })).toBeNull();
+    expect(eventLinkNameProblemFor('admin', { platform: true })).toBe('That name is kept for REASON itself. Choose another.');
+    expect(eventLinkNameProblemFor('my event', { platform: true })).toContain('Use 2 to 40');
   });
 
   it('is read as typed only after trimming and lower-casing (nothing else is changed for the organiser)', () => {

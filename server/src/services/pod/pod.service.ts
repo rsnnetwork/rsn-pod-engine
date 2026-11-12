@@ -194,6 +194,12 @@ export async function updatePod(podId: string, userId: string, input: UpdatePodI
   );
 
   logger.info({ podId, userId }, 'Pod updated');
+  // Who may see the pod decides which of its events' links carry a tail: each is put right and its organisers' cards
+  // told, in the background (event-link.service.ts; imported here when needed, as the session services import this one).
+  if ('visibility' in input) {
+    void import('../session/event-link.service').then((links) => links.refreshEventLinksOf({ podId }))
+      .catch((err) => logger.warn({ err, podId }, 'updatePod: the event links were not brought up to date'));
+  }
   return result.rows[0];
 }
 

@@ -123,8 +123,10 @@ beforeEach(() => {
   mockSendEntryEmail.mockReset().mockResolvedValue(undefined);
   void signInCodeEmailLimiter.resetKey(signInCodeEmailKey(EMAIL));
   // The per-link-and-address bucket outlives a test too (most tests ask the same link for the same address).
-  for (const code of [CODE_A, CODE_B]) for (const email of [EMAIL, 'member@example.org']) {
+  // Review M1 (12 Nov 2026): the bucket is the event's when the link names one, so both keys are reset.
+  for (const [code, eventId] of [[CODE_A, EVENT_A], [CODE_B, EVENT_B]]) for (const email of [EMAIL, 'member@example.org']) {
     void callLinkEmailTargetLimiter.resetKey(callLinkEmailTargetKey({ params: { code }, body: { email } } as never));
+    void callLinkEmailTargetLimiter.resetKey(callLinkEmailTargetKey({ params: { code }, body: { email } } as never, { locals: { callEventId: eventId } } as never));
   }
 });
 
@@ -254,6 +256,8 @@ describe('admission codes typed while entering', () => {
   it('count toward the admission-code bucket: the eleventh wrong one in an hour is refused', async () => {
     world.events.find((e) => e.id === EVENT_A)!.admission_mode = 'restricted';
     world.events.find((e) => e.id === EVENT_A)!.visibility = 'private';
+    // Its link was shared while it was invitation-only (a code given while public stops: migration 154's ruling).
+    world.events.find((e) => e.id === EVENT_A)!.call_code_private = true;
     const ip = nextIp();
     const enter = () => request(app).post(`/api/call-links/${CODE_A}/enter`).set('cf-connecting-ip', ip)
       .set('Authorization', `Bearer ${token(MEMBER)}`).send({ admissionCode: 'ZZZZ-ZZZZ-ZZZZ' });
@@ -272,6 +276,8 @@ describe('no answer tells whether an address has an account (fix round 1)', () =
   it('on an invitation-only event, /email answers a member and an unknown address byte for byte the same', async () => {
     world.events.find((e) => e.id === EVENT_A)!.admission_mode = 'restricted';
     world.events.find((e) => e.id === EVENT_A)!.visibility = 'private';
+    // Its link was shared while it was invitation-only (a code given while public stops: migration 154's ruling).
+    world.events.find((e) => e.id === EVENT_A)!.call_code_private = true;
     const ip = nextIp();
     const known = await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', ip).send({ email: 'member@example.org' });
     const unknown = await request(app).post(`/api/call-links/${CODE_A}/email`).set('cf-connecting-ip', ip).send({ email: EMAIL });
@@ -284,6 +290,8 @@ describe('no answer tells whether an address has an account (fix round 1)', () =
   it('a wrong code at /verify is byte for byte the same for a member and an unknown address', async () => {
     world.events.find((e) => e.id === EVENT_A)!.admission_mode = 'restricted';
     world.events.find((e) => e.id === EVENT_A)!.visibility = 'private';
+    // Its link was shared while it was invitation-only (a code given while public stops: migration 154's ruling).
+    world.events.find((e) => e.id === EVENT_A)!.call_code_private = true;
     const ip = nextIp();
     void signInCodeEmailLimiter.resetKey(signInCodeEmailKey('member@example.org'));
     const k = await askCode(CODE_A, ip, 'member@example.org');
@@ -298,6 +306,30 @@ describe('no answer tells whether an address has an account (fix round 1)', () =
     expect(proved.body.error).toMatchObject({ code: 'EVENT_ADMISSION_REQUIRED', details: { admissionCode: true } });
     expect(proved.body.error.message).toMatch(/^This event is invitation only\./);
     expect(world.users.some((x) => x.email === EMAIL)).toBe(false);
+  });
+});
+
+describe('five code emails per event and address, whichever of its links asks (review M1, 12 Nov 2026)', () => {
+  it('the call code and the event link of one event share one bucket of five; another event has its own', async () => {
+    const slug = `rsn-${world.events.find((e) => e.id === EVENT_A)!.link_number}`;
+    for (let i = 0; i < 5; i++) {
+      const link = i % 2 === 0 ? CODE_A : slug;
+      const r = await request(app).post(`/api/call-links/${link}/email`).set('cf-connecting-ip', nextIp()).send({ email: EMAIL });
+      expect(r.status).toBe(200);
+    }
+    for (const link of [slug, CODE_A, CODE_A.toUpperCase()]) {
+      const r = await request(app).post(`/api/call-links/${link}/email`).set('cf-connecting-ip', nextIp()).send({ email: EMAIL });
+      expect(r.status).toBe(429);
+      expect(r.body.error.message).toBe('Too many codes asked for this address. Please wait 15 minutes, then try again.');
+    }
+    const other = await request(app).post(`/api/call-links/${CODE_B}/email`).set('cf-connecting-ip', nextIp()).send({ email: EMAIL });
+    expect(other.status).toBe(200);
+  });
+
+  it('the key is the event\'s when the route found one, else the link as typed', () => {
+    const req = { params: { code: 'K7M2-X9Q4-RA' }, body: { email: EMAIL } } as never;
+    expect(callLinkEmailTargetKey(req, { locals: { callEventId: EVENT_A } } as never)).toMatch(new RegExp(`^c:e:${EVENT_A}:`));
+    expect(callLinkEmailTargetKey(req, { locals: {} } as never)).toMatch(/^c:k7m2x9q4ra:/);
   });
 });
 
