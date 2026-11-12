@@ -12,13 +12,17 @@ import { SERVER, cleanup, idsOf, teardown } from '../helpers/live-ui';
 // <name>-3 with a random tail: its link without the tail is the same 404 as an unknown code, with it the event opens.
 // The first event's call link (/call/<code>) still opens it and names its event link. Renaming the second event gives it
 // the next number under the new name, and its old link still leads to it. Turning the first event private adds a tail,
-// and its guessable link stops at once. A reserved name is refused in words, on the form's check and on create.
+// and its guessable link stops at once, and so does its call link (controller ruling, 12 Nov 2026), the card showing a new
+// one. A reserved name is refused in words, on the form's check and on create; "rsn" is RSN's own (admins only), and an
+// unnamed event of an organiser who is not an admin is "event-<n>". A private event's name is never carried into a public
+// event's link by the default (review I1).
 // Everything is deleted by id at the end; the two counters this run made are deleted by their exact names.
 
 const SECRET = (process.env.E2E_JWT_SECRET || process.env.JWT_SECRET || '').replace(/\r|\n/g, '');
 const RUN = Date.now().toString(36);
 const NAME = `p3el-${RUN}`;
 const RENAMED = `p3el-${RUN}-b`;
+const SECRET_NAME = `p3el-${RUN}-secret`;
 const NOT_FOUND = { success: false, error: { code: 'SESSION_NOT_FOUND', message: "We couldn't find that event." } };
 const TAIL = /^[a-km-np-z][2-9a-km-np-z]{5}$/;
 
@@ -61,7 +65,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await teardown(
     () => cleanup(pool, { ids: idsOf(host), podId }),
-    () => pool.query(`DELETE FROM event_link_counters WHERE name = ANY($1::text[])`, [[NAME, RENAMED]]),
+    () => pool.query(`DELETE FROM event_link_counters WHERE name = ANY($1::text[])`, [[NAME, RENAMED, SECRET_NAME]]),
   );
 });
 
@@ -86,6 +90,16 @@ test('event links: numbered per name, a tail for a private event, old links and 
   const refusedCreate = await create(`P3EL refused ${RUN}`, { linkName: 'admin', visibility: 'public' });
   expect(refusedCreate.status).toBe(400);
   expect(refusedCreate.json.error.details.linkName).toEqual(['That name is kept for REASON itself. Choose another.']);
+  // "rsn" is RSN's own: refused to this organiser (not a platform admin), at the form's check and on create.
+  const rsnCheck = await call('GET', `/sessions/event-link-name?podId=${podId}&name=rsn`, { token: h.token });
+  expect(rsnCheck.json.data).toMatchObject({ problem: 'This name is reserved.', nextNumber: null });
+  const rsnCreate = await create(`P3EL rsn ${RUN}`, { linkName: 'rsn', visibility: 'public' });
+  expect(rsnCreate.status).toBe(400);
+  expect(rsnCreate.json.error.details.linkName).toEqual(['This name is reserved.']);
+  // With no name and nothing public in the pod to follow, an organiser's event is event-<n>.
+  const unnamed = await create(`P3EL unnamed ${RUN}`, { visibility: 'public' });
+  expect(unnamed.status, JSON.stringify(unnamed.json)).toBe(201);
+  expect(unnamed.json.data.linkName).toBe('event');
 
   // A public event under the run's name: <name>-1, opened by anyone at its link.
   const first = await create(`P3EL first ${RUN}`, { linkName: NAME.toUpperCase(), visibility: 'public' });
@@ -143,6 +157,17 @@ test('event links: numbered per name, a tail for a private event, old links and 
   expect(nowPrivate.eventLink).toMatchObject({ number: 1, private: true });
   expect(nowPrivate.eventLink.slug).toMatch(new RegExp(`^${NAME}-1-[a-km-np-z][2-9a-km-np-z]{5}$`));
   expect((await call('GET', `/call-links/${nowPrivate.eventLink.slug}`)).status).toBe(200);
+  // Its call link from while it was public stops too, the same 404; the card's new call link opens it.
+  expect(await call('GET', `/call-links/${firstCard.code}`)).toEqual(unknownCode);
+  expect(nowPrivate.code).not.toBe(firstCard.code);
+  expect((await call('GET', `/call-links/${nowPrivate.code}`)).json.data.title).toBe(`P3EL first ${RUN}`);
+
+  // Review I1: a private event's chosen name is never the default of a later public event of the pod.
+  const secret = await create(`P3EL secret ${RUN}`, { linkName: SECRET_NAME, visibility: 'private' });
+  expect(secret.status, JSON.stringify(secret.json)).toBe(201);
+  const after = await create(`P3EL after ${RUN}`, { visibility: 'public' });
+  expect(after.status, JSON.stringify(after.json)).toBe(201);
+  expect(after.json.data.linkName).toBe(RENAMED);
 
   // Nobody but the host reads the card or renames.
   const strangerToken = jwt.sign({ sub: uuid(), email: `nobody-${RUN}@rsn-e2e.invalid`, role: 'member', displayName: 'N', sessionId: uuid() }, SECRET, { expiresIn: '10m' });

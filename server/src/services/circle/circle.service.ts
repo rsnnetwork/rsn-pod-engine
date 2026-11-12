@@ -185,8 +185,15 @@ export async function updateCircle(
   if (input.parentCircleId !== undefined) { params.push(input.parentCircleId); sets.push(`parent_circle_id = $${params.length}`); }
   if (input.joinPolicy !== undefined) { params.push(input.joinPolicy); sets.push(`join_policy = $${params.length}`); }
   if (!sets.length) return { approvedUserIds: [] };
+  // A closed circle's events carry a tail on their links, an open one's may not: put right after the change, in the
+  // background, telling each event's organisers (event-link.service.ts).
+  const refreshLinks = () => {
+    if (input.joinPolicy === undefined) return;
+    void import('../session/event-link.service').then((links) => links.refreshEventLinksOf({ circleId }))
+      .catch((err) => logger.warn({ err, circleId }, 'updateCircle: the event links were not brought up to date'));
+  };
   try {
-    return await transaction(async (client) => {
+    const changed = await transaction(async (client) => {
       await client.query(`UPDATE circles SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1`, params);
       if (input.joinPolicy === 'closed') {
         return { approvedUserIds: [], invitesChangedFor: await withdrawInvitesOfNonManagers(client, circleId) };
@@ -194,6 +201,8 @@ export async function updateCircle(
       if (input.joinPolicy !== 'open') return { approvedUserIds: [] };
       return { approvedUserIds: await admitEveryoneWaiting(client, circleId, actor?.userId ?? null) };
     });
+    refreshLinks();
+    return changed;
   } catch (err: any) {
     if (err?.code === '23505') {
       throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'A circle with that name already exists here');

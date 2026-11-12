@@ -52,9 +52,11 @@ import {
   CALL_LINK_NOT_FOUND, findCallEvent, getCallLanding, getCallLinkForOrganiser, resolveCallCode, rotateCallCode,
 } from '../../../services/session/call-link.service';
 import {
-  checkEventLinkName, ensureEventLink, eventLinkBaseUrl, eventLinkMatchSql, eventLinkNeedsTailSql,
+  checkEventLinkName, ensureEventLink, eventLinkBaseUrl, eventLinkMatchSql, eventLinkNeedsTailSql, refreshEventLinksOf,
 } from '../../../services/session/event-link.service';
 import { hasOwnBucket } from '../../../middleware/rateLimit';
+import fs from 'fs';
+import path from 'path';
 import { addEvent, addUser, resetWorld, slugOf, uuid, world } from '../../fixtures/call-link-world';
 
 const HOST = uuid(1);
@@ -159,9 +161,38 @@ describe('changing the visibility', () => {
     expect(mockEmit.mock.calls.some(([, , tags]) => (tags as string[]).includes(`session:${EVENT}:call-link`))).toBe(true);
   });
 
-  it('a call link of an event that turned private shows the tailed link to put in the address bar', async () => {
+  it('ruling (a), 12 Nov 2026: a call link given out while public stops too, the same 404, and the event gets a new code', async () => {
     addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public' });
+    expect(eventOf().call_code_private).toBe(false);
+    const unknown = await refusal(landingOf('zzzzzzzzzz'));
     eventOf().visibility = 'private';
+    // Refused at once, before anything is written (the rule is read on every open), exactly as the bare link.
+    expect(await refusal(landingOf('k7m2x9q4ra'))).toEqual(unknown);
+    expect(await refusal(landingOf('rsn-1'))).toEqual(unknown);
+    // The organiser's card puts it right: a tail, and a new code given while private, which opens the event.
+    const card = await getCallLinkForOrganiser(EVENT, host);
+    expect(card.code).not.toBe('k7m2x9q4ra');
+    expect(eventOf().call_code_private).toBe(true);
+    expect((await landingOf(card.code)).title).toBe('Founders breakfast');
+    expect((await landingOf(card.eventLink!.slug)).title).toBe('Founders breakfast');
+    expect(await refusal(landingOf('k7m2x9q4ra'))).toEqual(unknown);
+    // Turning public again makes the new code a public one, so it stops if the event turns private once more.
+    eventOf().visibility = 'public';
+    await ensureEventLink(EVENT);
+    expect(eventOf().call_code_private).toBe(false);
+    eventOf().visibility = 'private';
+    expect(await refusal(landingOf(card.code))).toEqual(unknown);
+  });
+
+  it('ruling (a): invitation-only does the same to a public event\'s old call link', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public', admission_mode: 'open' });
+    eventOf().admission_mode = 'restricted';
+    expect(await refusal(landingOf('k7m2x9q4ra'))).toMatchObject({ status: 404, message: CALL_LINK_NOT_FOUND });
+  });
+
+  it('a code given while the event was private keeps working while it stays private', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'private' });
+    expect(eventOf().call_code_private).toBe(true);
     const landing = await landingOf('k7m2x9q4ra');
     expect(landing.code).toBe('k7m2x9q4ra');
     expect(landing.link?.slug).toBe(`rsn-1-${eventOf().link_tail}`);
@@ -265,17 +296,39 @@ describe('the old call link keeps working', () => {
   it('an event made before migration 154 (no link yet) gets one the first time its call link is opened', async () => {
     addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public', link_name: null, link_number: null, link_tail: null });
     const landing = await landingOf('k7m2x9q4ra');
-    expect(landing.link?.slug).toBe('rsn-1');
+    expect(landing.link?.slug).toBe('event-1');
   });
 
-  it('the default name is the pod\'s latest event\'s, else rsn; never made from the pod\'s name (the landing never names it)', async () => {
+  it('the default name is the pod\'s latest public event\'s; else rsn for a platform admin\'s event and event for anyone else\'s', async () => {
     addEvent({ id: uuid(110), call_code: 'aaaaaaaaaa', visibility: 'public' });
     await ensureEventLink(uuid(110), 'founders');
     addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public', link_name: null, link_number: null, link_tail: null });
     expect(await ensureEventLink(EVENT)).toEqual({ name: 'founders', number: 2, tail: null });
     addEvent({ id: uuid(111), call_code: 'cccccccccc', visibility: 'public', pod_id: 'pod-2', link_name: null, link_number: null, link_tail: null });
-    expect((await ensureEventLink(uuid(111))).name).toBe('rsn');
+    expect((await ensureEventLink(uuid(111))).name).toBe('event');
+    addUser({ id: uuid(9), email: 'admin@example.org', role: 'admin' });
+    addEvent({ id: uuid(112), call_code: 'dddddddddd', visibility: 'public', pod_id: 'pod-3', host_user_id: uuid(9), link_name: null, link_number: null, link_tail: null });
+    expect((await ensureEventLink(uuid(112))).name).toBe('rsn');
     expect(JSON.stringify(world.events)).not.toMatch(/secret-pod/);
+  });
+
+  it('review I1: a private event\'s name is never carried into a public event\'s link (nor a draft\'s)', async () => {
+    addEvent({ id: uuid(120), call_code: 'aaaaaaaaaa', visibility: 'private' });
+    await ensureEventLink(uuid(120), 'acme-acquisition');
+    addEvent({ id: uuid(121), call_code: 'bbbbbbbbbb', visibility: 'public', publication: 'draft' });
+    await ensureEventLink(uuid(121), 'draft-name');
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public', link_name: null, link_number: null, link_tail: null });
+    const parts = await ensureEventLink(EVENT);
+    expect(parts.name).toBe('event');
+    expect(JSON.stringify(await landingOf('k7m2x9q4ra'))).not.toMatch(/acme|draft-name/);
+  });
+
+  it('a platform admin\'s pod series named rsn is not carried into another organiser\'s event', async () => {
+    addUser({ id: uuid(9), email: 'admin@example.org', role: 'admin' });
+    addEvent({ id: uuid(130), call_code: 'aaaaaaaaaa', visibility: 'public', host_user_id: uuid(9) });
+    expect(eventOf(uuid(130)).link_name).toBe('rsn');
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public', link_name: null, link_number: null, link_tail: null });
+    expect((await ensureEventLink(EVENT)).name).toBe('event');
   });
 
   it('a string that is neither a slug nor a code reaches no database', async () => {
@@ -335,6 +388,15 @@ describe('the event form\'s link-name field', () => {
     expect((await checkEventLinkName(host, { sessionId: EVENT, visibility: 'public' })).private).toBe(true);
   });
 
+  it('ruling (b): "rsn" is refused to anyone but a platform admin, though an event already named rsn keeps it', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public', link_name: 'founders', link_number: 1, link_tail: null });
+    expect((await checkEventLinkName(host, { sessionId: EVENT, name: 'RSN' })).problem).toBe('This name is reserved.');
+    expect((await checkEventLinkName({ userId: MEMBER, role: UserRole.SUPER_ADMIN }, { sessionId: EVENT, name: 'rsn' })).problem).toBeNull();
+    addEvent({ id: uuid(140), call_code: 'aaaaaaaaaa', visibility: 'public' });
+    expect(eventOf(uuid(140)).link_name).toBe('rsn');
+    expect((await checkEventLinkName(host, { sessionId: uuid(140) })).problem).toBeNull();
+  });
+
   it('a name that cannot be used says why, and offers no number', async () => {
     addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'private' });
     expect(await checkEventLinkName(host, { sessionId: EVENT, name: 'admin' })).toMatchObject({
@@ -347,6 +409,27 @@ describe('the event form\'s link-name field', () => {
     addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public' });
     expect(await refusal(checkEventLinkName({ userId: MEMBER, role: UserRole.MEMBER }, { sessionId: EVENT }))).toMatchObject({ status: 403 });
     expect((await checkEventLinkName({ userId: MEMBER, role: UserRole.ADMIN }, { sessionId: EVENT })).name).toBe('rsn');
+  });
+});
+
+describe('a pod or circle that changes who may see its events (review M5)', () => {
+  it('each of its events that has not ended is put right and its organisers\' card told', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: null, pod_visibility: 'public', admission_mode: null });
+    addEvent({ id: uuid(150), call_code: 'aaaaaaaaaa', visibility: null, pod_visibility: 'public', admission_mode: null, status: 'completed' });
+    expect(eventOf().link_tail).toBeNull();
+    for (const e of world.events) e.pod_visibility = 'private';
+    mockEmit.mockClear();
+    await refreshEventLinksOf({ podId: 'pod-1' });
+    expect(eventOf().link_tail).toMatch(/^[a-km-np-z][2-9a-km-np-z]{5}$/);
+    expect(eventOf().call_code).not.toBe('k7m2x9q4ra');
+    expect(eventOf(uuid(150)).link_tail).toBeNull();
+    expect(mockEmit.mock.calls.some(([, , tags]) => (tags as string[]).includes(`session:${EVENT}:call-link`))).toBe(true);
+  });
+
+  it('the pod and circle edits call it, in the background, only when who may see changed', () => {
+    const read = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../services', rel), 'utf8');
+    expect(read('pod/pod.service.ts')).toMatch(/if \('visibility' in input\) \{\s*void import\('\.\.\/session\/event-link\.service'\)\.then\(\(links\) => links\.refreshEventLinksOf\(\{ podId \}\)\)/);
+    expect(read('circle/circle.service.ts')).toMatch(/if \(input\.joinPolicy === undefined\) return;\s*void import\('\.\.\/session\/event-link\.service'\)\.then\(\(links\) => links\.refreshEventLinksOf\(\{ circleId \}\)\)/);
   });
 });
 

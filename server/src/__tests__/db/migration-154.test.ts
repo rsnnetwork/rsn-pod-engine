@@ -40,6 +40,13 @@ describe('migration 154 (event links)', () => {
     expect((f.match(/created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)/g) ?? []).length).toBe(2);
   });
 
+  it('keeps whether a call code was given while the event was not public (ruling a), and indexes old links by name and number', () => {
+    const f = flat(sql);
+    expect(f).toContain('ALTER TABLE sessions ADD COLUMN IF NOT EXISTS call_code_private BOOLEAN NOT NULL DEFAULT FALSE;');
+    expect(f).toContain('call_code_private = ordered.secret');
+    expect(f).toContain('CREATE INDEX IF NOT EXISTS idx_event_link_aliases_name_number ON event_link_aliases (name, number);');
+  });
+
   it('backfills only events without a link, as rsn, in the order made, and raises every counter to what was given', () => {
     const f = flat(sql);
     expect(f).toContain('WHERE s.link_name IS NULL');

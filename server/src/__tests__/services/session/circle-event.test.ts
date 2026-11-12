@@ -8,7 +8,8 @@
 const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
-  transaction: jest.fn(),
+  // An edit that can move the event link saves the row and the link in one transaction (review M4).
+  transaction: (cb: (c: unknown) => Promise<unknown>) => cb({ query: (...args: unknown[]) => mockQuery(...args) }),
   __esModule: true,
 }));
 jest.mock('../../../config/logger', () => ({
@@ -42,6 +43,12 @@ const mockEnsureEventLink = jest.fn().mockResolvedValue({ name: 'rsn', number: 1
 jest.mock('../../../services/session/event-link.service', () => ({
   ...jest.requireActual('../../../services/session/event-link.service'),
   ensureEventLink: (...args: unknown[]) => mockEnsureEventLink(...args),
+  ensureEventLinkIn: () => Promise.resolve({ parts: { name: 'rsn', number: 1, tail: 'k7m2q9' }, changed: false }),
+}));
+// The call code likewise: its own tests are call-link.test.ts.
+jest.mock('../../../services/session/call-link.service', () => ({
+  ...jest.requireActual('../../../services/session/call-link.service'),
+  ensureCallCode: () => Promise.resolve('k7m2x9q4ra'),
 }));
 
 import { PodType, UserRole } from '@rsn/shared';

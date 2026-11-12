@@ -123,6 +123,21 @@ async function admissionTriesBucket(req: Request, res: Response, next: NextFunct
   }
 }
 
+/**
+ * The event a link names, for the per-event, per-address bucket of code emails (callLinkEmailTargetLimiter): its call
+ * code, its event link and every old link it still answers to share one bucket of five (review M1). A link that names
+ * nothing leaves the bucket on the link as typed; its 404 counts toward callLinkMissLimiter.
+ */
+async function emailBucketEvent(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const event = await callLink.findCallEvent(req.params.code);
+    if (event) res.locals.callEventId = event.id;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ─── The signed-in person's events by link ───────────────────────────────────
 
 router.get('/me/events', authenticate, callEntryLimiter, async (req: Request, res: Response, next: NextFunction) => {
@@ -149,7 +164,7 @@ router.get('/:code', callLinkMissLimiter, callLinkReadLimiter, optionalAuth,
 // ─── Identify: the code by email, then the code back ─────────────────────────
 
 router.post('/:code/email', callLinkMissLimiter, callLinkEmailLimiter,
-  validate(emailSchema, 'body', CHECK_INPUT), callLinkEmailTargetLimiter,
+  validate(emailSchema, 'body', CHECK_INPUT), emailBucketEvent, callLinkEmailTargetLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { email, clientUrl } = req.body as z.infer<typeof emailSchema>;

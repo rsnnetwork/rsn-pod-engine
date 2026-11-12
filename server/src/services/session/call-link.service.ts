@@ -8,13 +8,12 @@
 // it) and a deleted event's all answer one identical 404, "We couldn't find that event.", so a code tells nothing about
 // an event someone may not see. The routes add per-address limits that count only those 404s.
 
-import crypto from 'crypto';
 import {
-  CALL_CODE_ALPHABET, CALL_CODE_LENGTH, DEFAULT_GROUP_QUESTION, ErrorCodes, callLinkPath, eventDurationMinutes,
+  DEFAULT_GROUP_QUESTION, ErrorCodes, callLinkPath, eventDurationMinutes,
   eventLifecycleOf, eventLinkPath, eventLinkSlug, eventZone, isEventPublication, normaliseCallCode, parseEventLinkSlug,
   resolveEventFormat,
   type AccountKind, type AdmissionMode, type CallLanding, type CallLandingGroupAsk, type EffectiveAdmission,
-  type EventLifecycle, type EventLinksForOrganiser, type EventVisibility, type UserRole,
+  type EventLifecycle, type EventLinkInfo, type EventLinksForOrganiser, type EventVisibility, type UserRole,
 } from '@rsn/shared';
 import { query, transaction } from '../../db';
 import { clientOriginConfig, firstAllowedClientBaseUrl } from '../identity/client-origin';
@@ -31,8 +30,8 @@ import { questionsToAsk } from './event-questions.service';
 import { readEventAccessFacts, runsEvent } from './event-access';
 import { eventImageColumns, eventImageUrlOf } from './event-image-url';
 import {
-  ensureEventLink, eventLinkInfo, eventLinkMatchSql, eventLinkNeedsTailSql, rotateEventLinkTail, settledEventLink,
-  type EventLinkColumns,
+  ensureEventLink, eventLinkInfo, eventLinkMatchSql, eventLinkNeedsTailSql, newCallCode, rotateEventLinkTail,
+  settledEventLink, type EventLinkColumns,
 } from './event-link.service';
 
 /** The one answer for a code that leads nowhere the asker may go: malformed, unknown, a hidden draft, a deleted event. */
@@ -42,12 +41,8 @@ export function callLinkNotFound(): NotFoundError {
   return new NotFoundError('Session', undefined, CALL_LINK_NOT_FOUND);
 }
 
-/** A new call code: CALL_CODE_LENGTH symbols, each drawn from the operating system's random source. */
-export function newCallCode(): string {
-  let code = '';
-  for (let i = 0; i < CALL_CODE_LENGTH; i++) code += CALL_CODE_ALPHABET[crypto.randomInt(CALL_CODE_ALPHABET.length)];
-  return code;
-}
+// A new call code (event-link.service.ts draws it: turning an event private replaces its public code there too).
+export { newCallCode };
 
 const UNIQUE_VIOLATION = '23505';
 const CODE_TRIES = 3;
@@ -78,7 +73,9 @@ export async function ensureCallCode(sessionId: string): Promise<string> {
     if (current.rows[0].call_code) return current.rows[0].call_code;
     try {
       const set = await query<{ call_code: string }>(
-        `UPDATE sessions SET call_code = $2 WHERE id = $1 AND call_code IS NULL RETURNING call_code`,
+        // Given while the event is not public, a code keeps working while it stays so; else it is a public one.
+        `UPDATE sessions s SET call_code = $2, call_code_private = ${eventLinkNeedsTailSql('s')}
+          WHERE s.id = $1 AND s.call_code IS NULL RETURNING s.call_code`,
         [sessionId, newCallCode()],
       );
       if (set.rows[0]) {
@@ -113,15 +110,17 @@ export async function getCallLinkForOrganiser(
   opts: { origin?: string } = {},
 ): Promise<EventLinksForOrganiser> {
   await requireOrganiser(sessionId, actor);
+  // The event link first: putting it right may replace a call code given out while the event was public.
+  let eventLink: EventLinkInfo | null = null;
+  try {
+    eventLink = await eventLinkInfo(sessionId, opts);
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'getCallLinkForOrganiser: the event link could not be read');
+  }
   const code = await ensureCallCode(sessionId);
   const base = firstAllowedClientBaseUrl([opts.origin], clientOriginConfig());
   const callLink = { code, path: callLinkPath(code), url: `${base}${callLinkPath(code)}` };
-  try {
-    return { ...callLink, eventLink: await eventLinkInfo(sessionId, opts) };
-  } catch (err) {
-    logger.warn({ err, sessionId }, 'getCallLinkForOrganiser: the event link could not be read');
-    return callLink;
-  }
+  return eventLink ? { ...callLink, eventLink } : callLink;
 }
 
 /**
@@ -136,7 +135,7 @@ export async function rotateCallCode(sessionId: string, actor: Actor): Promise<s
     try {
       const code = await transaction(async (client) => {
         const set = await client.query<{ call_code: string }>(
-          `UPDATE sessions SET call_code = $2 WHERE id = $1 RETURNING call_code`,
+          `UPDATE sessions s SET call_code = $2, call_code_private = ${eventLinkNeedsTailSql('s')} WHERE s.id = $1 RETURNING s.call_code`,
           [sessionId, newCallCode()],
         );
         if (!set.rows[0]) throw callLinkNotFound();
@@ -185,7 +184,7 @@ export interface CallEventRow extends EventLinkColumns {
 const CALL_EVENT_COLUMNS = `s.id, s.call_code, s.title, s.description, s.scheduled_at, s.config, s.event_format, s.status::text AS status,
             s.publication, s.archived_at, s.registration_opens_at, s.visibility, s.admission_mode, s.host_user_id,
             h.display_name AS host_name, h.avatar_url AS host_avatar, s.timezone, ${eventImageColumns('s')},
-            s.link_name, s.link_number, s.link_tail, ${eventLinkNeedsTailSql('s')} AS link_needs_tail`;
+            s.link_name, s.link_number, s.link_tail, ${eventLinkNeedsTailSql('s')} AS link_needs_tail, s.call_code_private`;
 
 /**
  * The event a well-formed, known link names, whatever its state, or null. Callers decide who may see a draft. `raw` is an
@@ -204,9 +203,12 @@ export async function findCallEvent(raw: string): Promise<CallEventRow | null> {
   }
   const code = normaliseCallCode(raw);
   if (!code) return null;
+  // A code given out while the event was public opens it only while it is public (controller ruling, 12 Nov 2026): once
+  // it is private or invitation-only, that code is the same 404 as its bare event link.
   const result = await query<CallEventRow>(
     `SELECT ${CALL_EVENT_COLUMNS}
-       FROM sessions s LEFT JOIN users h ON h.id = s.host_user_id WHERE s.call_code = $1`,
+       FROM sessions s LEFT JOIN users h ON h.id = s.host_user_id WHERE s.call_code = $1
+        AND (s.call_code_private OR NOT ${eventLinkNeedsTailSql('s')})`,
     [code],
   );
   return result.rows[0] ? { ...result.rows[0], reached_by: 'call_code' } : null;

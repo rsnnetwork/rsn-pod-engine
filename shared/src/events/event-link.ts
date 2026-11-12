@@ -13,8 +13,20 @@
 /** Where an event link lives on the client. The server's emails and the client's router both read this constant. */
 export const EVENT_LINK_BASE_PATH = '/events';
 
-/** The name an event gets when its organiser chooses none and nothing better is known (the platform's own). */
-export const EVENT_LINK_DEFAULT_NAME = 'rsn';
+/**
+ * RSN's own name (controller ruling, 12 Nov 2026): rsn-1, rsn-2... are RSN's events, so only platform admins (admin,
+ * super admin) may give an event this name, and it is the default only for an event an admin hosts.
+ */
+export const EVENT_LINK_PLATFORM_NAME = 'rsn';
+
+/** The names only platform admins may choose. */
+export const EVENT_LINK_PLATFORM_NAMES: readonly string[] = [EVENT_LINK_PLATFORM_NAME];
+
+/** What anyone else is told on choosing one of them. */
+export const EVENT_LINK_PLATFORM_NAME_PROBLEM = 'This name is reserved.';
+
+/** The name any other organiser's event gets when nobody chose one and no public event of its pod has one to follow. */
+export const EVENT_LINK_DEFAULT_NAME = 'event';
 
 export const EVENT_LINK_NAME_MIN = 2;
 export const EVENT_LINK_NAME_MAX = 40;
@@ -30,11 +42,11 @@ const NUMBER_DIGITS_MAX = 9;
 
 /**
  * Names nobody may choose: the app's own paths and words that would read as the app speaking. Profanity is not policed
- * here. "rsn" is not reserved: it is the platform default every organiser may use.
+ * here. "rsn" is RSN's own (EVENT_LINK_PLATFORM_NAMES: admins only); "event" is the default name, so it is not here.
  */
 export const EVENT_LINK_RESERVED_NAMES: readonly string[] = [
   'about', 'account', 'admin', 'administrator', 'agents', 'api', 'app', 'assets', 'auth', 'billing', 'call', 'calls',
-  'circle', 'circles', 'connections', 'create', 'dashboard', 'delete', 'edit', 'encounters', 'entities', 'event',
+  'circle', 'circles', 'connections', 'create', 'dashboard', 'delete', 'edit', 'encounters', 'entities',
   'events', 'everyone', 'feedback', 'help', 'home', 'host', 'invite', 'invites', 'join', 'live', 'login', 'logout',
   'matches', 'me', 'meet', 'meetings', 'messages', 'moderation', 'my-events', 'new', 'notifications', 'null',
   'onboarding', 'people', 'pod', 'pods', 'preview', 'privacy', 'profile', 'public', 'reason', 'recap', 'register',
@@ -65,6 +77,16 @@ export function eventLinkNameProblem(name: string): string | null {
   if (!NAME_SHAPE.test(name)) return EVENT_LINK_NAME_RULE;
   if (RESERVED.has(name)) return 'That name is kept for REASON itself. Choose another.';
   return null;
+}
+
+/**
+ * The problem with a name for this organiser: the shared rule's, then RSN's own name for anyone but a platform admin
+ * (`platform`). Null when they may use it.
+ */
+export function eventLinkNameProblemFor(name: string, who: { platform: boolean }): string | null {
+  const problem = eventLinkNameProblem(name);
+  if (problem) return problem;
+  return !who.platform && EVENT_LINK_PLATFORM_NAMES.includes(name) ? EVENT_LINK_PLATFORM_NAME_PROBLEM : null;
 }
 
 /** True for a name an event link may use. */
