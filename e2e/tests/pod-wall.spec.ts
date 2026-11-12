@@ -722,11 +722,13 @@ test('the write limit answers in words, and what was typed stays', async () => {
   expect((await apiAs(dora, 'POST', `/pods/${podId}/wall/posts`, { clientId: crypto.randomUUID(), content: seed })).status).toBe(201);
   const postId = await postIdOf(seed);
 
-  // 60 writes a minute are allowed. The same reaction sent again changes nothing, but it counts.
+  // 60 writes a minute are allowed. The same reaction sent again changes nothing, but it counts. They go ten at a time,
+  // so all 70 land inside one minute however slow the network is (one after another they could straddle the window).
   let limited: { status: number; json: { error: { message: string } } } | null = null;
-  for (let i = 0; i < 70 && !limited; i++) {
-    const r = await apiAs(dora, 'POST', `/pods/${podId}/wall/posts/${postId}/react`, { reaction: 'like' });
-    if (r.status === 429) limited = r;
+  for (let i = 0; i < 7 && !limited; i++) {
+    const batch = await Promise.all(Array.from({ length: 10 }, () =>
+      apiAs(dora, 'POST', `/pods/${podId}/wall/posts/${postId}/react`, { reaction: 'like' })));
+    limited = batch.find((r) => r.status === 429) ?? null;
   }
   expect(limited, 'a 429 inside 70 writes').not.toBeNull();
   expect(limited!.json.error.message).toBe('Slow down a moment, then try again.');

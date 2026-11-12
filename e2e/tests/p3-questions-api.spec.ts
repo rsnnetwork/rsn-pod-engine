@@ -74,6 +74,9 @@ test.beforeAll(async () => {
   await pool.query(`INSERT INTO pods (id, name, created_by, visibility, status, pod_type) VALUES ($1, $2, $3, 'private', 'active', 'speed_networking')`,
     [podId, `P3T5 pod ${RUN}`, people[0].id]);
   await pool.query(`INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'director', 'active')`, [podId, people[0].id]);
+  // The member is in the pod (a private pod's event is seen only by its members): they see the event, so the questions
+  // refuse them as someone who does not run it (403), not as someone who cannot see it (404).
+  await pool.query(`INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')`, [podId, people[1].id]);
 });
 
 test.afterAll(async () => {
