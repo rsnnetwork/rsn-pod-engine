@@ -45,7 +45,7 @@ import {
 } from './event-access';
 import { checkRegistrationGroups } from './event-groups.service';
 import { applyRegistrationAnswers } from './event-questions.service';
-import { ensureCallCode } from './call-link.service';
+import { workingCallCode } from './call-link.service';
 import { isLiveStatus } from './main-room';
 import { ringEventBells } from './event-notices';
 import {
@@ -556,6 +556,9 @@ interface PromotedPersonRow {
   account_kind: string | null;
 }
 
+/** An event guest's home on the client (client/src/features/call/guest-routes.ts GUEST_HOME_PATH): their events by link. */
+const GUEST_HOME_PATH = '/my-events';
+
 /** The bell's words: before the start, or while it is live (Part 3 Task 3 copy). */
 export function promotionBell(event: { title: string; live: boolean; scheduledAt: Date | string | null; timezone: string | null }, now: Date = new Date()): { title: string; body: string } {
   const title = `A place opened in ${event.title}: it's yours`;
@@ -585,9 +588,16 @@ async function announcePromotions(sessionId: string, userIds: string[]): Promise
     )).rows;
     const guests = people.filter((p) => p.account_kind === 'event_guest');
     const members = people.filter((p) => p.account_kind !== 'event_guest');
-    const code = guests.length > 0 ? (event.call_code ?? await ensureCallCode(sessionId)) : event.call_code;
+    // A guest's link must open the event now (rereview minor 2): the event link is put right first, which replaces a code
+    // given out while the event was public. When it cannot be, the guest home, which lists their events by their links.
+    const code = guests.length > 0
+      ? await workingCallCode(sessionId).catch((err) => {
+        logger.warn({ err, sessionId }, 'announcePromotions: no working call code; the guest home instead');
+        return null;
+      })
+      : null;
     const memberPath = `/sessions/${sessionId}`;
-    const guestPath = code ? callLinkPath(code) : memberPath;
+    const guestPath = code ? callLinkPath(code) : GUEST_HOME_PATH;
     const live = isLiveStatus(event.status);
     const bell = promotionBell({ title: event.title, live, scheduledAt: event.scheduled_at, timezone: event.timezone });
     await ringEventBells('event_waitlist_promoted', members.map((p) => ({ userId: p.id, title: bell.title })), bell.body, memberPath);

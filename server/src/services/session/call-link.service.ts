@@ -30,8 +30,8 @@ import { questionsToAsk } from './event-questions.service';
 import { readEventAccessFacts, runsEvent } from './event-access';
 import { eventImageColumns, eventImageUrlOf } from './event-image-url';
 import {
-  ensureEventLink, eventLinkInfo, eventLinkMatchSql, eventLinkNeedsTailSql, newCallCode, rotateEventLinkTail,
-  settledEventLink, type EventLinkColumns,
+  ensureEventLink, ensureEventLinkState, eventLinkInfo, eventLinkMatchSql, eventLinkNeedsTailSql, newCallCode,
+  rotateEventLinkTail, settledEventLink, type EventLinkColumns,
 } from './event-link.service';
 
 /** The one answer for a code that leads nowhere the asker may go: malformed, unknown, a hidden draft, a deleted event. */
@@ -59,6 +59,15 @@ async function fanoutCallLink(sessionId: string): Promise<void> {
   } catch (err) {
     logger.warn({ err, sessionId }, 'fanoutCallLink: failed to fan out');
   }
+}
+
+/**
+ * A call code that opens the event now, for links the server sends on its own (a promoted guest's bell and email):
+ * the event link is put right first, which replaces a code given out while the event was public (rereview minor 2).
+ */
+export async function workingCallCode(sessionId: string): Promise<string> {
+  const state = await ensureEventLinkState(sessionId);
+  return state.callCode ?? ensureCallCode(sessionId);
 }
 
 /**
@@ -110,17 +119,20 @@ export async function getCallLinkForOrganiser(
   opts: { origin?: string } = {},
 ): Promise<EventLinksForOrganiser> {
   await requireOrganiser(sessionId, actor);
-  // The event link first: putting it right may replace a call code given out while the event was public.
-  let eventLink: EventLinkInfo | null = null;
+  // The event link first: putting it right may replace a call code given out while the event was public. When it
+  // cannot be read, nothing is shown rather than a call link that may be dead (rereview minor 1): the card says so and
+  // offers to try again.
+  let eventLink: EventLinkInfo;
   try {
     eventLink = await eventLinkInfo(sessionId, opts);
   } catch (err) {
+    if (err instanceof AppError && err.statusCode < 500) throw err;
     logger.warn({ err, sessionId }, 'getCallLinkForOrganiser: the event link could not be read');
+    throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, 'We could not read the event link just now. Please try again.');
   }
   const code = await ensureCallCode(sessionId);
   const base = firstAllowedClientBaseUrl([opts.origin], clientOriginConfig());
-  const callLink = { code, path: callLinkPath(code), url: `${base}${callLinkPath(code)}` };
-  return eventLink ? { ...callLink, eventLink } : callLink;
+  return { code, path: callLinkPath(code), url: `${base}${callLinkPath(code)}`, eventLink };
 }
 
 /**

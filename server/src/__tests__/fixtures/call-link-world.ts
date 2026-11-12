@@ -402,6 +402,28 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     const h = e ? userById(e.host_user_id) : undefined;
     return rows(e ? [{ ...e, host_name: h?.display_name ?? null, host_avatar: null, link_needs_tail: needsTail(e) }] : []);
   }
+  if (sql.startsWith('SELECT s.id, s.pod_id, s.circle_id, s.link_name, s.link_number, s.link_tail,') && sql.includes('WHERE s.pod_id = $1')) {
+    return rows([...world.events].reverse().filter((x) => x.pod_id === params[0] && !['completed', 'cancelled'].includes(x.status)).map((e) => ({
+      id: e.id, pod_id: e.pod_id, circle_id: null, link_name: e.link_name, link_number: e.link_number, link_tail: e.link_tail,
+      needs_tail: needsTail(e), call_code: e.call_code, call_code_private: e.call_code_private, host_is_admin: isPlatformAdmin(e.host_user_id),
+    })));
+  }
+  if (sql === 'SELECT 1 FROM sessions WHERE call_code = $1') {
+    return rows(world.events.some((x) => x.call_code === params[0]) ? [{}] : []);
+  }
+  if (sql.startsWith('SELECT el_s.id AS session_id, el_who.user_id FROM sessions el_s CROSS JOIN LATERAL')) {
+    const out: Array<{ session_id: string; user_id: string }> = [];
+    for (const id of params[0] as string[]) {
+      const e = eventById(id);
+      if (!e) continue;
+      const who = new Set<string>([e.host_user_id]);
+      for (const k of world.places.keys()) if (k.startsWith(`${id}:`)) who.add(k.slice(id.length + 1));
+      for (const [k, status] of world.requests) if (k.startsWith(`${id}:`) && ['pending', 'approved', 'declined'].includes(status)) who.add(k.slice(id.length + 1));
+      for (const l of world.line) if (l.session_id === id && l.status === 'waiting') who.add(l.user_id);
+      for (const u of who) out.push({ session_id: id, user_id: u });
+    }
+    return rows(out);
+  }
   if (sql.startsWith('SELECT s.id, s.pod_id, s.circle_id, s.link_name, s.link_number, s.link_tail,')) {
     const e = eventById(params[0]);
     return rows(e ? [{

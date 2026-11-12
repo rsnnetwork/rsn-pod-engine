@@ -341,6 +341,18 @@ describe('the old call link keeps working', () => {
 });
 
 describe('the organisers\' card', () => {
+  it('when the event link cannot be read, the card gets a 503, never a call link that may be dead (rereview minor 1)', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public' });
+    eventOf().visibility = 'private';
+    const links = jest.requireActual('../../../services/session/event-link.service');
+    const spy = jest.spyOn(links, 'eventLinkInfo').mockRejectedValueOnce(new Error('connection reset'));
+    try {
+      expect(await refusal(getCallLinkForOrganiser(EVENT, host))).toMatchObject({ status: 503, message: 'We could not read the event link just now. Please try again.' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('carries the event link, whether it has a tail, and the address on the site asked from', async () => {
     addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'private' });
     const tail = eventOf().link_tail!;
@@ -424,6 +436,31 @@ describe('a pod or circle that changes who may see its events (review M5)', () =
     expect(eventOf().call_code).not.toBe('k7m2x9q4ra');
     expect(eventOf(uuid(150)).link_tail).toBeNull();
     expect(mockEmit.mock.calls.some(([, , tags]) => (tags as string[]).includes(`session:${EVENT}:call-link`))).toBe(true);
+  });
+
+  it('one read for all the pod\'s events; only the unsettled are written; their guests are told too (rereview minor 3)', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: null, pod_visibility: 'public', admission_mode: null });
+    addEvent({ id: uuid(151), call_code: 'aaaaaaaaaa', visibility: 'private', pod_visibility: 'public' });
+    addEvent({ id: uuid(152), call_code: 'bbbbbbbbbb', visibility: 'public', pod_visibility: 'public' });
+    world.places.set(`${EVENT}:${MEMBER}`, { status: 'registered', admitted_via: 'open' });
+    for (const e of world.events) e.pod_visibility = 'private';
+    world.sql = [];
+    world.writes = [];
+    mockEmit.mockClear();
+    await refreshEventLinksOf({ podId: 'pod-1' });
+    // One read of the pod's events; uuid(151) (private, settled) and uuid(152) (public by its own visibility) unwritten.
+    expect(world.sql.filter((s) => s.includes('WHERE s.pod_id = $1'))).toHaveLength(1);
+    expect(world.writes.filter((w) => w.startsWith('link:'))).toEqual([`link:${EVENT}`]);
+    const toMember = mockEmit.mock.calls.filter(([, people]) => (people as string[])[0] === MEMBER).flatMap(([, , tags]) => tags as string[]);
+    expect(toMember).toEqual(expect.arrayContaining([`session:${EVENT}:call-link`, `session:${EVENT}`, `user:${MEMBER}:sessions`]));
+    // Each person gets only their own user tag.
+    for (const [, people, tags] of mockEmit.mock.calls) {
+      for (const tag of tags as string[]) if (tag.startsWith('user:')) expect(tag).toBe(`user:${(people as string[])[0]}:sessions`);
+    }
+  });
+
+  it('it never throws, whatever fails', async () => {
+    await expect(refreshEventLinksOf({ circleId: 'no-such-circle' })).resolves.toBeUndefined();
   });
 
   it('the pod and circle edits call it, in the background, only when who may see changed', () => {

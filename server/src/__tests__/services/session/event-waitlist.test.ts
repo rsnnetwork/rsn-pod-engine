@@ -57,8 +57,10 @@ jest.mock('../../../services/calendar/calendar.service', () => ({
   buildSessionCalendarEvent: async (sessionId: string) => ({ title: 'Founders breakfast', startTime: new Date(), durationMinutes: 60, sessionId }),
   __esModule: true,
 }));
+const mockWorkingCallCode = jest.fn();
 jest.mock('../../../services/session/call-link.service', () => ({
   ensureCallCode: async () => 'k7m2x9q4ra',
+  workingCallCode: (...a: unknown[]) => mockWorkingCallCode(...a),
   __esModule: true,
 }));
 jest.mock('../../../services/post-event-message/event-organisers', () => ({
@@ -125,6 +127,7 @@ beforeEach(() => {
   mockPromotedEmail.mockReset();
   mockEmailEnabled.mockReset();
   mockEmailEnabled.mockResolvedValue(true);
+  mockWorkingCallCode.mockReset().mockResolvedValue('m4n5p6q7r8');
 });
 
 describe('a full event puts the next person on its waiting list, and a freed place goes to the first in line', () => {
@@ -177,6 +180,28 @@ describe('a full event puts the next person on its waiting list, and a freed pla
     expect(toC).toEqual(expect.arrayContaining([`session:${EVENT}`, `user:${C}:sessions`, `session:${EVENT}:participants`]));
     expect(mockFanout).toHaveBeenCalledWith('pod-1', EVENT, expect.arrayContaining([`session:${EVENT}:waitlist`, `user:${C}:sessions`]));
     expect(world.rows.audit.find((r) => r.action === 'waitlist.promoted')).toMatchObject({ details: { automatic: true, subjectUserIds: [C] } });
+  });
+
+  it('a promoted event guest\'s bell and email open a call link that works now (rereview minor 2)', async () => {
+    await fullEventWithLine();
+    world.rows.users.find((u) => u.id === C)!.account_kind = 'event_guest';
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    await flush();
+    expect(mockWorkingCallCode).toHaveBeenCalledWith(EVENT);
+    expect(bellsOf(C)[0]).toMatchObject({ link: '/call/m4n5p6q7r8' });
+    expect(mockPromotedEmail).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ link: 'https://app.rsn.network/call/m4n5p6q7r8' }));
+  });
+
+  it('when no working link can be made, the guest is sent to their guest home, never to a link that may be dead', async () => {
+    await fullEventWithLine();
+    world.rows.users.find((u) => u.id === C)!.account_kind = 'event_guest';
+    mockWorkingCallCode.mockRejectedValueOnce(new Error('connection reset'));
+    await unregisterParticipant(EVENT, A);
+    await afterPlaceFreed(EVENT, 'unregister');
+    await flush();
+    expect(bellsOf(C)[0]).toMatchObject({ link: '/my-events' });
+    expect(mockPromotedEmail).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ link: 'https://app.rsn.network/my-events' }));
   });
 
   it('the organiser raises the capacity to 4: D is promoted too', async () => {
