@@ -797,6 +797,17 @@ describe('the event link (/events/<name>-<n>[-<tail>], Stefan 11 Nov 2026) is a 
     expect(new URL(mail.link).pathname).toBe(`/call/${CODE}`);
   });
 
+  it('a person\'s private event that still holds a public code lists a new, working code (read after the fix-up)', async () => {
+    addEvent({ id: EVENT, call_code: CODE, visibility: 'public' });
+    world.places.set(key(EVENT, MEMBER), { status: 'registered', admitted_via: 'open' });
+    world.events[0].visibility = 'private';
+    const [listed] = await listMyCallEvents(MEMBER);
+    expect(listed.code).not.toBe(CODE);
+    expect(listed.code).toBe(world.events[0].call_code);
+    expect(listed.linkPath).toBe(`/events/rsn-1-${world.events[0].link_tail}`);
+    expect((await getCallLanding(listed.code, null)).title).toBe('Founders breakfast');
+  });
+
   it('a person\'s events carry each event\'s link (its tail when private), beside the code as before', async () => {
     addEvent({ id: EVENT, call_code: CODE, visibility: 'public' });
     addEvent({ id: uuid(101), call_code: 'cccccccccc', visibility: 'private' });

@@ -43,7 +43,6 @@ import { query, transaction } from '../../db';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from '../../middleware/errors';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { E } from '../../realtime/entities';
-import { resolveEventOrganiserIds } from '../post-event-message/event-organisers';
 import { clientOriginConfig, firstAllowedClientBaseUrl } from '../identity/client-origin';
 import type { Actor } from '../roles/actor';
 
@@ -235,13 +234,41 @@ async function keepAsAlias(client: Runner, sessionId: string, parts: EventLinkPa
 
 /** The event's organisers' cards and pages, told its link changed. Best-effort: a failure never undoes the write. */
 export async function fanoutEventLink(sessionId: string): Promise<void> {
+  await fanoutEventLinks([sessionId]);
+}
+
+/**
+ * The people who may be looking at these events' links, told they changed, in one read for all of them: the
+ * organisers (host, co-hosts, the pod's active directors and hosts) get session:<id>:call-link and session:<id>; the
+ * event's people (a place of any status, a request, the waiting list) also get their own user:<id>:sessions, the guest
+ * home's list of their events by link (rereview minor 3). Each person is sent only their own tags. Never throws.
+ */
+export async function fanoutEventLinks(sessionIds: string[]): Promise<void> {
   const io = getRealtimeIo();
-  if (!io) return;
+  if (!io || sessionIds.length === 0) return;
   try {
-    const organisers = await resolveEventOrganiserIds(sessionId);
-    await emitEntities(io, organisers, [E.sessionCallLink(sessionId), E.session(sessionId)]);
+    const r = await query<{ session_id: string; user_id: string | null }>(
+      `SELECT el_s.id AS session_id, el_who.user_id
+         FROM sessions el_s
+         CROSS JOIN LATERAL (
+           SELECT el_s.host_user_id AS user_id
+           UNION SELECT c.user_id FROM session_cohosts c WHERE c.session_id = el_s.id
+           UNION SELECT pm.user_id FROM pod_members pm
+                  WHERE pm.pod_id = el_s.pod_id AND pm.role IN ('director', 'host') AND pm.status = 'active'
+           UNION SELECT sp.user_id FROM session_participants sp WHERE sp.session_id = el_s.id
+           UNION SELECT jr.user_id FROM event_join_requests jr
+                  WHERE jr.session_id = el_s.id AND jr.status IN ('pending', 'approved', 'declined')
+           UNION SELECT w.user_id FROM event_waitlist w WHERE w.session_id = el_s.id AND w.status = 'waiting'
+         ) el_who
+        WHERE el_s.id = ANY($1::uuid[])`,
+      [sessionIds],
+    );
+    for (const { session_id: sessionId, user_id: userId } of r.rows) {
+      if (!userId) continue;
+      await emitEntities(io, [userId], [E.sessionCallLink(sessionId), E.session(sessionId), E.userSessions(userId)]);
+    }
   } catch (err) {
-    logger.warn({ err, sessionId }, 'fanoutEventLink: failed to fan out');
+    logger.warn({ err, sessionIds }, 'fanoutEventLinks: failed to fan out');
   }
 }
 
@@ -251,15 +278,26 @@ export async function fanoutEventLink(sessionId: string): Promise<void> {
  * dropped (kept as an alias). Under the event row's lock, so two writers agree. 404 when the event does not exist.
  */
 export async function ensureEventLink(sessionId: string, wantedName?: string): Promise<EventLinkParts> {
+  return (await ensureEventLinkState(sessionId, wantedName)).parts;
+}
+
+/**
+ * ensureEventLink, also answering the event's call code as it is once the link is right (a public code on an event that
+ * is not public is replaced on the way: rereview minor 1). `callCode` is null for an event that has none yet.
+ */
+export async function ensureEventLinkState(
+  sessionId: string, wantedName?: string,
+): Promise<{ parts: EventLinkParts; callCode: string | null }> {
   if (wantedName === undefined) {
     const now = await query<LinkRow>(LINK_ROW_SQL(false), [sessionId]);
-    if (!now.rows[0]) throw new NotFoundError('Session', sessionId, NOT_FOUND);
-    const settled = settledEventLink({ ...now.rows[0], link_needs_tail: now.rows[0].needs_tail });
-    if (settled) return settled;
+    const row = now.rows[0];
+    if (!row) throw new NotFoundError('Session', sessionId, NOT_FOUND);
+    const settled = settledEventLink({ ...row, link_needs_tail: row.needs_tail });
+    if (settled) return { parts: settled, callCode: row.call_code };
   }
   const outcome = await transaction((client) => ensureEventLinkIn(client, sessionId, wantedName));
   if (outcome.changed) void fanoutEventLink(sessionId);
-  return outcome.parts;
+  return { parts: outcome.parts, callCode: outcome.callCode };
 }
 
 /**
@@ -269,7 +307,7 @@ export async function ensureEventLink(sessionId: string, wantedName?: string): P
  */
 export async function ensureEventLinkIn(
   client: Runner, sessionId: string, wantedName?: string,
-): Promise<{ parts: EventLinkParts; changed: boolean }> {
+): Promise<{ parts: EventLinkParts; changed: boolean; callCode: string | null }> {
   const locked = await client.query<LinkRow>(LINK_ROW_SQL(true), [sessionId]);
   const row = locked.rows[0];
   if (!row) throw new NotFoundError('Session', sessionId, NOT_FOUND);
@@ -278,7 +316,7 @@ export async function ensureEventLinkIn(
 
 async function writeEventLink(
   client: Runner, row: LinkRow, wantedName: string | undefined,
-): Promise<{ parts: EventLinkParts; changed: boolean }> {
+): Promise<{ parts: EventLinkParts; changed: boolean; callCode: string | null }> {
   const before: EventLinkParts | null = row.link_name && row.link_number
     ? { name: row.link_name, number: row.link_number, tail: row.link_tail }
     : null;
@@ -309,7 +347,7 @@ async function writeEventLink(
   let callCode = row.call_code;
   let codePrivate = row.call_code_private;
   if (callCode && row.needs_tail && !codePrivate) {
-    callCode = newCallCode();
+    callCode = await unusedCallCode(client);
     codePrivate = true;
   } else if (callCode && !row.needs_tail && codePrivate) {
     codePrivate = false;
@@ -322,7 +360,22 @@ async function writeEventLink(
       [row.id, parts.name, parts.number, parts.tail, callCode, codePrivate],
     );
   }
-  return { parts, changed };
+  return { parts, changed, callCode };
+}
+
+const CODE_TRIES = 3;
+
+/**
+ * A new call code no event holds (read inside the caller's transaction: a code drawn twice in 2^50 is drawn again rather
+ * than failing the write on the unique index, which inside an edit's transaction would undo the whole edit).
+ */
+async function unusedCallCode(client: Runner): Promise<string> {
+  for (let attempt = 0; attempt < CODE_TRIES; attempt++) {
+    const code = newCallCode();
+    const held = await client.query(`SELECT 1 FROM sessions WHERE call_code = $1`, [code]);
+    if (held.rows.length === 0) return code;
+  }
+  throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, 'We could not make the event link just now. Please try again.');
 }
 
 /** The number the event had under `name` before (its own old link), taken back from the aliases; else null. */
@@ -470,18 +523,28 @@ const REFRESH_MAX = 500;
 export async function refreshEventLinksOf(scope: { podId: string } | { circleId: string }): Promise<void> {
   const [column, id] = 'podId' in scope ? ['pod_id', scope.podId] : ['circle_id', scope.circleId];
   try {
-    const events = await query<{ id: string }>(
-      `SELECT id FROM sessions WHERE ${column} = $1 AND status::text NOT IN ('completed', 'cancelled')
-        ORDER BY created_at DESC LIMIT ${REFRESH_MAX}`,
+    // One read for all of them (rereview minor 3): only an event whose link is not right now is written, each under its
+    // own row lock; then one fan-out for every event that changed.
+    const events = await query<LinkRow>(
+      `SELECT s.id, s.pod_id, s.circle_id, s.link_name, s.link_number, s.link_tail,
+              ${eventLinkNeedsTailSql('s')} AS needs_tail, s.call_code, s.call_code_private,
+              ${hostIsPlatformAdminSql('s')} AS host_is_admin
+         FROM sessions s
+        WHERE s.${column} = $1 AND s.status::text NOT IN ('completed', 'cancelled')
+        ORDER BY s.created_at DESC LIMIT ${REFRESH_MAX}`,
       [id],
     );
-    for (const event of events.rows) {
+    const changed: string[] = [];
+    for (const row of events.rows) {
+      if (settledEventLink({ ...row, link_needs_tail: row.needs_tail })) continue;
       try {
-        await ensureEventLink(event.id);
+        const outcome = await transaction((client) => ensureEventLinkIn(client, row.id));
+        if (outcome.changed) changed.push(row.id);
       } catch (err) {
-        logger.warn({ err, sessionId: event.id }, 'refreshEventLinksOf: one event link was not brought up to date');
+        logger.warn({ err, sessionId: row.id }, 'refreshEventLinksOf: one event link was not brought up to date');
       }
     }
+    await fanoutEventLinks(changed);
   } catch (err) {
     logger.warn({ err, ...scope }, 'refreshEventLinksOf: the events were not read');
   }
