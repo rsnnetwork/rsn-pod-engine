@@ -31,7 +31,7 @@ import {
 import { applyRegistrationGroups } from './event-groups.service';
 import { applyRegistrationAnswers } from './event-questions.service';
 import { ensureCallCode } from './call-link.service';
-import { ensureEventLink } from './event-link.service';
+import { ensureEventLink, ensureEventLinkIn, fanoutEventLink, platformNameRefusal } from './event-link.service';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
 import { notifyEventRescheduled } from './event-notices';
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
@@ -168,6 +168,10 @@ export async function createSession(userId: string, input: CreateSessionInput, u
     }
   }
 
+  // RSN's own link name ("rsn") is a platform admin's to give (controller ruling, 12 Nov 2026), refused before anything is written.
+  const reservedName = platformNameRefusal(input.linkName, !!isAdmin);
+  if (reservedName) throw reservedName;
+
   // Only an active pod takes a new event (H2b item 5, 26 Oct 2026). The forms offer active pods only; this is the
   // server's own check, so an archived, suspended or draft pod's id scheduled nothing.
   if (pod.status !== PodStatus.ACTIVE) {
@@ -285,6 +289,10 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     throw new AppError(400, 'SESSION_ALREADY_STARTED', 'Cannot update an event that has already started');
   }
 
+  // RSN's own link name is a platform admin's to give; an event that already has it keeps it on any edit.
+  const reservedName = platformNameRefusal(input.linkName !== session.linkName ? input.linkName : undefined, !!isAdmin);
+  if (reservedName) throw reservedName;
+
   // 26 Oct 2026 — a scheduled event may switch to another format its pod holds. Keeping its format needs no
   // pod check, so an event survives a later change of its pod's type. Production's old edit form sends no
   // format: the event keeps the one it has.
@@ -386,7 +394,8 @@ export async function updateSession(sessionId: string, userId: string, input: Up
   }
 
   // The event link follows the edit: a new name, or a visibility or circle that adds or drops its tail
-  // (event-link.service.ts says why each rule is as it is). After the row's own write, so the tail reads the new access.
+  // (event-link.service.ts says why each rule is as it is). After the row's own write and in the same transaction, so the
+  // tail reads the new access and a link that cannot be written leaves nothing of the edit saved (review M4).
   const linkMayChange = input.linkName !== undefined || input.visibility !== undefined || circleChanges;
 
   if (setClauses.length === 0) {
@@ -396,12 +405,18 @@ export async function updateSession(sessionId: string, userId: string, input: Up
   }
 
   values.push(sessionId);
-  const updated = await query<SessionRow>(
-    `UPDATE sessions SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING ${SESSION_COLUMNS}`,
-    values
-  );
+  const updateSql = `UPDATE sessions SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING ${SESSION_COLUMNS}`;
+  let linkChanged = false;
+  const updated = linkMayChange
+    ? await transaction(async (client) => {
+      const saved = await client.query<SessionRow>(updateSql, values);
+      const link = await ensureEventLinkIn(client, sessionId, input.linkName);
+      linkChanged = link.changed;
+      return { rows: saved.rows.map((r) => ({ ...r, linkName: link.parts.name })) };
+    })
+    : await query<SessionRow>(updateSql, values);
+  if (linkChanged) void fanoutEventLink(sessionId);
   const result = { rows: updated.rows.map(withEventImageUrl) };
-  if (linkMayChange) result.rows[0] = { ...result.rows[0], linkName: (await ensureEventLink(sessionId, input.linkName)).name };
 
   // A draft's circle is told nothing yet (Part 2 Task 2): publishing it rings the circle it names then.
   if (circleChanges && session.publication !== 'draft') {

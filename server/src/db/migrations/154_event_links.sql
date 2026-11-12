@@ -13,6 +13,12 @@
 -- (services/session/event-link.service.ts decides, on every read). Rotating the call link also rotates the tail and
 -- forgets every old link that had one.
 --
+-- sessions.call_code_private (controller ruling, 12 Nov 2026): TRUE when the event's call code was given while the event
+-- was not public. A code that was not (FALSE, every new code of a public event and the default) opens the event only
+-- while it is public: once the event is private or invitation-only, its old /call/<code> links are the same 404 as its
+-- bare event link, and the event gets a new code, given while private. The backfill marks today's codes of events that
+-- are not public as given while private (they were shared while the event was private), and every other code public.
+--
 -- Every existing event gets a link here: the name 'rsn' (the platform's own: every event so far was RSN's), numbered in
 -- the order the events were made (created_at, then id), a tail for each one that is not public, from gen_random_uuid()'s
 -- random bytes (the first 6 bytes of a version 4 UUID are all random). The 'rsn' counter then starts above them.
@@ -23,6 +29,7 @@
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS link_name TEXT;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS link_number INTEGER;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS link_tail TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS call_code_private BOOLEAN NOT NULL DEFAULT FALSE;
 
 DO $$
 BEGIN
@@ -62,6 +69,8 @@ CREATE TABLE IF NOT EXISTS event_link_aliases (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_event_link_aliases_session ON event_link_aliases (session_id, name);
+-- The check that a number is not held by an old link (takeEventLinkNumber reads name and number).
+CREATE INDEX IF NOT EXISTS idx_event_link_aliases_name_number ON event_link_aliases (name, number);
 
 -- Every existing event without a link: 'rsn', in the order made, a tail when not public (the rule of
 -- eventLinkNeedsTailSql in services/session/event-link.service.ts, written out here as it stands today). NULL-safe: a
@@ -97,7 +106,8 @@ UPDATE sessions s
          || substr('23456789abcdefghijkmnpqrstuvwxyz', get_byte(ordered.r, 3) % 32 + 1, 1)
          || substr('23456789abcdefghijkmnpqrstuvwxyz', get_byte(ordered.r, 4) % 32 + 1, 1)
          || substr('23456789abcdefghijkmnpqrstuvwxyz', get_byte(ordered.r, 5) % 32 + 1, 1)
-       END
+       END,
+       call_code_private = ordered.secret
   FROM ordered, taken
  WHERE s.id = ordered.id;
 

@@ -27,6 +27,8 @@ export interface WEvent {
   event_format: string; pod_id: string; pod_name: string; pod_visibility: string;
   /** The event link (migration 154): every event added gets 'rsn' and the next number, a tail when not public. */
   link_name: string | null; link_number: number | null; link_tail: string | null;
+  /** Whether the call code was given while the event was not public (migration 154); addEvent sets it from the event. */
+  call_code_private: boolean;
 }
 /** An event link the event had before (event_link_aliases). */
 export interface WAlias { slug: string; session_id: string; name: string; number: number; secret: boolean; created: number }
@@ -115,8 +117,9 @@ export function addEvent(over: Partial<WEvent> & { id: string; call_code: string
     archived_at: null, registration_opens_at: null, visibility: 'public', admission_mode: 'open', host_user_id: uuid(1),
     scheduled_at: new Date(Date.now() + 2 * 24 * 3600_000), config: { numberOfRounds: 3 }, event_format: 'speed_networking',
     pod_id: 'pod-1', pod_name: 'Secret Pod Name', pod_visibility: 'private',
-    link_name: null, link_number: null, link_tail: null, ...over,
+    link_name: null, link_number: null, link_tail: null, call_code_private: false, ...over,
   };
+  if (!('call_code_private' in over)) e.call_code_private = needsTail(e);
   if (!('link_name' in over)) {
     const n = (world.counters.get('rsn') ?? 0) + 1;
     world.counters.set('rsn', n);
@@ -131,6 +134,8 @@ export function addEvent(over: Partial<WEvent> & { id: string; call_code: string
 const userById = (id: unknown) => world.users.find((u) => u.id === id);
 const userByEmail = (email: unknown) => world.users.find((u) => u.email === String(email).toLowerCase());
 const eventById = (id: unknown) => world.events.find((e) => e.id === id);
+/** hostIsPlatformAdminSql, read from the world's users. */
+const isPlatformAdmin = (userId: unknown) => ['admin', 'super_admin'].includes(world.users.find((u) => u.id === userId)?.role ?? '');
 
 /** The camel-cased user getUserById / getUserByEmail answer. */
 const camelUser = (u: WUser) => ({
@@ -381,7 +386,9 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     const h = e ? userById(e.host_user_id) : undefined;
     // Answered with every column the row has (the pod's name too), as a careless SELECT * would: the landing must
     // pick what it shows itself.
-    return rows(e ? [{ ...e, host_name: h?.display_name ?? null, host_avatar: null, link_needs_tail: needsTail(e) }] : []);
+    // A code given while the event was public opens it only while it is public (controller ruling, 12 Nov 2026).
+    const opens = e && (e.call_code_private || !needsTail(e));
+    return rows(opens ? [{ ...e, host_name: h?.display_name ?? null, host_avatar: null, link_needs_tail: needsTail(e) }] : []);
   }
 
   // ── sessions: the event link (migration 154; event-link.service.ts) ──
@@ -400,10 +407,13 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     return rows(e ? [{
       id: e.id, pod_id: e.pod_id, circle_id: null, link_name: e.link_name, link_number: e.link_number,
       link_tail: e.link_tail, needs_tail: needsTail(e), host_user_id: e.host_user_id,
+      call_code: e.call_code, call_code_private: e.call_code_private, host_is_admin: isPlatformAdmin(e.host_user_id),
     }] : []);
   }
-  if (sql.startsWith('SELECT link_name FROM sessions WHERE pod_id = $1 AND link_name IS NOT NULL')) {
-    const latest = [...world.events].reverse().find((x) => x.pod_id === params[0] && x.link_name && x.id !== params[1]);
+  if (sql.startsWith('SELECT s.link_name FROM sessions s WHERE s.pod_id = $1 AND s.link_name IS NOT NULL')) {
+    const platform = params[2] === true;
+    const latest = [...world.events].reverse().find((x) => x.pod_id === params[0] && x.link_name && x.id !== params[1]
+      && x.publication === 'published' && !needsTail(x) && (platform || !(params[3] as string[]).includes(x.link_name)));
     return rows(latest ? [{ link_name: latest.link_name }] : []);
   }
   if (sql.startsWith('INSERT INTO event_link_counters (name, last_number) VALUES ($1, 1) ON CONFLICT (name) DO UPDATE')) {
@@ -414,6 +424,9 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
   if (sql.startsWith('SELECT COALESCE(NOT ( ((COALESCE($2::text, s.visibility)') && sql.endsWith('AS needs_tail FROM sessions s WHERE s.id = $1')) {
     const e = eventById(params[0]);
     return rows(e ? [{ needs_tail: needsTail({ ...e, visibility: (params[1] as EventVisibility | null) ?? e.visibility }) }] : []);
+  }
+  if (sql.startsWith("SELECT id FROM sessions WHERE pod_id = $1 AND status::text NOT IN ('completed', 'cancelled')")) {
+    return rows([...world.events].reverse().filter((x) => x.pod_id === params[0] && !['completed', 'cancelled'].includes(x.status)).map((x) => ({ id: x.id })));
   }
   if (sql === 'SELECT last_number FROM event_link_counters WHERE name = $1') {
     const n = world.counters.get(String(params[0]));
@@ -445,7 +458,7 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     world.aliases = world.aliases.filter((a) => !(a.session_id === params[0] && a.secret));
     return rows([], before - world.aliases.length);
   }
-  if (sql === 'UPDATE sessions SET link_name = $2, link_number = $3, link_tail = $4 WHERE id = $1') {
+  if (sql === 'UPDATE sessions SET link_name = $2, link_number = $3, link_tail = $4, call_code = $5, call_code_private = $6 WHERE id = $1') {
     const e = eventById(params[0]);
     if (!e) return rows([], 0);
     if (world.events.some((x) => x.id !== e.id && x.link_name === params[1] && x.link_number === params[2])) {
@@ -454,6 +467,9 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     e.link_name = String(params[1]);
     e.link_number = Number(params[2]);
     e.link_tail = (params[3] as string | null) ?? null;
+    if (e.call_code !== params[4]) world.writes.push(`code:${e.id}`);
+    e.call_code = (params[4] as string | null);
+    e.call_code_private = params[5] === true;
     world.writes.push(`link:${e.id}`);
     return rows([], 1);
   }
@@ -468,10 +484,11 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     const e = eventById(params[0]);
     return rows(e ? [{ call_code: e.call_code }] : []);
   }
-  if (sql.startsWith('UPDATE sessions SET call_code = $2 WHERE id = $1')) {
+  if (sql.startsWith('UPDATE sessions s SET call_code = $2, call_code_private = COALESCE(NOT (')) {
     const e = eventById(params[0]);
     if (!e) return rows([], 0);
-    if (sql.includes('AND call_code IS NULL') && e.call_code) return rows([], 0);
+    if (sql.includes('AND s.call_code IS NULL') && e.call_code) return rows([], 0);
+    e.call_code_private = needsTail(e);
     if (world.events.some((x) => x.id !== e.id && x.call_code === params[1])) {
       throw Object.assign(new Error('duplicate key value violates unique constraint "idx_sessions_call_code"'), { code: '23505' });
     }
@@ -522,6 +539,7 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
       place: world.places.get(key(e.id, userId))?.status ?? null, request: world.requests.get(key(e.id, userId)) ?? null,
       waiting: waitlistPositionOf(e.id, userId) !== null,
       link_name: e.link_name, link_number: e.link_number, link_tail: e.link_tail, link_needs_tail: needsTail(e),
+      call_code_private: e.call_code_private,
     })));
   }
 

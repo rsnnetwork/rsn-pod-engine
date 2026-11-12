@@ -16,16 +16,23 @@
 //             and keeps its tail. The old link is kept as an alias and still leads to the event: people pasted it into
 //             calendars, emails and other sites.
 //   Public -> not public   A tail is added. The link without it stops at once, with no forwarding: forwarding would
-//             hand the tail to anyone who guesses the number.
+//             hand the tail to anyone who guesses the number. So does every call link (/call/<code>) given out while the
+//             event was public (controller ruling, 12 Nov 2026): sessions.call_code_private says whether the code was
+//             given while the event was not public; a code that was not opens the event only while it is public, and
+//             the event gets a new code the moment its link is put right (the organiser's card shows it).
 //   Not public -> public   The tail is dropped. The link with it is kept as an alias (whoever holds it was given it).
 //   Rotated   Rotating the call link (call-link.service.ts) draws a new tail and forgets every old link that had one,
 //             so a leaked link stops working; a public link has nothing secret to rotate.
+//   Default   The name of the pod's latest event that is published and public NOW (a private event's name is never
+//             carried into a public link), else 'rsn' for an event a platform admin hosts and 'event' for anyone
+//             else's. Only platform admins may choose 'rsn' (RSN's own events, controller ruling, 12 Nov 2026).
 // A link that leads nowhere the asker may go answers the call link's one 404 (call-link.service.ts findCallEvent).
 
 import crypto from 'crypto';
 import {
-  EVENT_LINK_DEFAULT_NAME, EVENT_LINK_TAIL_ALPHABET, EVENT_LINK_TAIL_FIRST, EVENT_LINK_TAIL_LENGTH, ErrorCodes,
-  UserRole, eventLinkNameProblem, eventLinkPath, eventLinkSlug, hasRoleAtLeast, isEventVisibility,
+  CALL_CODE_ALPHABET, CALL_CODE_LENGTH, EVENT_LINK_DEFAULT_NAME, EVENT_LINK_PLATFORM_NAME, EVENT_LINK_PLATFORM_NAMES,
+  EVENT_LINK_PLATFORM_NAME_PROBLEM, EVENT_LINK_TAIL_ALPHABET, EVENT_LINK_TAIL_FIRST, EVENT_LINK_TAIL_LENGTH, ErrorCodes,
+  UserRole, eventLinkNameProblemFor, eventLinkPath, eventLinkSlug, hasRoleAtLeast, isEventVisibility,
   normaliseEventLinkName,
   type EventLinkInfo, type EventLinkNameCheck, type EventLinkParts, type EventVisibility,
 } from '@rsn/shared';
@@ -83,6 +90,24 @@ export function eventLinkMatchSql(): string {
     ) el_m ORDER BY el_m.rank LIMIT 1`;
 }
 
+/** A new call code: CALL_CODE_LENGTH symbols, each drawn from the operating system's random source. */
+export function newCallCode(): string {
+  let code = '';
+  for (let i = 0; i < CALL_CODE_LENGTH; i++) code += CALL_CODE_ALPHABET[crypto.randomInt(CALL_CODE_ALPHABET.length)];
+  return code;
+}
+
+/** True (in SQL) when the host of the event aliased `s` is a platform admin (admin or super admin). */
+export function hostIsPlatformAdminSql(s: string): string {
+  if (!ALIAS.test(s)) throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'hostIsPlatformAdminSql takes a plain alias');
+  return `EXISTS (SELECT 1 FROM users el_u WHERE el_u.id = ${s}.host_user_id AND el_u.role IN ('admin', 'super_admin'))`;
+}
+
+/** Whether a name is RSN's own (EVENT_LINK_PLATFORM_NAMES): only platform admins may choose it. */
+export function isPlatformLinkName(name: string): boolean {
+  return EVENT_LINK_PLATFORM_NAMES.includes(name);
+}
+
 /** A new tail: a letter, then EVENT_LINK_TAIL_LENGTH - 1 symbols, each from the operating system's random source. */
 export function newEventLinkTail(): string {
   let tail = EVENT_LINK_TAIL_FIRST[crypto.randomInt(EVENT_LINK_TAIL_FIRST.length)];
@@ -118,10 +143,14 @@ interface LinkRow {
   link_number: number | null;
   link_tail: string | null;
   needs_tail: boolean;
+  call_code: string | null;
+  call_code_private: boolean;
+  host_is_admin: boolean;
 }
 
 const LINK_ROW_SQL = (lock: boolean) => `SELECT s.id, s.pod_id, s.circle_id, s.link_name, s.link_number, s.link_tail,
-        ${eventLinkNeedsTailSql('s')} AS needs_tail
+        ${eventLinkNeedsTailSql('s')} AS needs_tail, s.call_code, s.call_code_private,
+        ${hostIsPlatformAdminSql('s')} AS host_is_admin
    FROM sessions s WHERE s.id = $1${lock ? ' FOR UPDATE OF s' : ''}`;
 
 /** The columns an event row carries for its link (findCallEvent, the lists). */
@@ -130,12 +159,18 @@ export interface EventLinkColumns {
   link_number?: number | null;
   link_tail?: string | null;
   link_needs_tail?: boolean | null;
+  call_code?: string | null;
+  call_code_private?: boolean | null;
 }
 
-/** The link as stored, when it is complete and its tail is as the event needs now; else null (ensureEventLink fixes it). */
+/**
+ * The link as stored, when it is complete and its tail is as the event needs now, and its call code too (one given while
+ * public, on an event that is not public now, must be replaced); else null (ensureEventLink puts it right).
+ */
 export function settledEventLink(row: EventLinkColumns): EventLinkParts | null {
   if (!row.link_name || !row.link_number || typeof row.link_needs_tail !== 'boolean') return null;
   if (!!row.link_tail !== row.link_needs_tail) return null;
+  if (row.call_code && typeof row.call_code_private === 'boolean' && row.call_code_private !== row.link_needs_tail) return null;
   return { name: row.link_name, number: row.link_number, tail: row.link_tail ?? null };
 }
 
@@ -143,21 +178,26 @@ export function settledEventLink(row: EventLinkColumns): EventLinkParts | null {
 type Runner = { query: <T extends QueryResultRow = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<QueryResult<T>> };
 
 /**
- * The name a new event gets when its organiser chooses none: the name its pod's latest event uses (a series goes on by
- * itself: an organiser names it once), else 'rsn' (the platform's own). Never a name made from the pod's or circle's
- * name: the link is shown to anyone holding it, and the landing never names the pod (call-link.service.ts).
+ * The name a new event gets when its organiser chooses none: the name of its pod's latest event that is published and
+ * public now (a series goes on by itself), never a private or invitation-only event's (its name is behind its tail, and
+ * a public link would show it: review I1); RSN's own name only for an event a platform admin hosts (`platform`). Else
+ * 'rsn' for a platform admin's event and 'event' for anyone else's. Never a name made from the pod's or circle's name:
+ * the link is shown to anyone holding it, and the landing never names the pod (call-link.service.ts).
  */
 export async function defaultEventLinkName(
-  runner: Runner, at: { podId: string | null; exceptSessionId?: string | null },
+  runner: Runner, at: { podId: string | null; exceptSessionId?: string | null; platform: boolean },
 ): Promise<string> {
-  if (!at.podId) return EVENT_LINK_DEFAULT_NAME;
+  const fallback = at.platform ? EVENT_LINK_PLATFORM_NAME : EVENT_LINK_DEFAULT_NAME;
+  if (!at.podId) return fallback;
   const latest = await runner.query<{ link_name: string }>(
-    `SELECT link_name FROM sessions
-      WHERE pod_id = $1 AND link_name IS NOT NULL AND id IS DISTINCT FROM $2::uuid
-      ORDER BY created_at DESC LIMIT 1`,
-    [at.podId, at.exceptSessionId ?? null],
+    `SELECT s.link_name FROM sessions s
+      WHERE s.pod_id = $1 AND s.link_name IS NOT NULL AND s.id IS DISTINCT FROM $2::uuid AND s.publication = 'published'
+        AND NOT ${eventLinkNeedsTailSql('s')}
+        AND ($3::boolean OR NOT (s.link_name = ANY($4::text[])))
+      ORDER BY s.created_at DESC LIMIT 1`,
+    [at.podId, at.exceptSessionId ?? null, at.platform, [...EVENT_LINK_PLATFORM_NAMES]],
   );
-  return latest.rows[0]?.link_name ?? EVENT_LINK_DEFAULT_NAME;
+  return latest.rows[0]?.link_name ?? fallback;
 }
 
 const NUMBER_TRIES = 5;
@@ -194,7 +234,7 @@ async function keepAsAlias(client: Runner, sessionId: string, parts: EventLinkPa
 }
 
 /** The event's organisers' cards and pages, told its link changed. Best-effort: a failure never undoes the write. */
-async function fanoutEventLink(sessionId: string): Promise<void> {
+export async function fanoutEventLink(sessionId: string): Promise<void> {
   const io = getRealtimeIo();
   if (!io) return;
   try {
@@ -217,14 +257,23 @@ export async function ensureEventLink(sessionId: string, wantedName?: string): P
     const settled = settledEventLink({ ...now.rows[0], link_needs_tail: now.rows[0].needs_tail });
     if (settled) return settled;
   }
-  const outcome = await transaction(async (client) => {
-    const locked = await client.query<LinkRow>(LINK_ROW_SQL(true), [sessionId]);
-    const row = locked.rows[0];
-    if (!row) throw new NotFoundError('Session', sessionId, NOT_FOUND);
-    return writeEventLink(client, row, wantedName);
-  });
+  const outcome = await transaction((client) => ensureEventLinkIn(client, sessionId, wantedName));
   if (outcome.changed) void fanoutEventLink(sessionId);
   return outcome.parts;
+}
+
+/**
+ * ensureEventLink inside the caller's transaction (an event edit saves its row and its link together, so a link that
+ * cannot be written leaves nothing half-saved). The caller tells the organisers (fanoutEventLink) once it has committed,
+ * when `changed`.
+ */
+export async function ensureEventLinkIn(
+  client: Runner, sessionId: string, wantedName?: string,
+): Promise<{ parts: EventLinkParts; changed: boolean }> {
+  const locked = await client.query<LinkRow>(LINK_ROW_SQL(true), [sessionId]);
+  const row = locked.rows[0];
+  if (!row) throw new NotFoundError('Session', sessionId, NOT_FOUND);
+  return writeEventLink(client, row, wantedName);
 }
 
 async function writeEventLink(
@@ -235,7 +284,8 @@ async function writeEventLink(
     : null;
   let parts: EventLinkParts;
   if (!before) {
-    const name = wantedName ?? await defaultEventLinkName(client, { podId: row.pod_id, exceptSessionId: row.id });
+    const name = wantedName
+      ?? await defaultEventLinkName(client, { podId: row.pod_id, exceptSessionId: row.id, platform: row.host_is_admin });
     parts = { name, number: await takeEventLinkNumber(client, name), tail: row.needs_tail ? newEventLinkTail() : null };
   } else if (wantedName !== undefined && wantedName !== before.name) {
     await keepAsAlias(client, row.id, before);
@@ -253,11 +303,23 @@ async function writeEventLink(
     await keepAsAlias(client, row.id, parts);
     parts.tail = null;
   }
-  const changed = !before || before.name !== parts.name || before.number !== parts.number || before.tail !== parts.tail;
+  // The call code (controller ruling, 12 Nov 2026): one given out while the event was public stops with its bare link,
+  // and the event gets a new one, given while it is not public; on an event that is public now, its code is a public
+  // one from here on (so it stops if the event turns private again).
+  let callCode = row.call_code;
+  let codePrivate = row.call_code_private;
+  if (callCode && row.needs_tail && !codePrivate) {
+    callCode = newCallCode();
+    codePrivate = true;
+  } else if (callCode && !row.needs_tail && codePrivate) {
+    codePrivate = false;
+  }
+  const changed = !before || before.name !== parts.name || before.number !== parts.number || before.tail !== parts.tail
+    || callCode !== row.call_code || codePrivate !== row.call_code_private;
   if (changed) {
     await client.query(
-      `UPDATE sessions SET link_name = $2, link_number = $3, link_tail = $4 WHERE id = $1`,
-      [row.id, parts.name, parts.number, parts.tail],
+      `UPDATE sessions SET link_name = $2, link_number = $3, link_tail = $4, call_code = $5, call_code_private = $6 WHERE id = $1`,
+      [row.id, parts.name, parts.number, parts.tail, callCode, codePrivate],
     );
   }
   return { parts, changed };
@@ -337,14 +399,17 @@ export async function checkEventLinkName(
 ): Promise<EventLinkNameCheck> {
   const at = await mayChooseLinkName(actor, input);
   const circleId = input.circleId ?? at.circleId;
-  const defaultName = at.event?.link_name
-    ?? await defaultEventLinkName({ query }, { podId: at.podId, exceptSessionId: input.sessionId });
-  const typed = normaliseEventLinkName(input.name ?? '');
-  const name = typed || defaultName;
-  const problem = eventLinkNameProblem(name);
+  const platform = hasRoleAtLeast(actor.role, UserRole.ADMIN);
   const isPrivate = at.event
     ? (isEventVisibility(input.visibility) ? await eventWouldNeedTail(at.event.id, input.visibility) : at.event.needs_tail)
     : await wouldNeedTail(at.podId, circleId, input.visibility);
+  // Creating, the default is the one the event will get: its organiser is its host.
+  const defaultName = at.event?.link_name
+    ?? await defaultEventLinkName({ query }, { podId: at.podId, exceptSessionId: input.sessionId, platform });
+  const typed = normaliseEventLinkName(input.name ?? '');
+  const name = typed || defaultName;
+  // The event's own name is never a problem to keep (an existing rsn event, edited by its host who is not an admin).
+  const problem = at.event?.link_name === name ? null : eventLinkNameProblemFor(name, { platform });
   if (problem) return { defaultName, name, problem, nextNumber: null, preview: null, private: isPrivate };
   const nextNumber = await likelyNumber(name, at.event);
   return {
@@ -390,4 +455,40 @@ async function wouldNeedTail(podId: string | null, circleId: string | null, visi
     [podId, circleId, own],
   );
   return r.rows[0]?.needs_tail ?? true;
+}
+
+// ─── A pod or a circle changed who may see its events ──────────────────────────
+
+/** The most events one pod's or circle's change brings up to date (the newest first). */
+const REFRESH_MAX = 500;
+
+/**
+ * After a pod's visibility or a circle's join policy changed: each of its events that has not ended has its link put
+ * right (a tail added or dropped, a public call code replaced), which tells its organisers' cards (review M5). Every
+ * open already reads the rule itself; this only brings the cards and the stored link up to date. Never throws.
+ */
+export async function refreshEventLinksOf(scope: { podId: string } | { circleId: string }): Promise<void> {
+  const [column, id] = 'podId' in scope ? ['pod_id', scope.podId] : ['circle_id', scope.circleId];
+  try {
+    const events = await query<{ id: string }>(
+      `SELECT id FROM sessions WHERE ${column} = $1 AND status::text NOT IN ('completed', 'cancelled')
+        ORDER BY created_at DESC LIMIT ${REFRESH_MAX}`,
+      [id],
+    );
+    for (const event of events.rows) {
+      try {
+        await ensureEventLink(event.id);
+      } catch (err) {
+        logger.warn({ err, sessionId: event.id }, 'refreshEventLinksOf: one event link was not brought up to date');
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, ...scope }, 'refreshEventLinksOf: the events were not read');
+  }
+}
+
+/** The refusal for a name only platform admins may choose (RSN's own), for anyone else; null when they may. */
+export function platformNameRefusal(name: string | undefined, isPlatformAdmin: boolean): ValidationError | null {
+  if (!name || isPlatformAdmin || !isPlatformLinkName(name)) return null;
+  return new ValidationError(EVENT_LINK_PLATFORM_NAME_PROBLEM, { linkName: [EVENT_LINK_PLATFORM_NAME_PROBLEM] });
 }

@@ -89,7 +89,8 @@ describe('the code', () => {
   });
 
   it('is drawn with crypto.randomInt, one symbol at a time (50 bits from the operating system)', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'services/session/call-link.service.ts'), 'utf8');
+    // Drawn in event-link.service.ts since 12 Nov 2026 (turning an event private replaces its public code there too).
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'services/session/event-link.service.ts'), 'utf8');
     expect(src).toMatch(/crypto\.randomInt\(CALL_CODE_ALPHABET\.length\)/);
     expect(src).not.toMatch(/Math\.random/);
   });
