@@ -89,7 +89,11 @@ export function somethingMissing(missing: CallEntryState['missing']): boolean {
 
 /** One of a person's events reached by its link (their place or their request), for the guest home. */
 export interface CallEventSummary {
-  code: string;
+  /**
+   * Its call code, or null (12 Nov 2026) when no code that opens the event could be read just now (the guest home then
+   * says to try again rather than linking a dead one).
+   */
+  code: string | null;
   title: string;
   scheduledAt: string | null;
   /** Part 3 Task 1 — the event's IANA zone. */

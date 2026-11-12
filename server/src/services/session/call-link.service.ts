@@ -117,22 +117,28 @@ export async function getCallLinkForOrganiser(
   sessionId: string,
   actor: Actor,
   opts: { origin?: string } = {},
+  read: { eventLinkOptional?: boolean } = {},
 ): Promise<EventLinksForOrganiser> {
   await requireOrganiser(sessionId, actor);
   // The event link first: putting it right may replace a call code given out while the event was public. When it
   // cannot be read, nothing is shown rather than a call link that may be dead (rereview minor 1): the card says so and
-  // offers to try again.
-  let eventLink: EventLinkInfo;
+  // offers to try again. `eventLinkOptional` (just after "Make a new link", rereview 2 minor 1): the call code was just
+  // made for the event as it is, so it opens it; the answer is that link, without the event link, never a failure for a
+  // rotation that happened.
+  let eventLink: EventLinkInfo | null = null;
   try {
     eventLink = await eventLinkInfo(sessionId, opts);
   } catch (err) {
     if (err instanceof AppError && err.statusCode < 500) throw err;
     logger.warn({ err, sessionId }, 'getCallLinkForOrganiser: the event link could not be read');
-    throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, 'We could not read the event link just now. Please try again.');
+    if (!read.eventLinkOptional) {
+      throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, 'We could not read the event link just now. Please try again.');
+    }
   }
   const code = await ensureCallCode(sessionId);
   const base = firstAllowedClientBaseUrl([opts.origin], clientOriginConfig());
-  return { code, path: callLinkPath(code), url: `${base}${callLinkPath(code)}`, eventLink };
+  const callLink = { code, path: callLinkPath(code), url: `${base}${callLinkPath(code)}` };
+  return eventLink ? { ...callLink, eventLink } : callLink;
 }
 
 /**

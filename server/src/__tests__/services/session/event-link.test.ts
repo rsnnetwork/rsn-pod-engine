@@ -52,7 +52,8 @@ import {
   CALL_LINK_NOT_FOUND, findCallEvent, getCallLanding, getCallLinkForOrganiser, resolveCallCode, rotateCallCode,
 } from '../../../services/session/call-link.service';
 import {
-  checkEventLinkName, ensureEventLink, eventLinkBaseUrl, eventLinkMatchSql, eventLinkNeedsTailSql, refreshEventLinksOf,
+  checkEventLinkName, ensureEventLink, eventLinkBaseUrl, eventLinkMatchSql, eventLinkNeedsTailSql, fanoutEventLinks,
+  refreshEventLinksOf,
 } from '../../../services/session/event-link.service';
 import { hasOwnBucket } from '../../../middleware/rateLimit';
 import fs from 'fs';
@@ -341,6 +342,26 @@ describe('the old call link keeps working', () => {
 });
 
 describe('the organisers\' card', () => {
+  it('after "Make a new link" the answer is the new call link even when the event link cannot be read (rereview 2, minor 1)', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'private' });
+    const fresh = await rotateCallCode(EVENT, host);
+    const links = jest.requireActual('../../../services/session/event-link.service');
+    const spy = jest.spyOn(links, 'eventLinkInfo').mockRejectedValueOnce(new Error('connection reset'));
+    try {
+      const card = await getCallLinkForOrganiser(EVENT, host, {}, { eventLinkOptional: true });
+      expect(card).toEqual({ code: fresh, path: `/call/${fresh}`, url: `https://app.rsn.network/call/${fresh}` });
+      // The code is the one just made, given while private: it opens the event.
+      expect((await landingOf(fresh)).title).toBe('Founders breakfast');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('the rotate route asks for the card with the event link optional, the read route does not', () => {
+    const routes = fs.readFileSync(path.join(__dirname, '../../../routes/call-links.ts'), 'utf8');
+    expect(routes).toMatch(/await callLink\.rotateCallCode\(req\.params\.id, actorOf\(req\)\);\s*(?:\/\/[^\n]*\s*)?const data = await callLink\.getCallLinkForOrganiser\(\s*req\.params\.id, actorOf\(req\), \{ origin: req\.get\('origin'\) \}, \{ eventLinkOptional: true \},\s*\);/);
+    expect((routes.match(/eventLinkOptional: true/g) ?? []).length).toBe(1);
+  });
   it('when the event link cannot be read, the card gets a 503, never a call link that may be dead (rereview minor 1)', async () => {
     addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public' });
     eventOf().visibility = 'private';
@@ -457,6 +478,29 @@ describe('a pod or circle that changes who may see its events (review M5)', () =
     for (const [, people, tags] of mockEmit.mock.calls) {
       for (const tag of tags as string[]) if (tag.startsWith('user:')) expect(tag).toBe(`user:${(people as string[])[0]}:sessions`);
     }
+  });
+
+  it('the fan-out sends each person one message with all their tags (rereview 2, minor 2)', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public' });
+    addEvent({ id: uuid(160), call_code: 'aaaaaaaaaa', visibility: 'public' });
+    world.places.set(`${EVENT}:${MEMBER}`, { status: 'registered', admitted_via: 'open' });
+    world.places.set(`${uuid(160)}:${MEMBER}`, { status: 'registered', admitted_via: 'open' });
+    mockEmit.mockClear();
+    await fanoutEventLinks([EVENT, uuid(160)]);
+    const toMember = mockEmit.mock.calls.filter(([, people]) => (people as string[]).includes(MEMBER));
+    expect(toMember).toHaveLength(1);
+    expect(toMember[0][1]).toEqual([MEMBER]);
+    expect([...(toMember[0][2] as string[])].sort()).toEqual([
+      `session:${EVENT}`, `session:${EVENT}:call-link`, `session:${uuid(160)}`, `session:${uuid(160)}:call-link`, `user:${MEMBER}:sessions`,
+    ].sort());
+    // The host of both events, likewise one message.
+    expect(mockEmit.mock.calls.filter(([, people]) => (people as string[]).includes(HOST))).toHaveLength(1);
+  });
+
+  it('the recipients are read with a cap, the events in bounded chunks', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../../services/session/event-link.service.ts'), 'utf8');
+    expect(src).toMatch(/LIMIT \$\{FANOUT_RECIPIENTS_MAX\}/);
+    expect(src).toMatch(/for \(let i = 0; i < unique\.length; i \+= FANOUT_EVENTS_CHUNK\)/);
   });
 
   it('it never throws, whatever fails', async () => {
