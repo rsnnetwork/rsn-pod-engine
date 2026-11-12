@@ -31,6 +31,7 @@ import {
 import { applyRegistrationGroups } from './event-groups.service';
 import { applyRegistrationAnswers } from './event-questions.service';
 import { ensureCallCode } from './call-link.service';
+import { ensureEventLink, ensureEventLinkIn, fanoutEventLink, platformNameRefusal } from './event-link.service';
 import { announceCircleEvent, assertMayClearCircle, assertMayScheduleForCircle } from '../circle/circle-events.service';
 import { notifyEventRescheduled } from './event-notices';
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
@@ -53,6 +54,7 @@ const SESSION_COLUMNS = `
   cancelled_at AS "cancelledAt",
   cancel_reason AS "cancelReason",
   timezone,
+  link_name AS "linkName",
   (image_blob IS NOT NULL) AS "hasImage", image_updated_at AS "imageUpdatedAt",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
@@ -166,6 +168,10 @@ export async function createSession(userId: string, input: CreateSessionInput, u
     }
   }
 
+  // RSN's own link name ("rsn") is a platform admin's to give (controller ruling, 12 Nov 2026), refused before anything is written.
+  const reservedName = platformNameRefusal(input.linkName, !!isAdmin);
+  if (reservedName) throw reservedName;
+
   // Only an active pod takes a new event (H2b item 5, 26 Oct 2026). The forms offer active pods only; this is the
   // server's own check, so an archived, suspended or draft pod's id scheduled nothing.
   if (pod.status !== PodStatus.ACTIVE) {
@@ -240,12 +246,21 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   } catch (err) {
     logger.warn({ err, sessionId }, 'createSession: call code not set yet; the first read of the link sets it');
   }
+  // The event link (Stefan, 11 Nov 2026): the name chosen (checked by the route), else the default; the next number;
+  // a tail when the event is not public. Best-effort as above: the link's first read gives it one instead (with the
+  // default name), and the reply below carries the name it got.
+  let linkName: string | null = null;
+  try {
+    linkName = (await ensureEventLink(sessionId, input.linkName)).name;
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'createSession: event link not set yet; the first read of the link sets it');
+  }
 
   // The circle's members are rung (no email) and their pages told. A draft rings nobody: publishing it does.
   if (circle && publication === 'published') await announceCircleEvent({ sessionId, actorId: userId, circle });
 
   logger.info({ sessionId, podId: input.podId, userId, circleId: circle?.id }, 'Session created');
-  return withEventImageUrl(result.rows[0]);
+  return withEventImageUrl(linkName ? { ...result.rows[0], linkName } : result.rows[0]);
 }
 
 export async function getSessionById(sessionId: string): Promise<Session> {
@@ -273,6 +288,10 @@ export async function updateSession(sessionId: string, userId: string, input: Up
   if (session.status !== SessionStatus.SCHEDULED) {
     throw new AppError(400, 'SESSION_ALREADY_STARTED', 'Cannot update an event that has already started');
   }
+
+  // RSN's own link name is a platform admin's to give; an event that already has it keeps it on any edit.
+  const reservedName = platformNameRefusal(input.linkName !== session.linkName ? input.linkName : undefined, !!isAdmin);
+  if (reservedName) throw reservedName;
 
   // 26 Oct 2026 — a scheduled event may switch to another format its pod holds. Keeping its format needs no
   // pod check, so an event survives a later change of its pod's type. Production's old edit form sends no
@@ -374,15 +393,29 @@ export async function updateSession(sessionId: string, userId: string, input: Up
     }
   }
 
+  // The event link follows the edit: a new name, or a visibility or circle that adds or drops its tail
+  // (event-link.service.ts says why each rule is as it is). After the row's own write and in the same transaction, so the
+  // tail reads the new access and a link that cannot be written leaves nothing of the edit saved (review M4).
+  const linkMayChange = input.linkName !== undefined || input.visibility !== undefined || circleChanges;
+
   if (setClauses.length === 0) {
-    return session;
+    if (!linkMayChange) return session;
+    const parts = await ensureEventLink(sessionId, input.linkName);
+    return { ...session, linkName: parts.name };
   }
 
   values.push(sessionId);
-  const updated = await query<SessionRow>(
-    `UPDATE sessions SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING ${SESSION_COLUMNS}`,
-    values
-  );
+  const updateSql = `UPDATE sessions SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING ${SESSION_COLUMNS}`;
+  let linkChanged = false;
+  const updated = linkMayChange
+    ? await transaction(async (client) => {
+      const saved = await client.query<SessionRow>(updateSql, values);
+      const link = await ensureEventLinkIn(client, sessionId, input.linkName);
+      linkChanged = link.changed;
+      return { rows: saved.rows.map((r) => ({ ...r, linkName: link.parts.name })) };
+    })
+    : await query<SessionRow>(updateSql, values);
+  if (linkChanged) void fanoutEventLink(sessionId);
   const result = { rows: updated.rows.map(withEventImageUrl) };
 
   // A draft's circle is told nothing yet (Part 2 Task 2): publishing it rings the circle it names then.

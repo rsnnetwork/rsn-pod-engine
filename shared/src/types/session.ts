@@ -171,6 +171,8 @@ export interface Session {
   format?: EventFormat;
   /** T11 (1 Nov 2026) — who can join (sessions.visibility). NULL: the event follows its pod, as before. */
   visibility?: EventVisibility | null;
+  /** The event link's name part (sessions.link_name), e.g. 'rsn'; null before the event has a link. Never its tail. */
+  linkName?: string | null;
   /** T13 (1 Nov 2026) — the circle the event is for (sessions.circle_id); its members are the event's audience too. NULL: none. */
   circleId?: string | null;
   /** Part 2 Task 2 — 'draft' (seen only by the people who run it) or 'published' (every existing event). */
@@ -242,6 +244,11 @@ export interface CreateSessionInput {
    * scheduledAt stays an instant: the form converts its wall clock in this zone before sending.
    */
   timezone?: string;
+  /**
+   * The event link's name (Stefan, 11 Nov 2026): /events/<linkName>-<n>. Omitted (production's form): the name the
+   * pod's latest event uses, else 'rsn'.
+   */
+  linkName?: string;
   config?: SessionConfigInput;
 }
 
@@ -257,6 +264,8 @@ export interface UpdateSessionInput {
   circleId?: string | null;
   /** Part 3 Task 1 — a new zone. The stored instant is kept: the server never reinterprets scheduledAt. */
   timezone?: string;
+  /** A new event link name: the event takes the next number under it, and its old link keeps leading to it. */
+  linkName?: string;
   config?: SessionConfigInput;
 }
 

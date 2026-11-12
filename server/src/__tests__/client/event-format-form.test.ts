@@ -486,10 +486,11 @@ describe('what both event forms share', () => {
   });
 
   it("the fields a form draws for a type: who should meet whom for everyone (the presets), a place for in person", () => {
-    expect(shownEventKeys('video_meeting', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'timezone', 'durationMinutes', 'maxParticipants']);
+    // The event link's name (11 Nov 2026) is drawn on every type, after the time zone.
+    expect(shownEventKeys('video_meeting', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'timezone', 'linkName', 'durationMinutes', 'maxParticipants']);
     expect(shownEventKeys('speed_networking', false)).toContain('matchingTemplateId');
     expect(shownEventKeys('speed_networking', true)).toContain('matchingTemplateId');
-    expect(shownEventKeys('physical_event', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'timezone', 'location', 'durationMinutes', 'maxParticipants']);
+    expect(shownEventKeys('physical_event', false)).toEqual(['format', 'title', 'description', 'scheduledAt', 'timezone', 'linkName', 'location', 'durationMinutes', 'maxParticipants']);
   });
 });
 

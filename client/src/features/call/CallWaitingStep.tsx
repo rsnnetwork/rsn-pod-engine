@@ -137,7 +137,7 @@ export default function CallWaitingStep({ landing, kind, sessionId, startsAt, gu
       {entry && (
         <AddToCalendar
           entry={entry}
-          file={async () => icsFile(entry, `call-${landing.code}`)}
+          file={async () => icsFile(entry, `event-${landing.code}`)}
           fileName="reason-event.ics"
           className={CALENDAR_BUTTON}
         />

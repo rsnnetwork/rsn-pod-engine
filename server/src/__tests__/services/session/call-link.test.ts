@@ -89,7 +89,8 @@ describe('the code', () => {
   });
 
   it('is drawn with crypto.randomInt, one symbol at a time (50 bits from the operating system)', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'services/session/call-link.service.ts'), 'utf8');
+    // Drawn in event-link.service.ts since 12 Nov 2026 (turning an event private replaces its public code there too).
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'services/session/event-link.service.ts'), 'utf8');
     expect(src).toMatch(/crypto\.randomInt\(CALL_CODE_ALPHABET\.length\)/);
     expect(src).not.toMatch(/Math\.random/);
   });
@@ -187,10 +188,13 @@ describe('rotateCallCode', () => {
     expect(world.audit).toEqual([]);
   });
 
-  it('the organiser reads the code, the path and the full address', async () => {
-    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra' });
+  it('the organiser reads the code, the path and the full address, and (added) the event link', async () => {
+    addEvent({ id: EVENT, call_code: 'k7m2x9q4ra', visibility: 'public' });
     expect(await getCallLinkForOrganiser(EVENT, host)).toEqual({
       code: 'k7m2x9q4ra', path: '/call/k7m2x9q4ra', url: 'https://app.rsn.network/call/k7m2x9q4ra',
+      eventLink: {
+        name: 'rsn', number: 1, slug: 'rsn-1', path: '/events/rsn-1', url: 'https://app.rsn.network/events/rsn-1', private: false,
+      },
     });
   });
 
@@ -256,13 +260,16 @@ describe('the landing', () => {
       admission: 'restricted',
       asks: { displayName: true, group: null, admissionCode: true, questions: null },
       viewer: { signedIn: false, accountKind: null, sessionId: null, step: 'identify' },
+      // The event link as it is now (additive): a private event's carries its tail.
+      link: { slug: `rsn-1-${world.events[0].link_tail}`, path: `/events/rsn-1-${world.events[0].link_tail}` },
     });
     const text = JSON.stringify(landing);
     for (const hidden of ['Secret Pod Name', 'pod-1', 'Ana Member', 'member@example.org', 'invitee@example.org', 'host@example.org', HOST, EVENT]) {
       expect(text).not.toContain(hidden);
     }
-    // It never reads the participants, the invites or the pod to build it.
-    expect(world.sql.some((s) => /session_participants|invites|FROM pods/.test(s))).toBe(false);
+    // It never reads the participants, the invites or the pod to build it (the event link's tail rule reads only whether
+    // the pod is public, inside the event's own row: FROM pods el_p).
+    expect(world.sql.some((s) => /session_participants|invites|FROM pods (?!el_p )/.test(s))).toBe(false);
   });
 
   it('a cancelled event shows lifecycle cancelled; an ended one completed', async () => {

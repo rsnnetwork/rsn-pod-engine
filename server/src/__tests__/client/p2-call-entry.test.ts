@@ -87,7 +87,7 @@ describe('the call route', () => {
     // Before the first protected group: a signed-out visitor is never asked to sign in first.
     expect(app.indexOf('<CallLinkPage />')).toBeGreaterThan(app.indexOf('{/* Public pages */}'));
     expect(app.indexOf('<CallLinkPage />')).toBeLessThan(app.indexOf('{/* Protected with layout */}'));
-    expect(app).toMatch(/import \{ CALL_LINK_BASE_PATH \} from '@rsn\/shared';/);
+    expect(app).toMatch(/import \{ CALL_LINK_BASE_PATH, EVENT_LINK_BASE_PATH \} from '@rsn\/shared';/);
   });
 
   it('no client file writes the link path as a literal: the shared constant is the one place (Stefan to confirm the name)', () => {
@@ -366,8 +366,8 @@ describe('which screen a person is on', () => {
     expect(at('cancelled')).toBe('cancelled');
   });
 
-  it('the progress dots read "Open link · Identify · Check · Join call"', () => {
-    expect([...PROGRESS_STEPS]).toEqual(['Open link', 'Identify', 'Check', 'Join call']);
+  it('the progress dots read "Open link · Identify · Check · Join event" (Stefan, 11 Nov: it is an event, not a call)', () => {
+    expect([...PROGRESS_STEPS]).toEqual(['Open link', 'Identify', 'Check', 'Join event']);
     expect(['summary', 'email', 'code', 'details', 'joining', 'waiting', 'pending'].map((s) => progressIndexOf(s as never)))
       .toEqual([0, 1, 1, 2, 2, 3, 3]);
   });
@@ -582,7 +582,7 @@ describe('the wiring', () => {
 
   it('in: straight to the live room, writing down the link that led there', () => {
     const page = read('features/call/CallLinkPage.tsx');
-    expect(page).toMatch(/if \(state\?\.sessionId\) rememberCallLink\(state\.sessionId, code\);\s*navigate\(livePath, \{ replace: true, state: FROM_CALL_LINK \}\);/);
+    expect(page).toMatch(/if \(state\?\.sessionId\) rememberCallLink\(state\.sessionId, wayBack, \{ current: wayIsCurrent \}\);\s*navigate\(livePath, \{ replace: true, state: FROM_CALL_LINK \}\);/);
   });
 
   it('a guest the live room refuses goes back to the event\'s call page; "back" is the guest home', () => {
@@ -599,7 +599,8 @@ describe('the wiring', () => {
     const home = read('features/call/GuestHome.tsx');
     expect(home).toMatch(/`\/request-to-join\?email=\$\{encodeURIComponent\(email\)\}`/);
     expect(home).toMatch(/\{guest && <BecomeMember email=\{user\?\.email\} \/>\}/);
-    expect(home).toMatch(/navigate\(callLinkPath\(event\.code\)\)/);
+    // The event link (11 Nov 2026) first; the call link for an answer from an older server.
+    expect(home).toMatch(/const target = event\.linkPath \?\? \(event\.code \? callLinkPath\(event\.code\) : null\);/);
     expect(read('features/auth/RequestToJoinPage.tsx')).toMatch(/const knownEmail = \(params\.get\('email'\) \?\? ''\)\.trim\(\)\.slice\(0, 255\);/);
   });
 

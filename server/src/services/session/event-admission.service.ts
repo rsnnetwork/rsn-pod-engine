@@ -33,6 +33,7 @@ import { resolveEventOrganiserIds } from '../post-event-message/event-organisers
 import { canActAsHost } from '../roles/effective-role.service';
 import { emitEventAuditChanged, recordEventAudit } from '../audit/event-audit';
 import { LIVE_STATUSES } from './main-room';
+import { ensureEventLink } from './event-link.service';
 import { normaliseAdmissionEmail, parseAdmissionCsv } from './admission-csv';
 
 /** The signed-in person a service acts for (the same shape as Part 2's shared Actor, roles/actor.ts). */
@@ -184,6 +185,13 @@ export async function setAdmissionMode(sessionId: string, actor: Actor, mode: Ad
     return { podId: event.pod_id, visibilityChanged: visibility !== null };
   });
   if (outcome) {
+    // Invitation-only adds a tail to the event link and its end may drop it (event-link.service.ts). Every open of the
+    // link checks the rule itself, so a failure here only leaves the organiser's card to put it right on its next read.
+    try {
+      await ensureEventLink(sessionId);
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'setAdmissionMode: the event link was not brought up to date');
+    }
     await fanoutAdmissionChanged(sessionId, { everyone: true, podId: outcome.podId, lists: outcome.visibilityChanged });
   }
 }

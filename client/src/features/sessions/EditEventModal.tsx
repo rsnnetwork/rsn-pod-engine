@@ -24,6 +24,7 @@ import {
 import EventZoneField from './EventZoneField';
 import { useEventFormatForm } from './useEventFormatForm';
 import EventAccessField from './EventAccessField';
+import EventLinkNameField from './EventLinkNameField';
 
 export interface EditableEvent {
   id: string;
@@ -39,6 +40,8 @@ export interface EditableEvent {
   config?: Record<string, unknown> | null;
   /** T13: the circle the event is for, so Who can join's Private card names it (final fix wave CM2). */
   circle?: { id: string; name: string } | null;
+  /** The event link's name (/events/<name>-<n>); the field starts on it. */
+  linkName?: string | null;
 }
 
 interface Props {
@@ -153,6 +156,8 @@ function EditEventSheet({ onClose, session, podType, podVisibility, podName, isA
           circleName={session.circle?.name}
           editing
         />
+
+        <EventLinkNameField form={ev.form} sessionId={session.id} visibility={visibility} isAdmin={isAdmin} currentName={session.linkName} />
 
         <EventFormatFields
           format={ev.format}

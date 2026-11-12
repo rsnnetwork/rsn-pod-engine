@@ -107,6 +107,8 @@ function buildStore(prefix: string): RateLimitOptions['store'] | undefined {
  *   GET  /api/public/profiles/:token      a member's public profile link (publicProfileReadLimiter, with
  *                                         publicProfileMissLimiter; Shirley pilot S6)
  * Everything else, /api/call-links/me/events and /:code/entry and /:code/enter included, stays under the general one.
+ * An event link (/events/<slug>, 11 Nov 2026) is read by these same routes with its slug as `:code`, so its landing, its
+ * code email and its code check hold the same buckets, and its 404s count toward the same callLinkMissLimiter.
  * `path` is the request's path from /api on, without the query; a HEAD is a GET (Express answers it with the GET route).
  */
 export const OWN_BUCKET_ROUTES: ReadonlyArray<{ method: 'GET' | 'POST'; pattern: RegExp }> = [
@@ -1071,10 +1073,16 @@ export const callLinkVerifyLimiter = rateLimit({
   handler: callLinkLimited('Too many codes tried. Please wait 15 minutes, then try again.'),
 });
 
-/** The per-link, per-address bucket for codes emailed: the link's stored spelling and a hash of the address. */
-export function callLinkEmailTargetKey(req: Request): string {
+/**
+ * The per-event, per-address bucket for codes emailed: the event the link names (res.locals.callEventId, set by the
+ * route's emailBucketEvent: its call code, its event link and its old links share one bucket), else the link's stored
+ * spelling; and a hash of the address.
+ */
+export function callLinkEmailTargetKey(req: Request, res?: Response): string {
   const email = typeof req.body?.email === 'string' ? req.body.email : '';
-  return `c:${linkOf(req)}:${signInCodeEmailKey(email)}`;
+  const eventId = res?.locals?.callEventId;
+  const target = typeof eventId === 'string' && eventId ? `e:${eventId}` : linkOf(req);
+  return `c:${target}:${signInCodeEmailKey(email)}`;
 }
 
 export const callLinkEmailTargetLimiter = rateLimit({
@@ -1095,6 +1103,20 @@ export const callEntryLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
   store: buildStore('call-entry'),
+  handler: callLinkLimited(SLOW_DOWN),
+});
+
+/**
+ * The event form's link-name field (GET /sessions/event-link-name): it asks as the organiser types (the form waits for a
+ * pause), sixty a minute per person.
+ */
+export const eventLinkNameLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('event-link-name'),
   handler: callLinkLimited(SLOW_DOWN),
 });
 

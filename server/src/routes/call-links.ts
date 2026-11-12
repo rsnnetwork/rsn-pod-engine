@@ -20,8 +20,15 @@
 //   GET  /sessions/:id/call-link         { code, path, url }
 //   POST /sessions/:id/call-link/rotate  a new code; the old link stops working at once
 //
-// A code that leads nowhere (malformed, unknown, a hidden draft, a deleted event) answers one identical 404 on every
-// route here, and every such 404 counts toward callLinkMissLimiter (Review Focus 4; rateLimit.ts says how it is keyed).
+// `:code` is a call code or an event link's slug (Stefan, 11 Nov 2026: /events/rsn-3, /events/rsn-3-k7m2q9 for an event
+// that is not public, or a link the event had before): the same routes, limits and guest reach serve both, and
+// event-link.service.ts decides which slugs still open (a slug without its tail never opens an event that is not public).
+// A code or slug that leads nowhere (malformed, unknown, without its tail, a hidden draft, a deleted event) answers one
+// identical 404 on every route here, and every such 404 counts toward callLinkMissLimiter (Review Focus 4; rateLimit.ts
+// says how it is keyed).
+//
+// GET /sessions/:id/call-link also carries the event link (`eventLink`: its name, number, slug, path, address and whether
+// it has a tail); the name is set on the event's own create and edit routes (`linkName`, routes/sessions.ts).
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -116,6 +123,21 @@ async function admissionTriesBucket(req: Request, res: Response, next: NextFunct
   }
 }
 
+/**
+ * The event a link names, for the per-event, per-address bucket of code emails (callLinkEmailTargetLimiter): its call
+ * code, its event link and every old link it still answers to share one bucket of five (review M1). A link that names
+ * nothing leaves the bucket on the link as typed; its 404 counts toward callLinkMissLimiter.
+ */
+async function emailBucketEvent(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const event = await callLink.findCallEvent(req.params.code);
+    if (event) res.locals.callEventId = event.id;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ─── The signed-in person's events by link ───────────────────────────────────
 
 router.get('/me/events', authenticate, callEntryLimiter, async (req: Request, res: Response, next: NextFunction) => {
@@ -142,7 +164,7 @@ router.get('/:code', callLinkMissLimiter, callLinkReadLimiter, optionalAuth,
 // ─── Identify: the code by email, then the code back ─────────────────────────
 
 router.post('/:code/email', callLinkMissLimiter, callLinkEmailLimiter,
-  validate(emailSchema, 'body', CHECK_INPUT), callLinkEmailTargetLimiter,
+  validate(emailSchema, 'body', CHECK_INPUT), emailBucketEvent, callLinkEmailTargetLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { email, clientUrl } = req.body as z.infer<typeof emailSchema>;
@@ -219,7 +241,10 @@ sessionCallLinkRoutes.post('/:id/call-link/rotate', authenticate, callLinkManage
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await callLink.rotateCallCode(req.params.id, actorOf(req));
-      const data = await callLink.getCallLinkForOrganiser(req.params.id, actorOf(req), { origin: req.get('origin') });
+      // The rotation has happened: its answer is never a failure (the event link is left out if it cannot be read).
+      const data = await callLink.getCallLinkForOrganiser(
+        req.params.id, actorOf(req), { origin: req.get('origin') }, { eventLinkOptional: true },
+      );
       res.json({ success: true, data } satisfies ApiResponse);
     } catch (err) {
       next(err);

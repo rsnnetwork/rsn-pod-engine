@@ -1,20 +1,22 @@
-// ─── The event's RSN Call link, for its organisers: the one module that talks to its routes (Part 2 Task 11) ─────────
+// ─── The event's links, for its organisers: the one module that talks to their routes (Part 2 Task 11) ─────────────
 // Task 6's organiser routes (server/src/routes/call-links.ts, sessionCallLinkRoutes):
-//   GET  /api/sessions/:id/call-link         → { code, path, url } (the code is made on first read)
+//   GET  /api/sessions/:id/call-link         → { code, path, url, eventLink } (the code is made on first read; eventLink
+//                                              is the event link, /events/<name>-<n>[-<tail>], Stefan 11 Nov 2026)
 //   POST /api/sessions/:id/call-link/rotate  → the same shape with a new code; the old link stops working at once
 // Rotating tells the organisers' screens session:<id>:call-link and session:<id> (call-link.service.ts fanoutCallLink),
 // so every organiser's card follows. The link shown and copied is this site's origin and the shared callLinkPath(code)
 // (CALL_LINK_BASE_PATH, the one place the path is named); the server's `url` is not shown (see callLinkAddress).
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { callLinkPath } from '@rsn/shared';
+import { callLinkPath, type EventLinkInfo } from '@rsn/shared';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 
-/** What both routes answer. */
+/** What both routes answer. `eventLink` is absent from an older server. */
 export interface CallLink {
   code: string;
   path: string;
   url: string;
+  eventLink?: EventLinkInfo;
 }
 
 export const callLinkKey = (sessionId: string) => ['session-call-link', sessionId] as const;
@@ -26,6 +28,14 @@ export const callLinkKey = (sessionId: string) => ['session-call-link', sessionI
  */
 export function callLinkAddress(link: Pick<CallLink, 'code'>, origin: string): string {
   return `${origin}${callLinkPath(link.code)}`;
+}
+
+/**
+ * The address the card shows and copies: the event link as the server writes it (on EVENT_LINK_BASE_URL when that is
+ * set, else on the site the organiser asked from), else, from an older server, the call link on this site.
+ */
+export function eventLinkAddress(link: CallLink, origin: string): string {
+  return link.eventLink?.url ?? callLinkAddress(link, origin);
 }
 
 export function useCallLink(sessionId: string, enabled: boolean) {
