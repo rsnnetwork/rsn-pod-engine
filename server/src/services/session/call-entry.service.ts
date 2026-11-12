@@ -48,7 +48,7 @@ import {
   admissionModeOf, callLinkNotFound, ensureCallCode, entryKeyOf, eventForViewer, findCallEvent,
   lifecycleOfCallEvent, visibilityOf, type CallEventRow,
 } from './call-link.service';
-import { ensureEventLink, eventLinkNeedsTailSql, settledEventLink } from './event-link.service';
+import { ensureEventLinkState, eventLinkNeedsTailSql, settledEventLink } from './event-link.service';
 import {
   EVENT_ADMISSION_REQUIRED_SENTENCE, canRegister, lineLooksStalled, needsApproval, readEventAccessFacts, runsEvent,
   type EventAccessFacts,
@@ -534,14 +534,23 @@ interface MyCallEventRow {
   call_code_private?: boolean | null;
 }
 
-/** The event link of one of a person's events, or null when it cannot be read just now (the call code still opens it). */
-async function myEventLinkPath(row: MyCallEventRow): Promise<string | null> {
+/**
+ * One of a person's events, its links as they are once put right (rereview minor 1: the code is read after the fix-up,
+ * which replaces a public code on an event that is not public). When the fix-up cannot run, the stored link is used if
+ * its tail is already as the event needs (only the code is stale then), else none.
+ */
+async function myEventLinks(row: MyCallEventRow): Promise<{ path: string | null; code: string | null }> {
+  const settled = settledEventLink(row);
+  if (settled) return { path: eventLinkPath(eventLinkSlug(settled)), code: row.call_code };
   try {
-    const parts = settledEventLink(row) ?? await ensureEventLink(row.id);
-    return eventLinkPath(eventLinkSlug(parts));
+    const state = await ensureEventLinkState(row.id);
+    return { path: eventLinkPath(eventLinkSlug(state.parts)), code: state.callCode };
   } catch (err) {
     logger.warn({ err, sessionId: row.id }, 'listMyCallEvents: the event link could not be read');
-    return null;
+    const tailRight = !!row.link_name && !!row.link_number && typeof row.link_needs_tail === 'boolean'
+      && !!row.link_tail === row.link_needs_tail;
+    const path = tailRight ? eventLinkPath(eventLinkSlug({ name: row.link_name!, number: row.link_number!, tail: row.link_tail ?? null })) : null;
+    return { path, code: null };
   }
 }
 
@@ -592,7 +601,9 @@ export async function listMyCallEvents(userId: string): Promise<CallEventSummary
   );
   const out: CallEventSummary[] = [];
   for (const row of r.rows) {
-    const code = row.call_code ?? await ensureCallCode(row.id);
+    // The links first: putting them right may replace the code (rereview minor 1).
+    const links = await myEventLinks(row);
+    const code = links.code ?? row.call_code ?? await ensureCallCode(row.id);
     const lifecycle = lifecycleOfCallEvent({
       ...row, call_code: code, description: null, config: null, event_format: null, visibility: null,
       admission_mode: null, host_user_id: '', host_name: null, host_avatar: null,
@@ -600,7 +611,7 @@ export async function listMyCallEvents(userId: string): Promise<CallEventSummary
     out.push({
       code, title: row.title, scheduledAt: iso(row.scheduled_at), timezone: eventZone(row.timezone),
       imageUrl: eventImageUrlOf(row.id, row), lifecycle, step: stepOfRow(row, lifecycle),
-      linkPath: await myEventLinkPath(row),
+      linkPath: links.path,
     });
   }
   return out;

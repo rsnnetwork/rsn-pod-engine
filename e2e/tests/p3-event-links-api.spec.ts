@@ -15,7 +15,8 @@ import { SERVER, cleanup, idsOf, teardown } from '../helpers/live-ui';
 // and its guessable link stops at once, and so does its call link (controller ruling, 12 Nov 2026), the card showing a new
 // one. A reserved name is refused in words, on the form's check and on create; "rsn" is RSN's own (admins only), and an
 // unnamed event of an organiser who is not an admin is "event-<n>". A private event's name is never carried into a public
-// event's link by the default (review I1).
+// event's link by the default (review I1). Private -> public keeps the tailed link working; invitation-only adds a tail and
+// stops the public call link; "Make a new link" cuts the old tailed link and the old code (rereview minor 5).
 // Everything is deleted by id at the end; the two counters this run made are deleted by their exact names.
 
 const SECRET = (process.env.E2E_JWT_SECRET || process.env.JWT_SECRET || '').replace(/\r|\n/g, '');
@@ -168,6 +169,40 @@ test('event links: numbered per name, a tail for a private event, old links and 
   const after = await create(`P3EL after ${RUN}`, { visibility: 'public' });
   expect(after.status, JSON.stringify(after.json)).toBe(201);
   expect(after.json.data.linkName).toBe(RENAMED);
+
+  // Private -> public: the tail is dropped and the tailed link still leads to the event, showing the bare one.
+  const madePublic = await call('PUT', `/sessions/${third.json.data.id}`, { token: h.token, body: { visibility: 'public' } });
+  expect(madePublic.status, JSON.stringify(madePublic.json)).toBe(200);
+  expect((await cardOf(third.json.data.id)).eventLink).toMatchObject({ slug: `${NAME}-3`, private: false });
+  const viaOldTail = await call('GET', `/call-links/${NAME}-3-${tail}`);
+  expect(viaOldTail.status).toBe(200);
+  expect(viaOldTail.json.data.link).toEqual({ slug: `${NAME}-3`, path: `/events/${NAME}-3` });
+
+  // Invitation-only adds a tail to a public event, and its call link from while it was public stops (ruling a).
+  const inv = await create(`P3EL invitation ${RUN}`, { linkName: NAME, visibility: 'public' });
+  expect(inv.status, JSON.stringify(inv.json)).toBe(201);
+  const invId: string = inv.json.data.id;
+  const invBefore = await cardOf(invId);
+  expect(invBefore.eventLink).toMatchObject({ private: false });
+  const restricted = await call('PUT', `/sessions/${invId}/admission`, { token: h.token, body: { mode: 'restricted' } });
+  expect(restricted.status, JSON.stringify(restricted.json)).toBe(200);
+  expect(await call('GET', `/call-links/${invBefore.eventLink.slug}`)).toEqual(unknownCode);
+  expect(await call('GET', `/call-links/${invBefore.code}`)).toEqual(unknownCode);
+  const invAfter = await cardOf(invId);
+  expect(invAfter.eventLink.private).toBe(true);
+  expect(invAfter.eventLink.slug).toMatch(new RegExp(`^${invBefore.eventLink.slug}-[a-km-np-z][2-9a-km-np-z]{5}$`));
+  expect(invAfter.code).not.toBe(invBefore.code);
+  expect((await call('GET', `/call-links/${invAfter.eventLink.slug}`)).status).toBe(200);
+
+  // "Make a new link" cuts the old tailed link (and the old code); the new ones open the event.
+  const rotated = await call('POST', `/sessions/${invId}/call-link/rotate`, { token: h.token });
+  expect(rotated.status, JSON.stringify(rotated.json)).toBe(200);
+  const fresh = rotated.json.data as { code: string; eventLink: { slug: string } };
+  expect(fresh.eventLink.slug).not.toBe(invAfter.eventLink.slug);
+  expect(await call('GET', `/call-links/${invAfter.eventLink.slug}`)).toEqual(unknownCode);
+  expect(await call('GET', `/call-links/${invAfter.code}`)).toEqual(unknownCode);
+  expect((await call('GET', `/call-links/${fresh.eventLink.slug}`)).status).toBe(200);
+  expect((await call('GET', `/call-links/${fresh.code}`)).status).toBe(200);
 
   // Nobody but the host reads the card or renames.
   const strangerToken = jwt.sign({ sub: uuid(), email: `nobody-${RUN}@rsn-e2e.invalid`, role: 'member', displayName: 'N', sessionId: uuid() }, SECRET, { expiresIn: '10m' });
