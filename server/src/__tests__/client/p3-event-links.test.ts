@@ -52,6 +52,10 @@ describe('the route, the onboarding gate and a guest\'s reach', () => {
       expect(callPathForEvent('s1')).toBe('/events/rsn-3-k7m2q9');
       rememberCallLink('s1', 'founders-1-abcdef');
       expect(callPathForEvent('s1')).toBe('/events/founders-1-abcdef');
+      // But the event's current link (the server says so) always replaces it: a held tail may be dead (rotated), and
+      // the event's own link is the one that works now (rereview minor 4).
+      rememberCallLink('s1', 'founders-1', { current: true });
+      expect(callPathForEvent('s1')).toBe('/events/founders-1');
       // A long name with many hyphens is still remembered.
       const long = `${'ab-'.repeat(13)}x-12-k7m2q9`;
       rememberCallLink('s5', long);
@@ -81,7 +85,8 @@ describe('the entry page puts the event link as it is now in the address bar', (
     expect(page).toContain('const linkPath = landing.data?.link && wayBack === landing.data.link.slug ? landing.data.link.path : null;');
     // Both ways back write the stronger key, never the URL's as typed.
     expect(page).not.toMatch(/rememberCallLink\([^)]*, code\)/);
-    expect((page.match(/rememberCallLink\(\w+(?:\.\w+)?(?:!)?, wayBack\)/g) ?? []).length).toBe(2);
+    expect((page.match(/rememberCallLink\(\w+(?:\.\w+)?(?:!)?, wayBack, \{ current: wayIsCurrent \}\)/g) ?? []).length).toBe(2);
+    expect(page).toContain('const wayIsCurrent = !!landing.data?.link && wayBack === landing.data.link.slug;');
     expect(page).toContain("if (entryToken || tokenPending || phase !== 'summary' || started) return;");
     expect(page).toContain('navigate(`${linkPath}${location.search}${location.hash}`, { replace: true });');
     // Declared with the page's other effects, before the first early return (hooks run in the same order every time).

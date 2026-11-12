@@ -97,12 +97,15 @@ function readKept(): Array<[string, string]> {
   }
 }
 
-/** Write down that `code`'s link leads to event `sessionId` (the newest twenty are kept). */
-export function rememberCallLink(sessionId: string, code: string): void {
+/**
+ * Write down that `code`'s link leads to event `sessionId` (the newest twenty are kept). A tailed way back is never
+ * replaced by an untailed one for the same event (the untailed one stops if the event turns private), unless `current`:
+ * the server named `code` as the event's link right now, so it works and a held tail may not (rotated away).
+ */
+export function rememberCallLink(sessionId: string, code: string, opts: { current?: boolean } = {}): void {
   if (!sessionId || !CODE_SHAPE.test(code)) return;
-  // A tailed way back is never replaced by an untailed one for the same event (it may stop when the event turns private).
   const held = readKept().find(([id]) => id === sessionId)?.[1];
-  if (held && tailed(held) && !tailed(code)) return;
+  if (!opts.current && held && tailed(held) && !tailed(code)) return;
   const kept = [[sessionId, code] as [string, string], ...readKept().filter(([id]) => id !== sessionId)].slice(0, CALL_LINKS_KEPT);
   try {
     storage()?.setItem(CALL_LINKS_KEY, JSON.stringify(kept));

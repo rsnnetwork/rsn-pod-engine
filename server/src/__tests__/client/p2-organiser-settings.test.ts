@@ -218,11 +218,12 @@ describe('the event link card (was the RSN Call link; Stefan, 11 Nov 2026: "it i
     const service = fs.readFileSync(path.join(__dirname, '../../services/session/call-link.service.ts'), 'utf8');
     expect(service).toMatch(/Promise<EventLinksForOrganiser>/);
     // The path is the shared callLinkPath; the url's site is the server's choice (fa78a182: the asking site when it is
-    // one of ours); the event link rides beside it (eventLinkInfo), left out when it cannot be read.
-    expect(service).toMatch(/const callLink = \{ code, path: callLinkPath\(code\), url: `\$\{\w+\}\$\{callLinkPath\(code\)\}` \};/);
-    // The event link is read first (putting it right may replace a call code given out while public: ruling a).
+    // one of ours); the event link rides beside it (eventLinkInfo).
+    expect(service).toMatch(/return \{ code, path: callLinkPath\(code\), url: `\$\{\w+\}\$\{callLinkPath\(code\)\}`, eventLink \};/);
+    // The event link is read first (putting it right may replace a call code given out while public: ruling a); when it
+    // cannot be read the card gets a 503, never a call link that may be dead (rereview minor 1).
     expect(service).toMatch(/eventLink = await eventLinkInfo\(sessionId, opts\);/);
-    expect(service).toMatch(/return eventLink \? \{ \.\.\.callLink, eventLink \} : callLink;/);
+    expect(service).toContain("throw new AppError(503, ErrorCodes.SERVICE_UNAVAILABLE, 'We could not read the event link just now. Please try again.');");
     expect(service).toMatch(/emitEntities\(io, organisers, \[E\.sessionCallLink\(sessionId\), E\.session\(sessionId\)\]\)/);
     const routes = fs.readFileSync(path.join(__dirname, '../../routes/call-links.ts'), 'utf8');
     expect(routes).toMatch(/sessionCallLinkRoutes\.get\('\/:id\/call-link'/);

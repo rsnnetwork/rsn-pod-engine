@@ -128,6 +128,8 @@ export default function CallLinkPage() {
   // email's button (?entry=) is being read, so nothing typed or proved is lost. Never a weaker link than the one held:
   // someone who came by a tailed link keeps it when the event's own is untailed (strongerKey).
   const wayBack = strongerKey(code, landing.data?.link?.slug);
+  // The server's link for the event right now: written down over any held one (rereview minor 4).
+  const wayIsCurrent = !!landing.data?.link && wayBack === landing.data.link.slug;
   const linkPath = landing.data?.link && wayBack === landing.data.link.slug ? landing.data.link.path : null;
   useEffect(() => {
     if (!linkPath || linkPath === location.pathname) return;
@@ -139,9 +141,9 @@ export default function CallLinkPage() {
   const livePath = state?.step === 'enter' ? state.livePath : null;
   useEffect(() => {
     if (screen !== 'live' || !livePath) return;
-    if (state?.sessionId) rememberCallLink(state.sessionId, wayBack);
+    if (state?.sessionId) rememberCallLink(state.sessionId, wayBack, { current: wayIsCurrent });
     navigate(livePath, { replace: true, state: FROM_CALL_LINK });
-  }, [screen, livePath, state?.sessionId, wayBack, navigate]);
+  }, [screen, livePath, state?.sessionId, wayBack, wayIsCurrent, navigate]);
 
   // Nothing missing once they asked: enter at once (once; a second try is their own press).
   useEffect(() => {
@@ -219,7 +221,7 @@ export default function CallLinkPage() {
       throw err;
     }
     if (now.step === 'enter' && now.livePath && now.sessionId) {
-      rememberCallLink(now.sessionId, wayBack);
+      rememberCallLink(now.sessionId, wayBack, { current: wayIsCurrent });
       navigate(now.livePath, { replace: true, state: FROM_CALL_LINK });
     }
   };
