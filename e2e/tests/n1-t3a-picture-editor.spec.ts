@@ -195,7 +195,7 @@ for (const width of WIDTHS) {
     // On the profile and in the header, with no reload: every picture of this member is the new one.
     const shown = page.locator(`img[src="${first.avatar_url}"]:visible`);
     await expect(shown.first()).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator('header a[aria-label="Your profile"] img')).toHaveAttribute('src', first.avatar_url);
+    await expect(page.locator('header button[aria-label="Account menu"] img')).toHaveAttribute('src', first.avatar_url);
     await noSidewaysScroll(page, `${at}: the profile with a photo`);
 
     // Reopened: the picture chosen and where it was placed. Zoomed all the way out, moved to the blue half and saved:
@@ -213,7 +213,7 @@ for (const width of WIDTHS) {
     expect(second.avatar_crop.x).toBeGreaterThan(0.5);
     expect(second.avatar_url).not.toBe(first.avatar_url);
     expect(await pictureAt(page, second.avatar_url)).toMatchObject({ width: 1024, height: 1024, blue: true });
-    await expect(page.locator('header a[aria-label="Your profile"] img')).toHaveAttribute('src', second.avatar_url, { timeout: 20_000 });
+    await expect(page.locator('header button[aria-label="Account menu"] img')).toHaveAttribute('src', second.avatar_url, { timeout: 20_000 });
 
     // Cancel leaves everything as it was.
     await pencil.click();
@@ -233,11 +233,11 @@ for (const width of WIDTHS) {
     await gotoRetry(page, `${APP}/profile`);
     await expect(page.getByRole('heading', { level: 1, name: `Pia Picture banner${width}` })).toBeVisible({ timeout: SLOW });
     const banner = page.getByTestId('profile-banner');
-    const pencil = banner.getByRole('button', { name: 'Edit banner' });
-    // No banner yet: no empty strip, only the slim "Add a cover image" button (10 Nov 2026); the pencil is on the banner once there is one.
+    const pencil = banner.getByRole('button', { name: 'Change banner' });
+    // No banner yet: no empty strip, only the slim "Add banner" button (10 Nov 2026; named so since Shirley pilot S6); the pencil ("Change banner") is on the banner once there is one.
     await expect(banner).toHaveCount(0);
-    const add = page.getByRole('button', { name: 'Add a cover image' });
-    await expectReachable(page, add, `${at}: the add-a-cover-image button`);
+    const add = page.getByRole('button', { name: 'Add banner' });
+    await expectReachable(page, add, `${at}: the Add banner button`);
     expect((await add.boundingBox())!.height).toBeGreaterThanOrEqual(44);
 
     await add.click();

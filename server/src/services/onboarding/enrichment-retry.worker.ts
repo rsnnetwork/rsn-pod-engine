@@ -1,0 +1,149 @@
+// ─── The one later LinkedIn lookup (12 Nov 2026) ──────────────────────────────
+//
+// Called every minute from index.ts. Claims the retry that is due (enrichment-retry.repo: one DELETE ... RETURNING
+// with FOR UPDATE SKIP LOCKED, so with several instances each runs on exactly one, once) and runs it. No Redis needed:
+// the claim is the lock. A tick that finds the previous one still running does nothing.
+//
+// Only while lookups go to ScrapingDog (ENRICH_PROVIDER scrapingdog, the default): with claude_web or none nothing is
+// claimed, so no prepaid Anthropic search runs for a ScrapingDog wait and no member's state is rewritten. Rows left
+// waiting a day past their time are dropped either way, with the address and name they hold.
+//
+// What a retry does, reading everything as it is NOW:
+//   - a member's own lookup (user_id): only for an active account still without a result, with the address on their profile now (a corrected
+//     address is the one looked up; none at all, nothing runs), through the orchestrator, which keeps its own guards
+//     (a fresh cached result or a lookup already running means no second call);
+//   - an approval-time lookup (join_request_id): if the request is no longer approved, or already has its result,
+//     nothing; if the applicant has an active account by now, their own lookup runs as above (the copy at login has
+//     already happened, so a result left on the request would never reach them); otherwise the request's lookup runs
+//     again, inside the 150 s deadline (enrichment-preload.ts).
+// After a member's lookup, found or not, their screens are told through their own entity tag (user:<id>).
+// Each tick also ends any lookup a stopped server left 'searching' for ten minutes (marked failed), so every lookup,
+// a retry with nobody watching included, ends in a terminal state.
+// Each run carries its attempt number (1 or 2): attempt 1 may ask for attempt 2 (30 minutes on), attempt 2 for none.
+
+import { query } from '../../db';
+import logger from '../../config/logger';
+import { fanoutUserEntity } from '../../realtime/fanout';
+import { normalizeLinkedinUrl } from './enrichment.service';
+import { resolveEnrichProvider } from './providers/registry';
+import { failInterruptedLookups, getEnrichmentState, INTERRUPTED_LOOKUP_ERROR } from './enrichment.repo';
+import { record as recordStageEvent } from './stage-events.repo';
+import { claimDueEnrichmentRetries, purgeStaleEnrichmentRetries, type DueEnrichRetry } from './enrichment-retry.repo';
+import { runEnrichment } from './enrichment.orchestrator';
+import { preloadJoinRequestEnrichment } from '../join-request/enrichment-preload';
+
+export const ENRICH_RETRY_INTERVAL_MS = 60_000;
+
+let running = false;
+
+interface RequestNow {
+  id: string;
+  full_name: string;
+  email: string;
+  linkedin_url: string | null;
+  status: string;
+  has_result: boolean;
+  user_id: string | null;
+}
+
+interface MemberNow {
+  linkedin_url: string | null;
+  display_name: string | null;
+  status: string;
+}
+
+/**
+ * The member's own lookup, with what their account says now: the address on their profile now, and nothing at all for
+ * an account that is not active, a profile with no address (the member removed it: the address they withdrew is never
+ * looked up; the claimed row is gone) or a member who already has a result. Tells their screens.
+ */
+async function retryForMember(userId: string, why: 'member' | 'request', attempt: number): Promise<void> {
+  const res = await query<MemberNow>(
+    `SELECT linkedin_url, display_name, status::text AS status FROM users WHERE id = $1`,
+    [userId],
+  );
+  const member = res.rows[0];
+  const linkedinUrl = normalizeLinkedinUrl(member?.linkedin_url);
+  if (!member || member.status !== 'active' || !linkedinUrl) {
+    logger.info({ userId, why, found: !!member, status: member?.status, hasAddress: !!linkedinUrl },
+      'enrichment retry: nothing to do for this member');
+    return;
+  }
+  // A result since (their own later lookup found them): nothing to do. A lookup still running is the orchestrator's
+  // own call: it skips a fresh 'searching' and takes over one a crash left behind.
+  const state = await getEnrichmentState(userId).catch(() => null);
+  if (state && (state.status === 'found' || state.status === 'partial')) {
+    logger.info({ userId, why, status: state.status }, 'enrichment retry: the member already has a result');
+    return;
+  }
+  logger.info({ userId, why, attempt }, 'enrichment retry: running the member\'s lookup again');
+  await runEnrichment(userId, { linkedinUrl, fullName: member.display_name ?? undefined, retryAttempt: attempt });
+  await fanoutUserEntity(userId);
+}
+
+async function retryForRequest(job: DueEnrichRetry & { join_request_id: string }): Promise<void> {
+  const res = await query<RequestNow>(
+    `SELECT jr.id, jr.full_name, jr.email, jr.linkedin_url, jr.status::text AS status,
+            (jr.enriched IS NOT NULL) AS has_result,
+            (SELECT u.id FROM users u WHERE LOWER(u.email) = LOWER(jr.email) AND u.status::text = 'active' LIMIT 1) AS user_id
+       FROM join_requests jr
+      WHERE jr.id = $1`,
+    [job.join_request_id],
+  );
+  const request = res.rows[0];
+  if (!request || request.status !== 'approved' || request.has_result) {
+    logger.info({ joinRequestId: job.join_request_id, found: !!request, status: request?.status, hasResult: request?.has_result },
+      'enrichment retry: nothing to do for this request');
+    return;
+  }
+  if (request.user_id) {
+    logger.info({ joinRequestId: request.id, userId: request.user_id }, 'enrichment retry: the applicant has an account now');
+    await retryForMember(request.user_id, 'request', job.attempt);
+    return;
+  }
+  await preloadJoinRequestEnrichment(
+    { id: request.id, fullName: request.full_name, email: request.email, linkedinUrl: request.linkedin_url ?? job.linkedin_url },
+    { retryAttempt: job.attempt },
+  );
+}
+
+/**
+ * Every lookup ends in a terminal state (12 Nov 2026): one a stopped server left 'searching' for ten minutes is marked
+ * failed, written to the admin inspector's timeline, and its member's screens are told. Runs whatever the provider.
+ */
+async function endInterruptedLookups(): Promise<void> {
+  const ended = await failInterruptedLookups();
+  for (const { userId, source } of ended) {
+    logger.warn({ userId, source }, 'enrichment: a lookup left searching by a stopped server was marked failed');
+    recordStageEvent(userId, 'enrich_failed', { provider: source ?? 'unknown', reason: INTERRUPTED_LOOKUP_ERROR }).catch(() => {});
+    await fanoutUserEntity(userId);
+  }
+}
+
+async function runRetry(job: DueEnrichRetry): Promise<void> {
+  if (job.user_id) return retryForMember(job.user_id, 'member', job.attempt);
+  if (job.join_request_id) return retryForRequest({ ...job, join_request_id: job.join_request_id });
+}
+
+/** Run the retry that is due. Safe to call on an interval: a retry's own failure is logged here; a database error in
+ *  the purge or the claim ends the tick and is logged by the caller (index.ts). */
+export async function processEnrichmentRetries(): Promise<void> {
+  if (running) return;
+  running = true;
+  try {
+    const purged = await purgeStaleEnrichmentRetries();
+    if (purged > 0) logger.info({ purged }, 'enrichment retry: dropped retries left waiting a day');
+    await endInterruptedLookups();
+    if (resolveEnrichProvider() !== 'scrapingdog') return;
+    const due = await claimDueEnrichmentRetries();
+    for (const job of due) {
+      try {
+        await runRetry(job);
+      } catch (err) {
+        logger.warn({ err, retryId: job.id, joinRequestId: job.join_request_id, userId: job.user_id }, 'enrichment retry failed (non-fatal)');
+      }
+    }
+  } finally {
+    running = false;
+  }
+}

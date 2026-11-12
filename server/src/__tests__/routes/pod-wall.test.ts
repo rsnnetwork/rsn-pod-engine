@@ -48,7 +48,11 @@ const mockComments = jest.fn();
 const mockAddComment = jest.fn();
 const mockLike = jest.fn();
 const mockDeleteComment = jest.fn();
+const mockEditPost = jest.fn();
+const mockEditComment = jest.fn();
 jest.mock('../../services/pod/pod-wall.service', () => ({
+  editPost: (...a: unknown[]) => mockEditPost(...a),
+  editComment: (...a: unknown[]) => mockEditComment(...a),
   listPosts: (...a: unknown[]) => mockList(...a),
   getPost: (...a: unknown[]) => mockGet(...a),
   createPost: (...a: unknown[]) => mockCreate(...a),
@@ -66,7 +70,7 @@ import podRoutes from '../../routes/pods';
 import podWallRoutes from '../../routes/pod-wall';
 import { authenticate } from '../../middleware/auth';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
-import { wallWriteLimiter } from '../../middleware/rateLimit';
+import { wallEditLimiter, wallWriteLimiter } from '../../middleware/rateLimit';
 import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import * as podService from '../../services/pod/pod.service';
@@ -90,7 +94,7 @@ const COMMENT = '0b6f6a52-2d1c-4a8e-9f3b-7e1d5c4a3b21';
 const CLIENT = 'c1c1c1c1-0000-4000-8000-000000000001';
 const base = `/pods/${POD}/wall`;
 
-const services = [mockList, mockGet, mockCreate, mockDelete, mockPin, mockReact, mockComments, mockAddComment, mockLike, mockDeleteComment];
+const services = [mockList, mockGet, mockCreate, mockDelete, mockPin, mockReact, mockComments, mockAddComment, mockLike, mockDeleteComment, mockEditPost, mockEditComment];
 const nothingCalled = () => { for (const m of services) expect(m).not.toHaveBeenCalled(); };
 
 beforeEach(() => {
@@ -98,17 +102,21 @@ beforeEach(() => {
   mockList.mockResolvedValue({ pinned: [], posts: [], nextCursor: null, viewer: { canPost: true, canModerate: false } });
   mockGet.mockResolvedValue({ id: POST });
   mockCreate.mockResolvedValue({ id: POST });
-  mockDelete.mockResolvedValue(undefined);
+  mockDelete.mockResolvedValue({ alreadyRemoved: false });
   mockPin.mockResolvedValue(undefined);
   mockReact.mockResolvedValue({ reactionCount: 1, reactions: { like: 1 }, myReaction: 'like' });
   mockComments.mockResolvedValue({ comments: [], truncated: false });
   mockAddComment.mockResolvedValue({ id: COMMENT, createdAt: '2026-10-26T10:05:00.000Z', parentCommentId: null });
   mockLike.mockResolvedValue({ likeCount: 1, likedByMe: true });
-  mockDeleteComment.mockResolvedValue({ postId: POST });
+  mockDeleteComment.mockResolvedValue({ postId: POST, alreadyRemoved: false });
+  mockEditPost.mockResolvedValue({ changed: true, editedAt: '2026-11-11T10:00:00.000Z' });
+  mockEditComment.mockResolvedValue({ changed: true, editedAt: '2026-11-11T10:00:00.000Z', postId: POST });
 });
 
 // Every route, with a body that would otherwise succeed.
-const routes: Array<[string, 'get' | 'post' | 'delete', string, object | undefined]> = [
+const routes: Array<[string, 'get' | 'post' | 'delete' | 'patch', string, object | undefined]> = [
+  ['edit a post', 'patch', `${base}/posts/${POST}`, { content: 'better' }],
+  ['edit a comment', 'patch', `${base}/comments/${COMMENT}`, { content: 'better' }],
   ['list posts', 'get', `${base}/posts`, undefined],
   ['read a post', 'get', `${base}/posts/${POST}`, undefined],
   ['create a post', 'post', `${base}/posts`, { clientId: CLIENT, content: 'hi' }],
@@ -144,6 +152,8 @@ describe('the ids in the address are checked before the service is called', () =
     ['like a comment', 'post', `/pods/${POD}/wall/comments/not-a-comment/like`],
     ['delete a comment', 'delete', `/pods/${POD}/wall/comments/not-a-comment`],
     ['create a post', 'post', '/pods/12345/wall/posts'],
+    ['edit a post', 'patch', `/pods/${POD}/wall/posts/not-a-post`],
+    ['edit a comment', 'patch', `/pods/${POD}/wall/comments/not-a-comment`],
   ] as const)('%s with a bad id is a 400', async (_name, method, path) => {
     const res = await request(app)[method](path).set(me).send({ clientId: CLIENT, content: 'hi', reaction: 'like', liked: true });
     expect(res.status).toBe(400);
@@ -259,11 +269,30 @@ describe('the rest of the posts', () => {
     expect(res.body.error.message).toBe('That post could not be found');
   });
 
-  it('DELETE a post answers ok', async () => {
+  it('DELETE a post answers ok, and whether someone had removed it a moment before (S4)', async () => {
     const res = await request(app).delete(`${base}/posts/${POST}`).set(me);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true, data: { ok: true } });
+    expect(res.body).toEqual({ success: true, data: { ok: true, alreadyRemoved: false } });
     expect(mockDelete).toHaveBeenCalledWith(POD, POST, viewer);
+    mockDelete.mockResolvedValueOnce({ alreadyRemoved: true });
+    const again = await request(app).delete(`${base}/posts/${POST}`).set(me);
+    expect(again.body).toEqual({ success: true, data: { ok: true, alreadyRemoved: true } });
+  });
+
+  it('PATCH a post sends the author\'s new words and the stamp the editor opened (S4)', async () => {
+    const res = await request(app).patch(`${base}/posts/${POST}`).set(me).send({ content: 'better', expectedEditedAt: null });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { changed: true, editedAt: '2026-11-11T10:00:00.000Z' } });
+    expect(mockEditPost).toHaveBeenCalledWith(POD, POST, viewer, { content: 'better', expectedEditedAt: null });
+  });
+
+  it.each([
+    ['no content', {}],
+    ['content over 8000 characters', { content: 'x'.repeat(8001) }],
+    ['a stamp that is not a time', { content: 'ok', expectedEditedAt: 'yesterday' }],
+  ])('PATCH a post with %s is a 400', async (_what, body) => {
+    expect((await request(app).patch(`${base}/posts/${POST}`).set(me).send(body)).status).toBe(400);
+    nothingCalled();
   });
 
   it('pin and unpin answer ok, and say which they are', async () => {
@@ -346,8 +375,20 @@ describe('comments', () => {
   it('DELETE a comment answers ok, and does not hand the post id to the browser (it is for the tags)', async () => {
     const res = await request(app).delete(`${base}/comments/${COMMENT}`).set(me);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true, data: { ok: true } });
+    expect(res.body).toEqual({ success: true, data: { ok: true, alreadyRemoved: false } });
     expect(mockDeleteComment).toHaveBeenCalledWith(POD, COMMENT, viewer);
+  });
+
+  it('PATCH a comment sends the new words; the post id stays on the server (S4)', async () => {
+    const res = await request(app).patch(`${base}/comments/${COMMENT}`).set(me).send({ content: 'better' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { changed: true, editedAt: '2026-11-11T10:00:00.000Z' } });
+    expect(mockEditComment).toHaveBeenCalledWith(POD, COMMENT, viewer, { content: 'better', expectedEditedAt: undefined });
+  });
+
+  it.each([['empty', { content: '' }], ['over 4000', { content: 'z'.repeat(4001) }]])('PATCH a comment %s is a 400', async (_what, body) => {
+    expect((await request(app).patch(`${base}/comments/${COMMENT}`).set(me).send(body)).status).toBe(400);
+    nothingCalled();
   });
 });
 
@@ -368,6 +409,8 @@ describe('the routes are rate limited', () => {
     ['post', '/:podId/wall/posts/:postId/comments'],
     ['post', '/:podId/wall/comments/:commentId/like'],
     ['delete', '/:podId/wall/comments/:commentId'],
+    ['patch', '/:podId/wall/posts/:postId'],
+    ['patch', '/:podId/wall/comments/:commentId'],
   ])('%s %s carries the write limiter, after authenticate and ahead of its handler', (method, path) => {
     const handlers = handlersOf(method, path);
     expect(handlers.length).toBeGreaterThan(2); // the route exists
@@ -384,6 +427,25 @@ describe('the routes are rate limited', () => {
     ['get', '/:podId/wall/posts/:postId/comments'],
   ])('%s %s (a read) is not counted against writes', (method, path) => {
     expect(handlersOf(method, path)).not.toContain(wallWriteLimiter);
+  });
+
+  it.each([['/:podId/wall/posts/:postId'], ['/:podId/wall/comments/:commentId']])('PATCH %s also carries the edit limiter (S4)', (path) => {
+    const handlers = handlersOf('patch', path);
+    const at = handlers.indexOf(wallEditLimiter);
+    expect(at).toBeGreaterThan(handlers.indexOf(authenticate));
+    expect(at).toBeLessThan(handlers.length - 1);
+  });
+
+  it('refuses the 21st edit in a minute with a friendly 429 (S4)', async () => {
+    const busy = as('u-editor');
+    for (let i = 0; i < 20; i += 1) {
+      expect((await request(app).patch(`${base}/posts/${POST}`).set(busy).send({ content: `v${i}` })).status).toBe(200);
+    }
+    mockEditPost.mockClear();
+    const refused = await request(app).patch(`${base}/posts/${POST}`).set(busy).send({ content: 'one more' });
+    expect(refused.status).toBe(429);
+    expect(refused.body.error.message).toBe('You are editing too fast. Wait a moment, then try again.');
+    expect(mockEditPost).not.toHaveBeenCalled();
   });
 
   it('refuses the 61st write in a minute with a friendly 429, for that member only', async () => {

@@ -23,7 +23,7 @@ jest.mock('../../../config/logger', () => ({
 }));
 jest.mock('../../../db', () => ({ query: jest.fn(), transaction: jest.fn() }));
 
-import { sendMeetingConfirmedEmail, sendMeetingCancelledEmail, sendMeetingReminderEmail, __setSendPaceForTests } from '../../../services/email/email.service';
+import { MEETING_INVITE_LINE, sendMeetingConfirmedEmail, sendMeetingCancelledEmail, sendMeetingReminderEmail, __setSendPaceForTests } from '../../../services/email/email.service';
 
 // These tests are about the words, not the pace: the provider's gate (two sends a second) is run on an instant clock.
 beforeAll(() => __setSendPaceForTests({ now: () => Date.now(), pause: async () => {} }));
@@ -51,7 +51,6 @@ const confirmed = (extra: Record<string, unknown> = {}) => ({
   recipientTimezone: 'Europe/Copenhagen' as string | null,
   threadUrl: `${APP}/messages/c1`,
   eventsUrl: `${APP}/sessions`,
-  googleCalendarUrl: 'https://calendar.google.com/calendar/render?action=TEMPLATE',
   icsContent: 'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n',
   joinUrl: `${APP}/meet/c1?scheduled=1&kind=video`,
   kind: 'video' as const,
@@ -105,29 +104,24 @@ describe('the confirmation email', () => {
   });
 });
 
-// 1 Nov 2026 (T7, L10): Add to calendar is Google, Outlook.com or the file. The email offers all three.
-describe('the confirmation email\'s calendar links', () => {
-  const google = 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=Meeting+with+Stefan+on+REASON';
-  const outlook = 'https://outlook.live.com/calendar/0/deeplink/compose?subject=Meeting+with+Stefan+on+REASON';
-
-  it('links Add to Google Calendar and Add to Outlook.com, and keeps the file attached', async () => {
-    const mail = await sent(() => sendMeetingConfirmedEmail('delivered+claus@resend.dev', 'Claus', confirmed({
-      googleCalendarUrl: google, outlookCalendarUrl: outlook,
-    })));
-    expect(mail.html).toContain(`href="${google.replace(/&/g, '&amp;')}"`);
-    expect(mail.html).toContain('>Add to Google Calendar</a>');
-    expect(mail.html).toContain(`href="${outlook}"`);
-    expect(mail.html).toContain('>Add to Outlook.com</a>');
-    expect(mail.text).toContain(`Add to Google Calendar: ${google}\n`);
-    expect(mail.text).toContain(`Add to Outlook.com: ${outlook}\n`);
+// 11 Nov 2026 (Shirley Palmer's RSN 09): the attached invitation is the only way into a calendar the email offers. The
+// Google and Outlook.com links made a second entry with no UID (a move never updated it), and Outlook.com asked for a
+// Microsoft sign-in.
+describe('the confirmation email offers the attached invitation only', () => {
+  it('has no Google or Outlook link, says the attachment is the invitation, and keeps the file attached', async () => {
+    const mail = await sent(() => sendMeetingConfirmedEmail('delivered+claus@resend.dev', 'Claus', confirmed()));
+    for (const body of [mail.html, mail.text]) {
+      expect(body).not.toMatch(/Google|Outlook|calendar\.google\.com|outlook\.live\.com/);
+      expect(body).toContain(MEETING_INVITE_LINE);
+    }
     expect(mail.attachments?.[0]).toMatchObject({ filename: 'meeting.ics', contentType: 'text/calendar; charset=utf-8; method=REQUEST' });
   });
 
-  it('a caller with only the Google link (the server before this release) sends the email as before, with no Outlook line', async () => {
-    const mail = await sent(() => sendMeetingConfirmedEmail('delivered+claus@resend.dev', 'Claus', confirmed()));
-    expect(mail.html).toContain('>Add to Google Calendar</a>');
-    expect(mail.html).not.toContain('Outlook');
-    expect(mail.text).not.toContain('Outlook');
+  it('says whether the provider took it (the sent-invitation log reads it), and a refusal is not sent', async () => {
+    mockSend.mockReset().mockResolvedValue({ error: null });
+    expect(await sendMeetingConfirmedEmail('delivered+claus@resend.dev', 'Claus', confirmed())).toMatchObject({ sent: true });
+    mockSend.mockReset().mockResolvedValue({ error: { statusCode: 422, message: 'invalid' } });
+    expect(await sendMeetingConfirmedEmail('delivered+claus@resend.dev', 'Claus', confirmed())).toMatchObject({ sent: false });
   });
 });
 

@@ -1,13 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Search } from 'lucide-react';
-import Avatar from '@/components/ui/Avatar';
 import NotificationBell from '@/components/ui/NotificationBell';
-import { useAuthStore } from '@/stores/authStore';
 import ReasonMark from '../brand/ReasonMark';
+import AccountMenu from './AccountMenu';
 
 export default function ShellTopbar() {
-  const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
   const [q, setQ] = useState('');
   const submit = (e: FormEvent) => {
@@ -32,9 +30,8 @@ export default function ShellTopbar() {
       </form>
       <div className="col-start-2 row-start-1 flex items-center gap-2 min-[721px]:ml-auto">
         <NotificationBell />
-        <Link to="/profile" aria-label="Your profile" className="grid h-11 w-11 place-items-center rounded-xl border border-reason-line bg-white">
-          <Avatar src={user?.avatarUrl} name={user?.displayName || 'You'} size="sm" />
-        </Link>
+        {/* Shirley pilot S6 (RSN 13): the photo opens the account menu (it was a link to /profile, which did nothing there). */}
+        <AccountMenu />
       </div>
     </header>
   );

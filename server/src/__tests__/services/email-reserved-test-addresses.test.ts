@@ -149,9 +149,9 @@ describe('an email to an address reserved for testing', () => {
   it('is skipped with its attachment too: the calendar file is built and goes nowhere', async () => {
     await expect(emailService.sendMeetingConfirmedEmail('bo@rsn-e2e.invalid', 'Bo', {
       partnerName: 'Ana', startAt: new Date('2026-11-05T17:00:00Z'), durationMin: 30, recipientTimezone: 'UTC',
-      threadUrl: 'https://app.rsn.network/messages/c1', googleCalendarUrl: 'https://calendar.google.com/calendar/render',
+      threadUrl: 'https://app.rsn.network/messages/c1',
       icsContent: 'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n',
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({ sent: true, skipped: 'reserved-test-address' });
     expect(mockSend).not.toHaveBeenCalled();
   });
 });

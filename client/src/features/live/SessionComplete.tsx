@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 // Feature 17 + 18 (13 May spec) — DM button on recap rows. One click lands
 // the user directly in the chat panel with the composer ready; no prompt,
@@ -27,7 +28,7 @@ function MessagePartnerButton({ userId, displayName }: { userId: string; display
   const openConversation = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    window.open(`/messages/new/${userId}`, '_blank', 'noopener,noreferrer');
+    window.open(writeToPath(userId), '_blank', 'noopener,noreferrer');
   };
   return (
     <button

@@ -7,7 +7,7 @@ import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER, teardown, idsOf } fro
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable } from '../helpers/viewport-fit';
-import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
+import { acceptConfirmDialogs, confirmInPage } from '../helpers/confirm-dialog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE POD'S DISCUSSION (COM-01, 26 Oct 2026). Stefan, back in the pod after an event: "We can't write in the
@@ -233,7 +233,8 @@ test('A posts from a phone, B sees it live on a desktop that never reloads and r
   await expect(bellOf(bobPage)).toContainText('1', { timeout: 15_000 });
   const postBells = await bellsOf(bob, 'pod_post');
   expect(postBells.rows).toHaveLength(1);
-  expect(postBells.rows[0]).toMatchObject({ title: `New post in ${podName}`, link: `/pods/${podId}` });
+  // S4: the new-post bell opens the post itself (still one per member per pod per hour).
+  expect(postBells.rows[0]).toMatchObject({ title: `New post in ${podName}`, link: `/pods/${podId}?post=${postId}` });
 
   // B replies on the post.
   await cardOf(bobPage, postId).getByTestId(`comment-button-${postId}`).click();
@@ -247,7 +248,8 @@ test('A posts from a phone, B sees it live on a desktop that never reloads and r
   await expect(bellOf(alicePage)).toContainText('1', { timeout: 15_000 });
   const commentBells = await bellsOf(alice, 'pod_comment');
   expect(commentBells.rows).toHaveLength(1);
-  expect(commentBells.rows[0]).toMatchObject({ title: `${bob.displayName} commented on your post`, link: `/pods/${podId}?post=${postId}` });
+  // S4 fix round 1: a comment's bell names the comment, so removing the comment removes its bell.
+  expect(commentBells.rows[0]).toMatchObject({ title: `${bob.displayName} commented on your post`, link: `/pods/${podId}?post=${postId}&comment=${await commentIdOf(reply)}` });
 
   // A follows the bell: the pod opens on that post, outlined, in view, with the comment open.
   await bellOf(alicePage).click();
@@ -277,6 +279,7 @@ test('the director pins and deletes; a member can do neither to someone else\'s 
   const bobPage = await pageAt(bob, `/pods/${podId}`, { width: 390, height: 844 });
   const alicePage = await pageAt(alice, `/pods/${podId}`, { width: 1280, height: 900 });
   for (const p of [dirPage, bobPage, alicePage]) await expect(cardOf(p, postId)).toBeVisible({ timeout: 30_000 });
+  await alicePage.evaluate(() => { (window as unknown as { __samePage: string }).__samePage = 'never reloaded'; });
 
   // A member has no Pin, and no Delete on someone else's post. The author has Delete on her own.
   await expect(cardOf(bobPage, postId).getByTestId(`pin-post-${postId}`)).toHaveCount(0);
@@ -303,15 +306,21 @@ test('the director pins and deletes; a member can do neither to someone else\'s 
   // The director deletes B's comment: A's count goes back to nothing, live.
   await expect(cardOf(alicePage, postId)).toContainText('1 comment', { timeout: 15_000 });
   await cardOf(dirPage, postId).getByTestId(`comment-button-${postId}`).click();
-  await acceptNextDialog(dirPage);
+  // The in-page confirm is answered on the director's page itself. (acceptConfirmDialogs answers it only when the next
+  // action or assertion is on the SAME page, and the next one here is on Alice's, so the question stayed open and
+  // nothing was deleted: that, not the live update, is why Alice's count did not move in the 12 Nov run.)
   await dirPage.getByTestId(`comment-delete-${commentId}`).click();
+  await confirmInPage(dirPage);
+  await expect(dirPage.getByTestId(`comment-${commentId}`)).toHaveCount(0, { timeout: 15_000 });
+  await expect.poll(async () => (await pool.query(`SELECT deleted_at FROM pod_post_comments WHERE id = $1`, [commentId])).rows[0].deleted_at, { timeout: 15_000 }).not.toBeNull();
+  // Alice's page, which never reloads, follows by itself (pod:<id>:wall).
   await expect(cardOf(alicePage, postId)).not.toContainText('1 comment', { timeout: 15_000 });
-  const gone = await pool.query(`SELECT deleted_at FROM pod_post_comments WHERE id = $1`, [commentId]);
-  expect(gone.rows[0].deleted_at).not.toBeNull();
+  expect(await alicePage.evaluate(() => (window as unknown as { __samePage?: string }).__samePage), 'Alice\'s page never reloaded').toBe('never reloaded');
 
   // ...and the post itself: it leaves every open page, and the row stays, with who removed it.
-  await acceptNextDialog(dirPage);
   await cardOf(dirPage, postId).getByTestId(`delete-post-${postId}`).click();
+  await confirmInPage(dirPage);
+  await expect(cardOf(dirPage, postId)).toHaveCount(0, { timeout: 15_000 });
   await expect(cardOf(bobPage, postId)).toHaveCount(0, { timeout: 15_000 });
   await expect(cardOf(alicePage, postId)).toHaveCount(0, { timeout: 15_000 });
   await expect(cardOf(dirPage, postId)).toHaveCount(0, { timeout: 15_000 });
@@ -353,6 +362,9 @@ test('a removed member is told so live and the server answers 403; a visitor rea
   const text = `Members only ${Date.now().toString(36)}`;
   expect((await apiAs(director, 'POST', `/pods/${podId}/wall/posts`, { clientId: crypto.randomUUID(), content: text })).status).toBe(201);
   const postId = await postIdOf(text);
+  const carolsText = `Carol's own words ${Date.now().toString(36)}`;
+  expect((await apiAs(carol, 'POST', `/pods/${podId}/wall/posts`, { clientId: crypto.randomUUID(), content: carolsText })).status).toBe(201);
+  const carolsPostId = await postIdOf(carolsText);
 
   const carolPage = await pageAt(carol, `/pods/${podId}`, { width: 390, height: 844 });
   await expect(cardOf(carolPage, postId)).toBeVisible({ timeout: 30_000 });
@@ -370,10 +382,16 @@ test('a removed member is told so live and the server answers 403; a visitor rea
   expect((await apiAs(carol, 'POST', `/pods/${podId}/wall/posts`, { clientId: crypto.randomUUID(), content: 'let me in' })).status).toBe(403);
   await shot(carolPage, 'removed-390');
 
-  // On a fresh load it is the same, and her words are not hers to delete any more.
+  // On a fresh load it is the same.
   await carolPage.reload({ waitUntil: 'domcontentloaded' });
   await expect(carolPage.getByText(NOT_A_MEMBER)).toBeVisible({ timeout: 30_000 });
   await expect(carolPage.getByPlaceholder(PLACEHOLDER)).toHaveCount(0);
+  // S4 (D8): someone removed may still delete their OWN words, and nothing else: someone else's post keeps the 403.
+  expect((await apiAs(carol, 'DELETE', `/pods/${podId}/wall/posts/${postId}`)).status).toBe(403);
+  const ownDelete = await apiAs(carol, 'DELETE', `/pods/${podId}/wall/posts/${carolsPostId}`);
+  expect(ownDelete.status).toBe(200);
+  expect(ownDelete.json.data).toEqual({ ok: true, alreadyRemoved: false });
+  expect((await apiAs(carol, 'PATCH', `/pods/${podId}/wall/posts/${carolsPostId}`, { content: 'edited after removal' })).status, 'nor edit').toBe(403);
 
   // A visitor to the public pod: the page shows, the posts do not.
   const ninaPage = await pageAt(nina, `/pods/${podId}`, { width: 1280, height: 900 });
@@ -576,9 +594,10 @@ test('the first ten posts, Load more, and a ?post= link to a post that is not on
   await expect(cardOf(middle, ids[8])).toBeVisible({ timeout: 30_000 });
   await expect(cardOf(middle, ids[8])).toHaveClass(/ring-rsn-red/);
 
-  // A link to a post that is gone says so and breaks nothing.
+  // A link to a post that is gone says so where the post would be (S4: "This post was removed.", in place of a toast
+  // that was gone before it was read) and breaks nothing.
   const missing = await pageAt(alice, `/pods/${bigPodId}?post=${crypto.randomUUID()}`, { width: 390, height: 844 });
-  await expect(missing.getByText('That post is no longer available.')).toBeVisible({ timeout: 30_000 });
+  await expect(missing.getByTestId('pod-wall-linked-removed')).toHaveText('This post was removed.', { timeout: 30_000 });
   await expect(cards(missing)).toHaveCount(10);
 });
 

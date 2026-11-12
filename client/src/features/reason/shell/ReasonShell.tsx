@@ -14,6 +14,7 @@ import { isAdmin } from '@/lib/utils';
 import { useMessagesUnread } from '@/features/messages/useMessagesUnread';
 import ToastContainer from '@/components/ui/Toast';
 import OnboardingTour from '@/features/onboarding/OnboardingTour';
+import CalendarReturnWatcher from '@/features/calendar/CalendarReturnWatcher';
 import ShellSidebar from './ShellSidebar';
 import ShellTopbar from './ShellTopbar';
 import MobileNav from './MobileNav';
@@ -84,6 +85,8 @@ function MemberShell() {
       </div>
       <MobileNav unreadCount={unreadCount} />
       <OnboardingTour />
+      {/* Back from Google or Microsoft after connecting a calendar (Shirley pilot S8): finishes it and says how it went. */}
+      <CalendarReturnWatcher />
       <ToastContainer />
     </div>
   );

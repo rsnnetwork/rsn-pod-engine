@@ -3,8 +3,8 @@ import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio,
-  Pencil, Trash2, UserPlus, Lock, Mail, UserCheck, X,
-  Clock, CopyPlus, XCircle, AlertTriangle, MessagesSquare,
+  UserPlus, Lock, Mail, UserCheck, X,
+  Clock, XCircle, AlertTriangle, MessagesSquare,
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
@@ -27,7 +27,11 @@ import PodEventsSection from './PodEventsSection';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
-import PodCircleChips from './PodCircleChips';
+import PodCircleChips, { usePodCircles } from './PodCircleChips';
+import ManageMenu, { scrollToSection, type ManageEntry } from '@/features/manage/ManageMenu';
+import { POD_HINT, SECTION_ID, podManageKeys, type ManageKey } from '@/features/manage/manage-menu';
+import SpaceExportSheet from '@/features/spaces/SpaceExportSheet';
+import { mayExportPod } from '@/features/spaces/space-export';
 import { POD_VISIBILITY_COPY } from '@rsn/shared';
 
 // ─── Label / icon maps ──────────────────────────────────────────────────────
@@ -77,6 +81,8 @@ export default function PodDetailPage() {
 
   // "Invite members": the invite sheet (features/invites, 26 Oct 2026), the people chosen from your connections.
   const [inviteOpen, setInviteOpen] = useState(false);
+  // Shirley pilot S7 (item 20): its director and hosts export its data.
+  const [exportOpen, setExportOpen] = useState(false);
 
   const [memberStatusFilter, setMemberStatusFilter] = useState<string | null>(null);
   // Duplicate pod: open CreatePodModal pre-filled
@@ -113,6 +119,9 @@ export default function PodDetailPage() {
   // The server lists a pod's events to its active members (the only ones it names a role for) and to admins, and
   // answers 403 to anyone else, so nobody else asks.
   const mayReadEvents = !!pod?.memberRole || isAdmin(user?.role);
+
+  // Shirley pilot S3: the Manage menu offers Circles only when the pod is in some (the same read as its chips).
+  const { data: podCircles } = usePodCircles(podId);
 
   const { data: podMemberCounts } = useQuery({
     queryKey: ['pod-member-counts', podId],
@@ -298,9 +307,46 @@ export default function PodDetailPage() {
   const isPodDirector     = myMembership?.role === 'director' || pod.memberRole === 'director';
   const canManage        = isPodDirector || isAdminUser;
   const canManageOrHost = canManage || myMembership?.role === 'host' || pod.memberRole === 'host';
+  // The viewer's own active role, never an admin's powers: the server refuses an export to anyone else.
+  const canExport = isMember && mayExportPod(myMembership?.status === 'active' ? myMembership.role : pod.memberRole);
 
   const vis    = VISIBILITY_CONFIG[pod.visibility] || VISIBILITY_CONFIG.public;
   const VisIcon = vis.icon;
+
+  // Shirley pilot S3 (RSN 11): one Manage menu, each entry only for whoever may use it (manage-menu.ts): the director (or
+  // a platform admin) has them all; a host has Members, Invitations, Events and Moderation. The viewer's own ACTIVE role.
+  const myActiveRole = myMembership?.status === 'active' ? myMembership.role : pod.memberRole ?? null;
+  const archive = async () => {
+    if (deleteMutation.isPending) return;
+    if (await ask({ title: 'Archive this pod?', body: 'Its events are kept, and you can reactivate it later.', confirmLabel: 'Archive', tone: 'danger' })) {
+      deleteMutation.mutate();
+    }
+  };
+  const onManage: Record<ManageKey, ManageEntry | null> = {
+    edit: { key: 'edit', onSelect: openEdit, testId: 'pod-edit' },
+    members: { key: 'members', onSelect: () => scrollToSection(SECTION_ID.podMembers) },
+    invitations: { key: 'invitations', onSelect: () => scrollToSection(SECTION_ID.podInvitations) },
+    circles: { key: 'circles', onSelect: () => scrollToSection(SECTION_ID.podCircles) },
+    events: { key: 'events', onSelect: () => navigate(`/sessions/new?podId=${podId}`) },
+    visibility: { key: 'visibility', onSelect: openEdit, hint: `${POD_HINT.visibility}. Now: ${vis.label}.` },
+    moderation: {
+      key: 'moderation',
+      onSelect: () => scrollToSection(pendingMembers.length > 0 ? SECTION_ID.podRequests : SECTION_ID.podDiscussion),
+      hint: pendingMembers.length > 0 ? `${pendingMembers.length} waiting to join, and the discussion` : POD_HINT.moderation,
+    },
+    // Shirley pilot S7's export sheet: the pod's director and hosts, by their own active role (canExport), never an admin's
+    // powers; the only Export on this page, an archived pod's included.
+    export: { key: 'export', onSelect: () => setExportOpen(true), testId: 'pod-export' },
+    pods: null,
+    duplicate: { key: 'duplicate', onSelect: () => setDuplicateOpen(true) },
+    archive: { key: 'archive', onSelect: () => void archive() },
+  };
+  const manageEntries = podManageKeys({
+    role: myActiveRole === 'director' || myActiveRole === 'host' || myActiveRole === 'member' ? myActiveRole : null,
+    platformAdmin: isAdminUser,
+    status: pod.status,
+    inCircles: (podCircles?.length ?? 0) > 0,
+  }, canExport).flatMap((key) => (onManage[key] ? [{ hint: POD_HINT[key], ...onManage[key]! }] : []));
 
   // Build initialValues for duplicate — strip id, rename
   const duplicateInitialValues = {
@@ -416,6 +462,8 @@ export default function PodDetailPage() {
               Reactivate Pod
             </Button>
           )}
+          {/* S3/S7: an archived pod's menu holds only Export, for its director and hosts. */}
+          <ManageMenu title={`Manage ${pod.name}`} entries={manageEntries} />
           <p className="text-sm text-gray-400 self-center">This pod is archived. Events and data are preserved.</p>
         </div>
       ) : pod.status !== 'archived' && (isMember || canManage) && (
@@ -430,29 +478,8 @@ export default function PodDetailPage() {
               <Mail className="h-4 w-4 mr-2" /> Invite members
             </Button>
           )}
-          {canManage && (
-            <Button variant="secondary" onClick={openEdit}>
-              <Pencil className="h-4 w-4 mr-2" /> Edit Pod
-            </Button>
-          )}
-          {canManage && (
-            <Button variant="secondary" onClick={() => setDuplicateOpen(true)}>
-              <CopyPlus className="h-4 w-4 mr-2" /> Duplicate Pod
-            </Button>
-          )}
-          {canManage && (
-            <Button
-              variant="danger"
-              onClick={async () => {
-                if (await ask({ title: 'Archive this pod?', body: 'Its events are kept, and you can reactivate it later.', confirmLabel: 'Archive', tone: 'danger' })) {
-                  deleteMutation.mutate();
-                }
-              }}
-              isLoading={deleteMutation.isPending}
-            >
-              <Trash2 className="h-4 w-4 mr-2" /> Archive Pod
-            </Button>
-          )}
+          {/* S3: Edit details, Members, Invitations, Circles, Events, Visibility, Moderation, Duplicate pod and Archive pod. */}
+          <ManageMenu title={`Manage ${pod.name}`} entries={manageEntries} busy={deleteMutation.isPending ? 'Archiving...' : undefined} />
           {isMember && !isPodDirector && (
             // S2: leaving asks first (CLAUDE.md §12), and says what it means for a private pod.
             <Button
@@ -481,6 +508,9 @@ export default function PodDetailPage() {
 
       {/* ── Full Edit Modal ──────────────────────────────────────────────── */}
       <EditPodModal open={editOpen} onClose={() => setEditOpen(false)} pod={pod} />
+      {exportOpen && canExport && podId && (
+        <SpaceExportSheet kind="pod" spaceId={podId} name={pod.name} onClose={() => setExportOpen(false)} />
+      )}
 
       {/* ── Duplicate Pod Modal (pre-filled CreatePodModal) ─────────────── */}
       <CreatePodModal
@@ -560,7 +590,7 @@ export default function PodDetailPage() {
 
       {/* ── Pending Join Requests ───────────────────────────────────────── */}
       {canManageOrHost && pendingMembers.length > 0 && (
-        <div className="animate-fade-in-up stagger-2">
+        <div id="pod-requests" className="scroll-mt-4 animate-fade-in-up stagger-2">
           <h2 className="text-lg font-semibold text-amber-400 mb-3 flex items-center gap-2">
             <Clock className="h-5 w-5" /> Pending Requests ({pendingMembers.length})
           </h2>
@@ -652,12 +682,14 @@ export default function PodDetailPage() {
                archived pod), so its organisers see the card too. Above the members, so a director sees it without
                scrolling past the whole list (P1 item 33). ─────── */}
           {canManageOrHost && pod.status !== 'archived' && podId && (
+            <div id="pod-invitations" className="scroll-mt-4">
             <InviteStatusList
               target={{ type: 'pod', podId }}
               present={activeMembers.map((m: { userId: string }) => m.userId)}
               presentCount={activeMembers.length}
               onInvite={() => setInviteOpen(true)}
             />
+            </div>
           )}
 
           {/* ── Members ──────────────────────────────────────────────────── */}

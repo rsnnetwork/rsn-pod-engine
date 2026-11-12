@@ -11,7 +11,8 @@ import * as path from 'path';
 import { ONBOARDING_V2_MEET, canBring, shortLabelFor, type OnboardingV2Answers, type PersonBrief } from '@rsn/shared';
 import { answerSummary, questionFor } from '../../../../client/src/features/onboarding/flow';
 import {
-  ADD_COMPANY_TO, CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, answerLines, needsLinkedin, privateRows, youCanBring,
+  ADD_COMPANY_TO, CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, LINKEDIN_PROMPT, answerLines, linkedinPrompt, needsLinkedin,
+  privateRows, youCanBring,
 } from '../../../../client/src/features/reason/profile/your-profile-text';
 import { personFacts } from '../../../../client/src/features/reason/human/profile-text';
 import { linkedinBoxValue, linkedinSave } from '../../../../client/src/features/profile/linkedin-box';
@@ -129,11 +130,12 @@ describe('Your profile: what it says', () => {
 
   // Fix round 1 (M-3): any stored text hid the card, while the hero links only an https address on LinkedIn, so a junk or
   // http address left the member with neither a link nor the way to add one. The card follows the hero's own parse.
-  it('the LinkedIn card shows whenever the hero has no LinkedIn link to show: an http address or text that is no link too', () => {
-    for (const linkedinUrl of ['http://www.linkedin.com/in/nora', 'not a link', 'linkedin.com/in/nora', 'https://evil.example/in/nora', 'javascript:alert(1)']) {
+  // Shirley pilot S6: an http or bare LinkedIn profile address is linked now (in https), so it needs no card.
+  it('the LinkedIn card shows whenever the hero has no LinkedIn link to show: text that is no LinkedIn link too', () => {
+    for (const linkedinUrl of ['not a link', 'https://evil.example/in/nora', 'javascript:alert(1)']) {
       expect({ linkedinUrl, card: needsLinkedin({ linkedinUrl }) }).toEqual({ linkedinUrl, card: true });
     }
-    for (const linkedinUrl of ['https://www.linkedin.com/in/nora', 'https://www.linkedin.com/in/jane?utm_source=share&utm_medium=ios_app', 'https://uk.linkedin.com/in/nora/']) {
+    for (const linkedinUrl of ['https://www.linkedin.com/in/nora', 'https://www.linkedin.com/in/jane?utm_source=share&utm_medium=ios_app', 'https://uk.linkedin.com/in/nora/', 'http://www.linkedin.com/in/nora', 'linkedin.com/in/nora']) {
       expect({ linkedinUrl, card: needsLinkedin({ linkedinUrl }) }).toEqual({ linkedinUrl, card: false });
     }
     // The very parse the hero links with.
@@ -209,10 +211,18 @@ describe('Your profile: the page', () => {
     expect(entities).toMatch(/>Add your company</);
   });
 
-  it('shows "Optimize your profile: connect LinkedIn" only when there is no LinkedIn', () => {
-    expect(page()).toMatch(/\{needsLinkedin\(card\.data\) && \(/);
-    expect(count(page(), /Optimize your profile: connect LinkedIn/g)).toBe(1);
+  // Shirley pilot S6 (RSN 13): "connect LinkedIn" while there is none, "needs fixing" while what is saved opens nothing.
+  it('shows "Optimize your profile: connect LinkedIn" only when there is no LinkedIn, and "needs fixing" for one nobody can open', () => {
+    expect(page()).toMatch(/const linkedin = linkedinPrompt\(card\.data\);/);
+    expect(page()).toMatch(/\{linkedin && \(/);
+    expect(page()).toMatch(/\{LINKEDIN_PROMPT\[linkedin\]\.title\}/);
     expect(page()).toMatch(/to=\{CONNECT_LINKEDIN_TO\}/);
+    expect(linkedinPrompt({ linkedinUrl: null })).toBe('missing');
+    expect(linkedinPrompt({ linkedinUrl: '  ' })).toBe('missing');
+    expect(linkedinPrompt({ linkedinUrl: 'not a link' })).toBe('fix');
+    expect(linkedinPrompt({ linkedinUrl: 'http://linkedin.com/in/nora' })).toBeNull();
+    expect(LINKEDIN_PROMPT.missing.title).toBe('Optimize your profile: connect LinkedIn');
+    expect(LINKEDIN_PROMPT.fix.title).toBe('Your LinkedIn link needs fixing');
   });
 
   it('side by side, the company card and "Only you see this" keep their own heights: no blank card beside the answers', () => {
@@ -243,9 +253,9 @@ describe('Your profile: the banner', () => {
     expect(api()).toMatch(/export const savePictureRequest = \(kind: PictureKind, body: PictureBody\) => api\.put\(`\/users\/me\/\$\{kind\}`, body\);/);
     expect(api()).toMatch(/export const removeBannerRequest = \(\) => api\.delete\('\/users\/me\/banner'\);/);
     expect(editor()).toMatch(/const banner = useMemberPicture\('banner'\);/);
-    expect(editor()).toMatch(/<PencilButton label="Edit banner" onClick=\{banner\.edit\} disabled=\{busy\} \/>/);
+    // Shirley pilot S6 (RSN 13): the pencil is named "Change banner", the control with none "Add banner".
+    expect(editor()).toMatch(/<PencilButton label="Change banner" onClick=\{banner\.edit\} disabled=\{busy\} \/>/);
     expect(editor()).toMatch(/<PictureEditor \{\.\.\.banner\.editor\} \/>/);
-    expect(editor()).not.toMatch(/Change banner/);
     expect(editor()).toMatch(/title="Remove your banner\?"/);
     expect(editor()).toMatch(/mutationFn: removeBannerRequest/);
     // The file is checked before it is read, and the same file can be chosen again after a failure (in the editor).
@@ -278,18 +288,20 @@ describe('Your profile: the banner', () => {
 
 // ── The Human Profile's More menu ──────────────────────────────────────────────────────────────────
 
-describe('Human Profile: More, with Block and Report this member', () => {
+describe('Human Profile: More, with Block member and Report member', () => {
   it('sits in the header while a profile is on screen', () => {
     expect(human()).toMatch(/<ProfileMoreMenu\b/);
     expect(more()).toMatch(/aria-expanded=\{open\}/);
     expect(more()).toMatch(/aria-label="More"/);
-    expect(more()).toMatch(/>Block</);
-    expect(more()).toMatch(/>Report this member</);
+    // 11 Nov 2026 (Shirley Palmer's item 16): the words, from the one place every safety entry point reads them.
+    expect(more()).toMatch(/>\{BLOCK_MEMBER\}</);
+    expect(more()).toMatch(/>\{REPORT_MEMBER\}</);
   });
 
-  it('Block uses the old public profile\'s confirmation and its call', () => {
-    // T2 (1 Nov 2026): the same words, asked in the page (ConfirmDialog through useConfirm) rather than window.confirm.
-    expect(human()).toMatch(/await ask\(\{ title: `Block \$\{name\}\?`, body: "They won't be able to message you, and you won't be matched together in future events\.", confirmLabel: 'Block', tone: 'danger' \}\)/);
+  it('Block says what it does before it is done (11 Nov 2026), asked in the page, and makes its call', () => {
+    // T2 (1 Nov 2026): asked in the page (ConfirmDialog through useConfirm) rather than window.confirm.
+    // From a profile there may be no conversation: the profile's wording says "any conversation" (fix round 1).
+    expect(human()).toContain("await ask({ title: blockTitle(name), body: blockConsequence(name, 'profile'), confirmLabel: 'Block', tone: 'danger' })");
     expect(api()).toMatch(/export const blockMember = \(userId: string\) => api\.post\(`\/users\/\$\{memberSegment\(userId\)\}\/block`\);/);
     expect(human()).toMatch(/mutationFn: \(\) => blockMember\(userId\)/);
   });
@@ -343,7 +355,8 @@ describe('Human Profile: More, with Block and Report this member', () => {
   });
 
   it('keeps the promise Messages makes when you block someone ("You can unblock them from their profile.")', () => {
-    expect(read('features/messages/MessagesPage.tsx')).toMatch(/You can unblock them from their profile\./);
+    expect(read('components/safety/safety-words.ts')).toMatch(/You can unblock them from the conversation or their profile\./);
+    expect(read('features/messages/MessagesPage.tsx')).toContain('body: blockConsequence(name)');
     expect(human()).toMatch(/<Notice title="You blocked this member\."[\s\S]*?'Unblock'/);
   });
 
@@ -436,7 +449,10 @@ describe('the old form at /profile/edit', () => {
     expect(linkedinBoxValue('https://www.linkedin.com/in/Jane-Doe')).toBe('Jane-Doe');
     expect(linkedinBoxValue('https://uk.linkedin.com/in/jane/')).toBe('jane');
     for (const none of [null, undefined, '', '   ']) expect(linkedinBoxValue(none)).toBe('');
-    for (const odd of ['http://www.linkedin.com/in/jane', 'not a link', 'linkedin.com/in/jane', 'https://evil.example/in/jane', 'https://www.linkedin.com/company/acme']) {
+    // Shirley pilot S6: an http or bare LinkedIn profile address opens now, so the box shows its name too.
+    expect(linkedinBoxValue('http://www.linkedin.com/in/jane')).toBe('jane');
+    expect(linkedinBoxValue('linkedin.com/in/jane')).toBe('jane');
+    for (const odd of ['not a link', 'https://evil.example/in/jane', 'https://www.linkedin.com/company/acme']) {
       expect({ odd, shown: linkedinBoxValue(odd) }).toEqual({ odd, shown: odd });
     }
   });

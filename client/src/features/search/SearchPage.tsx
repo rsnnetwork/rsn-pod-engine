@@ -21,7 +21,9 @@ import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { errorMessage } from '@/features/reason/errors';
 import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
+import SearchesHelp from './SearchesHelp';
 import api from '@/lib/api';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 interface Result {
   userId: string;
@@ -120,6 +122,7 @@ export default function SearchPage() {
     <div className="mx-auto w-full max-w-6xl">
       <h1 className="font-display text-2xl font-bold text-[#1a1a2e]">Find people</h1>
       <p className="mt-1 text-sm text-gray-500">Search by name, job title or company.</p>
+      <SearchesHelp />
 
       <div className="relative mt-4">
         <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -176,7 +179,7 @@ export default function SearchPage() {
               </div>
             ) : r.pokeStatus === 'accepted' ? (
               <Link
-                to={`/messages/new/${r.userId}`}
+                to={writeToPath(r.userId)}
                 className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-xl border border-gray-300 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50"
               >
                 Message

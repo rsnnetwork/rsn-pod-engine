@@ -27,6 +27,7 @@ import { meetingTime } from './meeting-time';
 import { CURRENT_MEETING_ID, lockConversation } from './current-meeting';
 import { readMyFeedback } from './meeting-feedback.service';
 import { buildMeetingFile } from './meeting-calendar';
+import { readInviteEmail } from './meeting-invite-emails';
 
 /** A meeting row with the other person's columns, as every read here selects it. */
 interface MeetingRow {
@@ -195,7 +196,9 @@ async function loadVisible(userId: string, meetingId: string): Promise<MeetingRo
 /** One meeting, with the viewer's own answer to "How did it go?" (never the other person's). */
 export async function getMeeting(userId: string, meetingId: string, now = new Date()): Promise<Meeting> {
   const row = await loadVisible(userId, meetingId);
-  return { ...toMeeting(row, userId, now), myFeedback: await readMyFeedback(userId, meetingId) };
+  // 11 Nov 2026 (RSN 09): and whether the viewer's calendar invitation for its current time went by email.
+  const [myFeedback, inviteEmail] = await Promise.all([readMyFeedback(userId, meetingId), readInviteEmail(meetingId, userId)]);
+  return { ...toMeeting(row, userId, now), myFeedback, inviteEmail };
 }
 
 /**

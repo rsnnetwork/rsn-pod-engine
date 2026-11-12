@@ -91,6 +91,7 @@ import meetingRoutes from '../../routes/meeting';
 import meetingsRoutes from '../../routes/meetings';
 import callsRoutes from '../../routes/calls';
 import circleRoutes from '../../routes/circles';
+import { circleExportRoutes, podExportRoutes } from '../../routes/space-export';
 import entityRoutes from '../../routes/entities';
 import reportRoutes from '../../routes/reports';
 import groupRoutes from '../../routes/groups';
@@ -104,6 +105,9 @@ import eventQuestionRoutes from '../../routes/event-questions';
 import eventAdmissionRoutes from '../../routes/event-admission';
 import eventWaitlistRoutes from '../../routes/event-waitlist';
 import callLinkRoutes, { sessionCallLinkRoutes } from '../../routes/call-links';
+import publicProfileRoutes, { publicLinkRoutes } from '../../routes/public-profiles';
+import publicConfigRoutes from '../../routes/public-config';
+import calendarSyncRoutes from '../../routes/calendar-sync';
 import scheduleRoutes from '../../routes/schedule';
 import eventImageRoutes from '../../routes/event-image';
 import eventReportRoutes from '../../routes/event-report';
@@ -111,12 +115,14 @@ import eventReportRoutes from '../../routes/event-report';
 // The API exactly as index.ts mounts it, in the same order (the last test below holds the two lists together).
 const MOUNTS: Array<[string, express.Router]> = [
   ['/api/auth', authRoutes],
+  ['/api/users/me/public-link', publicLinkRoutes],
   ['/api/users/me', accountSecurityRoutes],
   ['/api/users', userRoutes],
   ['/api/onboarding/v2', onboardingV2Routes],
   ['/api/onboarding', onboardingRoutes],
   ['/api/pods', podRoutes],
   ['/api/pods', podWallRoutes],
+  ['/api/pods', podExportRoutes],
   ['/api/sessions', sessionRoutes],
   ['/api/invites', inviteRoutes],
   ['/api/ratings', ratingRoutes],
@@ -131,6 +137,9 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/sessions', eventWaitlistRoutes],
   ['/api/sessions', sessionCallLinkRoutes],
   ['/api/call-links', callLinkRoutes],
+  ['/api/public/profiles', publicProfileRoutes],
+  ['/api/public/config', publicConfigRoutes],
+  ['/api/calendar', calendarSyncRoutes],
   ['/api/sessions', scheduleRoutes],
   ['/api/sessions', eventImageRoutes],
   ['/api/sessions', eventReportRoutes],
@@ -149,6 +158,7 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/people', peopleRoutes],
   ['/api/agents', agentRoutes],
   ['/api/circles', circleRoutes],
+  ['/api/circles', circleExportRoutes],
   ['/api/entities', entityRoutes],
   ['/api/reports', reportRoutes],
   ['/api/groups', groupRoutes],
@@ -182,6 +192,10 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   ['get', `/api/pods/${OTHER}`],
   ['get', `/api/pods/${OTHER}/wall/posts`],
   ['get', '/api/circles'],
+  // Shirley pilot S7: an organiser's export is a member's (an organiser's) surface.
+  ['get', `/api/circles/${OTHER}/export?section=members`],
+  ['get', `/api/pods/${OTHER}/export?section=members`],
+  ['get', '/api/circles/archived/mine'],
   ['get', '/api/matches/platform'],
   ['get', '/api/agents'],
   ['get', '/api/pokes/received'],

@@ -61,7 +61,24 @@ const PUBLISHED_CIRCLE_AUDIENCE_ARM = `${CIRCLE_AUDIENCE_ARM} AND cs.publication
 // mutations, or `E.userPods(memberId)` for member-add/remove) and they're
 // concatenated.
 
-export async function fanoutPodEntities(
+/** Who a pod's change is told to: its members whose row is not removed or declined (read before a hard delete). */
+export async function podAudience(podId: string): Promise<string[]> {
+  const { query } = await import('../db');
+  const result = await query<{ user_id: string }>(
+    `SELECT user_id FROM pod_members
+      WHERE pod_id = $1 AND status NOT IN ('removed', 'declined')`,
+    [podId],
+  );
+  return result.rows.map(r => r.user_id);
+}
+
+/**
+ * Tell these people a pod changed: its tags and the caller's, and with includeUserPodsPerMember each person's My Pods.
+ * Split from fanoutPodEntities (12 Nov 2026) so a hard delete can read its audience BEFORE the rows go and tell them
+ * AFTER the delete has been saved, as every mutation does.
+ */
+export async function tellPodAudience(
+  userIds: string[],
   podId: string,
   extraEntities: string[] = [],
   options: { includeUserPodsPerMember?: boolean } = {},
@@ -69,13 +86,6 @@ export async function fanoutPodEntities(
   const io = getRealtimeIo();
   if (!io) return;
   try {
-    const { query } = await import('../db');
-    const result = await query<{ user_id: string }>(
-      `SELECT user_id FROM pod_members
-        WHERE pod_id = $1 AND status NOT IN ('removed', 'declined')`,
-      [podId],
-    );
-    const userIds = result.rows.map(r => r.user_id);
     const entities = [E.pod(podId), E.podMembers(podId), E.podInvites(podId), ...extraEntities];
     if (options.includeUserPodsPerMember) {
       // Pod-wide mutations (delete, reactivate, hard-delete) also flip each
@@ -84,6 +94,19 @@ export async function fanoutPodEntities(
       for (const id of userIds) entities.push(E.userPods(id));
     }
     await emitEntities(io, userIds, entities);
+  } catch (err) {
+    logger.warn({ err, podId }, 'tellPodAudience: failed to fan out');
+  }
+}
+
+export async function fanoutPodEntities(
+  podId: string,
+  extraEntities: string[] = [],
+  options: { includeUserPodsPerMember?: boolean } = {},
+): Promise<void> {
+  if (!getRealtimeIo()) return;
+  try {
+    await tellPodAudience(await podAudience(podId), podId, extraEntities, options);
   } catch (err) {
     logger.warn({ err, podId }, 'fanoutPodEntities: failed to fan out');
   }
@@ -141,6 +164,58 @@ export async function fanoutPodWall(
     await emitEntities(io, result.rows.map(r => r.user_id), entities);
   } catch (err) {
     logger.warn({ err, podId }, 'fanoutPodWall: failed to fan out');
+  }
+}
+
+// ─── Circle wall fanout (Shirley pilot S4, 11 Nov 2026) ─────────────────────
+//
+// The circle wall's twin of fanoutPodWall. Every circle wall is read by its members only (D2), so the audience is
+// the circle's members and nobody else: not the person who made it, not a platform admin who is not in it (an admin
+// who acts refreshes their own screen when the change settles, as on the pod wall). Sends `circle:<id>:wall` plus
+// what the caller names (`circle-wall-post:<postId>`); `wall: false` leaves the feed's tag out for a change only a
+// thread shows (a like on a comment). Never throws: a change is saved before anyone is told.
+
+export async function fanoutCircleWall(
+  circleId: string,
+  extraEntities: string[] = [],
+  options: { wall?: boolean } = {},
+): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const result = await query<{ user_id: string }>(
+      `SELECT user_id FROM circle_members WHERE circle_id = $1`,
+      [circleId],
+    );
+    const entities = [...(options.wall === false ? [] : [E.circleWall(circleId)]), ...extraEntities];
+    await emitEntities(io, result.rows.map(r => r.user_id), entities);
+  } catch (err) {
+    logger.warn({ err, circleId }, 'fanoutCircleWall: failed to fan out');
+  }
+}
+
+/** The most circles one post's change tells about the shares of it. */
+export const CIRCLE_WALL_SHARES_MAX = 20;
+
+/**
+ * S4 fix round 1: a post was removed or edited, and other circles may hold shares of it, whose cards carry its words.
+ * Each such circle (at most CIRCLE_WALL_SHARES_MAX, live shares only) is told through fanoutCircleWall, so its cards are
+ * read again: the words change, or the card says the post is not available. Never throws.
+ */
+export async function fanoutCircleWallShares(postId: string): Promise<void> {
+  if (!getRealtimeIo()) return;
+  try {
+    const { query } = await import('../db');
+    const circles = await query<{ circle_id: string }>(
+      `SELECT DISTINCT circle_id FROM circle_posts
+        WHERE shared_from_post_id = $1 AND deleted_at IS NULL
+        ORDER BY circle_id LIMIT $2`,
+      [postId, CIRCLE_WALL_SHARES_MAX],
+    );
+    for (const row of circles.rows) await fanoutCircleWall(row.circle_id);
+  } catch (err) {
+    logger.warn({ err, postId }, 'fanoutCircleWallShares: failed to fan out');
   }
 }
 
@@ -543,6 +618,22 @@ export async function fanoutUserEntity(
   }
 }
 
+// ─── A member's connected calendars (Shirley pilot S8, 12 Nov 2026) ─────────
+//
+// The member connected, disconnected, or must reconnect a calendar (the provider stopped accepting REASON's access),
+// or closed their account with calendars connected. Only they are told: nobody else ever sees anything of another
+// member's calendar. Their Calendars card in Settings and the meeting picker's busy shading read again.
+
+export async function fanoutUserCalendars(userId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    await emitEntities(io, [userId], [E.userCalendars(userId)]);
+  } catch (err) {
+    logger.warn({ err, userId }, 'fanoutUserCalendars: failed to fan out');
+  }
+}
+
 // ─── Entity fanout (21 Oct 2026) ────────────────────────────────────────────
 //
 // An entity (an organisation members create, such as a company or a fund; not the realtime "entities"
@@ -597,7 +688,7 @@ export async function fanoutEntityChange(
 // have open is told; a tag carries no data), the platform admins (final fix wave X3, 2 Nov 2026: they run every circle, L21, so their open Requests panel and
 // request count follow an ask or an answer; read bounded, CIRCLE_CHANGE_ADMINS_MAX), the actor and the changed people.
 // A circle's invites change through `extra` (circle:<id>:invites). Someone outside the circle with its page open is
-// not told, and catches up on focus, as with an entity. The circle's wall keeps its own refresh and is not told.
+// not told, and catches up on focus, as with an entity. The circle's wall has its own tags (fanoutCircleWall, S4); its feed also follows circle:<id>:members.
 //
 // Final fix wave S1 (2 Nov 2026): circle membership decides who sees, auto-registers for and registers for a circle's
 // events (event-access.ts), so each changed person is also sent, in their own emit only:
@@ -675,6 +766,44 @@ export async function fanoutCirclesOfPod(podId: string, actorId: string): Promis
     for (const row of circles.rows) await fanoutCircleChange(row.circle_id, actorId);
   } catch (err) {
     logger.warn({ err, podId }, 'fanoutCirclesOfPod: failed to fan out');
+  }
+}
+
+// ─── Whether a member's profile lists their communities (Shirley pilot S3, RSN 14) ──────────────────────────────
+//
+// A member turned "Show my communities on my profile" on or off, or showed or hid themselves from search: what their
+// profile's Communities section lists changed for everyone who can see it. The people most likely to have it open are
+// the ones they share a space with, and they are the only ones the server can name: the members of each circle they are
+// in and the active members of each active pod they are in (at most COMMUNITY_AUDIENCE_MAX, plus the member). Each is
+// sent user:<member>:circles and user:<member>:pods, which that section follows (a tag carries no data). Anyone else
+// with the profile open catches up on focus, as with a member's entities.
+
+export const COMMUNITY_AUDIENCE_MAX = 2000;
+
+export async function fanoutCommunitiesOf(userId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const people = await query<{ user_id: string }>(
+      `SELECT DISTINCT a.user_id FROM (
+         SELECT o.user_id FROM circle_members mine
+           JOIN circles c ON c.id = mine.circle_id AND c.archived_at IS NULL
+           JOIN circle_members o ON o.circle_id = mine.circle_id
+          WHERE mine.user_id = $1
+         UNION
+         SELECT o.user_id FROM pod_members mine
+           JOIN pods p ON p.id = mine.pod_id AND p.status = 'active'
+           JOIN pod_members o ON o.pod_id = mine.pod_id AND o.status = 'active'
+          WHERE mine.user_id = $1 AND mine.status = 'active'
+       ) a
+       ORDER BY a.user_id LIMIT $2`,
+      [userId, COMMUNITY_AUDIENCE_MAX],
+    );
+    const recipients = [...new Set([userId, ...people.rows.map(r => r.user_id)])];
+    await emitEntities(io, recipients, [E.userCircles(userId), E.userPods(userId)]);
+  } catch (err) {
+    logger.warn({ err, userId }, 'fanoutCommunitiesOf: failed to fan out');
   }
 }
 

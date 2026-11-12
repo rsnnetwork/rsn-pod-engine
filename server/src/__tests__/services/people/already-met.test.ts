@@ -97,7 +97,8 @@ describe('who a mark hides from', () => {
   it('the brief carries the flag and leaves the relationship state to the real signals', () => {
     const s = flat(src('services/people/person-brief.service.ts'));
     expect(s).toContain('alreadyMet: markedMet');
-    const stateRule = s.slice(s.indexOf('const state: RelationshipState'), s.indexOf('const person = toPublicMember'));
+    // Shirley pilot S6: the brief is put together by assembleBrief, after the state is decided.
+    const stateRule = s.slice(s.indexOf('const state: RelationshipState'), s.indexOf('return assembleBrief('));
     expect(stateRule).not.toContain('markedMet');
   });
 });

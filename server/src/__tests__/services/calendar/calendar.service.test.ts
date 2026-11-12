@@ -7,7 +7,7 @@
 jest.mock('../../../db', () => ({ query: jest.fn(), __esModule: true }));
 
 import {
-  buildCalendarLinks, buildGoogleCalendarUrl, generateIcsContent, meetingCalendarLinks, meetingCalendarUid,
+  buildCalendarLinks, buildGoogleCalendarUrl, generateIcsContent, meetingCalendarUid,
 } from '../../../services/calendar/calendar.service';
 
 const base = {
@@ -149,19 +149,6 @@ describe('the calendar template links', () => {
     const links = buildCalendarLinks(noPlace);
     expect(new URL(links.google).searchParams.has('location')).toBe(false);
     expect(new URL(links.outlook).searchParams.has('location')).toBe(false);
-  });
-
-  it('a meeting\'s links: "Meeting with {name} on REASON", "{Video|Audio} call on REASON. Join: {url}", the join link as where', () => {
-    const video = meetingCalendarLinks({
-      partnerName: 'Bo', kind: 'video', startAt: entry.start, durationMin: 30, joinUrl: entry.location,
-    });
-    expect(video).toEqual(buildCalendarLinks(entry));
-    const audio = new URL(meetingCalendarLinks({
-      partnerName: 'Ana', kind: 'audio', startAt: entry.start, durationMin: 45, joinUrl: 'https://app.rsn.network/meet/c2?scheduled=1&kind=audio',
-    }).google);
-    expect(audio.searchParams.get('text')).toBe('Meeting with Ana on REASON');
-    expect(audio.searchParams.get('details')).toBe('Audio call on REASON. Join: https://app.rsn.network/meet/c2?scheduled=1&kind=audio');
-    expect(audio.searchParams.get('dates')).toBe('20261105T170000Z/20261105T174500Z');
   });
 
   it('the older Google builder (title, start, length, description) still answers the same link', () => {

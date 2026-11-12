@@ -8,15 +8,17 @@
 
 import { query } from '../../db';
 import {
-  ErrorCodes, canBring, usableAnswer, type MessageRefusal, type OutcomeKey, type PersonBrief, type PublicMember,
-  type RecentConnection, type RelationshipState, type WorthContinuing,
+  ErrorCodes, canBring, usableAnswer, type MessageRefusal, type OutcomeKey, type PersonBrief, type PersonEntity,
+  type PublicMember, type RecentConnection, type RelationshipState, type User, type WorthContinuing,
 } from '@rsn/shared';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import * as blockService from '../block/block.service';
 import { entitiesOf } from '../entity/entity.service';
 import { getUserById } from '../identity/identity.service';
 import { toPublicIntentProfile, toPublicMember } from '../user/public-card';
-import { loadProfile, scoreFit, MATCH_THRESHOLD, BROWSE_THRESHOLD } from '../matching/platform-match.service';
+import {
+  loadProfile, scoreFit, MATCH_THRESHOLD, BROWSE_THRESHOLD, type IntentProfile,
+} from '../matching/platform-match.service';
 import { getPokeWith } from '../poke/poke.service';
 import { canMessage } from '../dm/dm.service';
 import { getResponse } from './person-response.service';
@@ -187,24 +189,15 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
           : poke?.status === 'declined' && poke.sentByMe ? 'declined'
             : 'none';
 
-  const person = toPublicMember(target);
-  // The opener says "what {first} can bring", so a member with no name at all is "they".
-  const first = person.firstName || person.displayName.split(' ')[0] || 'they';
   // A blank answer ('' or only spaces) and one with nothing in it ('.', '…') are null, which is what falls
   // through to the next field.
-  const theyCanBring = canBring(them);
   const youAreLookingFor = usableAnswer(me?.whoIWantToMeet) ?? usableAnswer(me?.myIntent);
   const upcomingEvents = events.rows.map(r => ({ id: r.id, title: r.title, scheduledAt: r.scheduled_at.toISOString() }));
   const match: PersonBrief['match'] = fit && strength ? { reason: fit.reason, strength } : null;
 
-  return {
-    person,
+  return assembleBrief(target, them, entities, {
     match,
-    theyCanBring,
     youAreLookingFor,
-    opener: openerFor({
-      first, theyCanBring, youAreLookingFor, hasMatch: match !== null, sharedEvent: upcomingEvents[0]?.title ?? null,
-    }),
     relationship: {
       state,
       pokeId: poke?.status === 'pending' && !poke.sentByMe ? poke.id : null,
@@ -219,11 +212,74 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
     },
     shared: { circles: circles.rows, pods: pods.rows, upcomingEvents },
     path,
-    entities,
     canMessage: messaging.allowed,
     canMessageReason: messaging.allowed ? null : refusalOf(messaging.reason),
     canCall,
+  });
+}
+
+/** Everything in a brief that depends on who is looking: the reason, their own want, where the two stand. */
+type ViewerSide = Pick<PersonBrief,
+  'match' | 'youAreLookingFor' | 'relationship' | 'shared' | 'path' | 'canMessage' | 'canMessageReason' | 'canCall'>;
+
+/**
+ * A brief from its two halves: what every member is shown of the person (the public card, what they can bring, their
+ * approved entities) and the viewer's side. Both getPersonBrief and getOwnPreview build their answer here, so the
+ * preview cannot drift from what members are sent.
+ */
+function assembleBrief(
+  target: User, them: IntentProfile | null, entities: PersonEntity[], side: ViewerSide,
+): PersonBrief {
+  const person = toPublicMember(target);
+  // The opener says "what {first} can bring", so a member with no name at all is "they".
+  const first = person.firstName || person.displayName.split(' ')[0] || 'they';
+  const theyCanBring = canBring(them);
+  return {
+    person,
+    match: side.match,
+    theyCanBring,
+    youAreLookingFor: side.youAreLookingFor,
+    opener: openerFor({
+      first, theyCanBring, youAreLookingFor: side.youAreLookingFor, hasMatch: side.match !== null,
+      sharedEvent: side.shared.upcomingEvents[0]?.title ?? null,
+    }),
+    relationship: side.relationship,
+    shared: side.shared,
+    path: side.path,
+    entities,
+    canMessage: side.canMessage,
+    canMessageReason: side.canMessageReason,
+    canCall: side.canCall,
   };
+}
+
+/**
+ * The viewer's side for a member who has no connection to the person at all: never met, never asked, nothing shared, no
+ * reason REASON found, and saying nothing of what they want themselves. getPersonBrief answers exactly this for such a
+ * member (a stranger with no encounter is refused messages as 'no_encounter'), so the preview built on it is what they
+ * see.
+ */
+const NO_CONNECTION: ViewerSide = {
+  match: null,
+  youAreLookingFor: null,
+  relationship: {
+    state: 'none', pokeId: null, timesMet: 0, lastMetAt: null, saved: false, passed: false, alreadyMet: false, outcomes: [],
+  },
+  shared: { circles: [], pods: [], upcomingEvents: [] },
+  path: null,
+  canMessage: false,
+  canMessageReason: 'no_encounter',
+  canCall: false,
+};
+
+/**
+ * "Preview as others see it" (Shirley pilot S6, RSN 12): the member's own Human Profile exactly as a signed-in member
+ * with no connection to them is sent it, through the brief's own assembly and projection, never a copy drawn on the
+ * screen. Only approved entities are in it (entitiesOf), as for every other member.
+ */
+export async function getOwnPreview(userId: string): Promise<PersonBrief> {
+  const [target, them, entities] = await Promise.all([getUserById(userId), loadProfile(userId), entitiesOf(userId)]);
+  return assembleBrief(target, them, entities, NO_CONNECTION);
 }
 
 /**

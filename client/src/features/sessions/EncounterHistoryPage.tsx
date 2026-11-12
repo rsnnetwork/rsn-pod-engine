@@ -11,6 +11,7 @@ import EmptyState from '@/components/ui/EmptyState';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 export default function EncounterHistoryPage() {
   const [mutualOnly, setMutualOnly] = useState(false);
@@ -109,7 +110,7 @@ export default function EncounterHistoryPage() {
                   {/* Message button: visible for mutual pairs or admins (server gate is authoritative) */}
                   {(e.mutual || isAdmin) && (
                     <button
-                      onClick={(evt) => { evt.preventDefault(); evt.stopPropagation(); navigate(`/messages/new/${e.otherUserId}`); }}
+                      onClick={(evt) => { evt.preventDefault(); evt.stopPropagation(); navigate(writeToPath(e.otherUserId)); }}
                       title="Message this person"
                       className="inline-flex min-h-[44px] items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-3 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
                     >

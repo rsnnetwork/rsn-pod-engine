@@ -135,6 +135,7 @@ export async function getUserById(id: string): Promise<User> {
             notify_email AS "notifyEmail", notify_event_reminders AS "notifyEventReminders",
             notify_matches AS "notifyMatches", profile_visible AS "profileVisible",
             invite_opt_out_public_events AS "inviteOptOutPublicEvents",
+            show_communities AS "showCommunities",
             onboarding_completed AS "onboardingCompleted",
             onboarding_status AS "onboardingStatus",
             onboarding_version AS "onboardingVersion",
@@ -281,6 +282,7 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
     notifyMatches: 'notify_matches',
     profileVisible: 'profile_visible',
     inviteOptOutPublicEvents: 'invite_opt_out_public_events',
+    showCommunities: 'show_communities',
     professionalRole: 'professional_role',
     currentState: 'current_state',
     careerStage: 'career_stage',
@@ -1352,9 +1354,27 @@ export async function deleteUser(userId: string): Promise<void> {
   // Revoke all tokens
   await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
 
-  // Deactivate the account (soft delete)
-  await query(`UPDATE users SET status = 'deactivated', updated_at = NOW() WHERE id = $1`, [userId]);
+  // Deactivate the account (soft delete). Its public profile link goes with it (Shirley pilot S6), so a link shared
+  // before the close never opens again, and an account reopened later starts with none.
+  await query(
+    `UPDATE users SET status = 'deactivated', public_profile_token = NULL, public_profile_token_created_at = NULL, updated_at = NOW() WHERE id = $1`,
+    [userId],
+  );
   invalidateUserStatusCache(userId);
   logger.info({ userId }, 'User deleted (deactivated)');
   await freePlacesOf(userId, freedEvents);
+  await forgetCalendarsOf(userId);
+}
+
+/**
+ * Shirley pilot S8: a closed account keeps no calendar access. A close only marks the account, so the ON DELETE CASCADE
+ * on calendar_connections never fires: each connection is revoked where the provider allows and deleted. Never throws.
+ */
+async function forgetCalendarsOf(userId: string): Promise<void> {
+  try {
+    const { forgetCalendarConnections } = await import('../calendar-sync/calendar-sync.service');
+    await forgetCalendarConnections(userId);
+  } catch (err) {
+    logger.warn({ err, userId }, 'An account closed, but its calendar connections were not forgotten (non-fatal)');
+  }
 }

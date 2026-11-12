@@ -22,6 +22,9 @@ import * as blockService from '../services/block/block.service';
 import { REQUEST_MESSAGE_MAX } from '../services/poke/request-message';
 import { combinedRequestMessage, requestText } from '../services/poke/request-text';
 import { ANSWER_COLUMNS, answersFromRow, type AnswerRow } from '../services/onboarding/onboarding-report';
+import { getUserById } from '../services/identity/identity.service';
+import { peopleReadLimiter } from '../middleware/rateLimit';
+import { PATH_REFUSALS, uuidInPath } from '../middleware/path-ids';
 
 const router = Router();
 
@@ -29,6 +32,29 @@ async function assertUserExists(userId: string): Promise<void> {
   const r = await query<{ id: string }>(`SELECT id FROM users WHERE id = $1`, [userId]);
   if (r.rows.length === 0) throw new NotFoundError('User', userId);
 }
+
+// ─── GET /users/:id (Shirley pilot S6 fix round 1) ───────────────────────────
+// The inspector's own read of the member's full profile. GET /users/:id answers a block in either direction with the
+// unknown 404, for admins too, so a member under investigation could block every admin and blind the inspector. This
+// read is for admins only and asks about no block: moderation must always see the member. Like GET /users/:id for an
+// admin it is the full row (getUserById never reads the public link's token), and like it, it is not audited: the
+// audited admin reads here are a member's private message threads.
+
+router.get(
+  '/users/:id',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  peopleReadLimiter,
+  uuidInPath('id', PATH_REFUSALS.member),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await getUserById(req.params.id);
+      res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ─── GET /users/:id/onboarding ───────────────────────────────────────────────
 // Internal (admin) view — unlike GET /onboarding/status this DOES surface

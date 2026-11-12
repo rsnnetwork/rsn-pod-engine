@@ -25,10 +25,10 @@ describe('no empty banner', () => {
     expect((human().match(/<ProfileBanner/g) ?? []).length).toBe(1);
   });
 
-  it('your own profile swaps the empty strip for a slim "Add a cover image" button that opens the banner editor', () => {
+  it('your own profile swaps the empty strip for a slim "Add banner" button that opens the banner editor (Shirley pilot S6, RSN 13)', () => {
     expect(editor()).toMatch(/\{bannerUrl \? \(/);
     expect(editor()).toMatch(/<ProfileBanner src=\{bannerUrl\}>/);
-    expect(editor()).toMatch(/onClick=\{banner\.edit\}[^>]*className="flex min-h-\[44px\] w-full[^"]*"[^>]*>\s*<ImagePlus[^>]*\/> Add a cover image/);
+    expect(editor()).toMatch(/onClick=\{banner\.edit\}[^>]*className="flex min-h-\[44px\] w-full[^"]*"[^>]*>\s*<ImagePlus[^>]*\/> Add banner/);
     expect(editor()).toMatch(/<PictureEditor \{\.\.\.banner\.editor\} \/>/);
   });
 

@@ -95,7 +95,6 @@ const meetingConfirmed = (extra: Record<string, unknown> = {}) => ({
   durationMin: 30,
   recipientTimezone: 'Europe/Berlin',
   threadUrl: 'https://app.rsn.network/messages/c1',
-  googleCalendarUrl: 'https://calendar.google.com/calendar/render?action=TEMPLATE',
   icsContent: aStubCalendarFile,
   ...extra,
 });

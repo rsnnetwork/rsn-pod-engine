@@ -53,10 +53,10 @@ export default function AgentsPage() {
     mutationFn: () => api.post('/agents', { label: label.trim(), wantText: wantText.trim() }),
     onSuccess: () => {
       setCreating(false); setLabel(''); setWantText('');
-      addToast('Agent created. Searching now.', 'success');
+      addToast('Search created. It is looking now.', 'success');
       qc.invalidateQueries({ queryKey: ['agents'], exact: false });
     },
-    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Could not create that agent', 'error'),
+    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Could not create that search', 'error'),
   });
 
   const statusMutation = useMutation({
@@ -64,14 +64,14 @@ export default function AgentsPage() {
       api.post(`/agents/${args.id}/status`, { status: args.status }),
     onSuccess: (_d, args) => {
       addToast(
-        args.status === 'archived' ? 'Agent archived'
-          : args.status === 'paused' ? 'Agent paused'
-            : 'Agent searching again',
+        args.status === 'archived' ? 'Search archived'
+          : args.status === 'paused' ? 'Search paused'
+            : 'Search looking again',
         'info',
       );
       qc.invalidateQueries({ queryKey: ['agents'], exact: false });
     },
-    onError: () => addToast('Could not update that agent', 'error'),
+    onError: () => addToast('Could not update that search', 'error'),
   });
 
   if (isLoading) return <PageLoader />;
@@ -84,14 +84,14 @@ export default function AgentsPage() {
     <div className="mx-auto w-full max-w-3xl">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
-          <h1 className="font-display text-2xl font-bold text-[#1a1a2e]">Who you are looking for</h1>
+          <h1 className="font-display text-2xl font-bold text-[#1a1a2e]">Your searches</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Each agent keeps searching as new people join.
+            Each search keeps looking as new people join REASON.
           </p>
         </div>
         {!creating && (
           <Button onClick={() => setCreating(true)} className="min-h-[44px] shrink-0">
-            <Plus className="mr-1.5 h-4 w-4" /> New agent
+            <Plus className="mr-1.5 h-4 w-4" /> New search
           </Button>
         )}
       </div>
@@ -105,7 +105,7 @@ export default function AgentsPage() {
             value={label}
             onChange={e => setLabel(e.target.value)}
             placeholder=""
-            aria-label="Agent name"
+            aria-label="Search name"
             autoFocus
             className="mt-1 min-h-[44px] w-full rounded-lg border-2 border-gray-300 px-3 text-base focus:border-rsn-red focus:outline-none"
           />
@@ -142,20 +142,20 @@ export default function AgentsPage() {
         onClick={() => setShowArchived(v => !v)}
         className="mb-3 min-h-[44px] text-sm font-medium text-gray-500 underline-offset-2 hover:text-rsn-red hover:underline"
       >
-        {showArchived ? '← Back to your agents' : 'View archived agents'}
+        {showArchived ? '← Back to your searches' : 'View archived searches'}
       </button>
 
       {showArchived && list.length === 0 ? (
-        <Card className="!p-8 text-center text-sm text-gray-500">You have no archived agents.</Card>
+        <Card className="!p-8 text-center text-sm text-gray-500">You have no archived searches.</Card>
       ) : list.length === 0 && !creating ? (
         <Card className="!p-8 text-center">
           <Search className="mx-auto h-8 w-8 text-gray-300" />
-          <p className="mt-3 text-sm font-medium text-[#1a1a2e]">You have no agents yet</p>
+          <p className="mt-3 text-sm font-medium text-[#1a1a2e]">You have no searches yet</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-gray-500">
             Tell us who you want to meet and we will keep looking, including as new people join.
           </p>
           <Button onClick={() => setCreating(true)} className="mt-4 min-h-[44px]">
-            <Plus className="mr-1.5 h-4 w-4" /> Create your first agent
+            <Plus className="mr-1.5 h-4 w-4" /> Create your first search
           </Button>
         </Card>
       ) : (
@@ -199,7 +199,7 @@ export default function AgentsPage() {
                   <>
                   <button
                     type="button"
-                    aria-label={a.status === 'active' ? 'Pause agent' : 'Resume agent'}
+                    aria-label={a.status === 'active' ? 'Pause search' : 'Resume search'}
                     onClick={() => statusMutation.mutate({ id: a.id, status: a.status === 'active' ? 'paused' : 'active' })}
                     className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-700"
                   >
@@ -207,7 +207,7 @@ export default function AgentsPage() {
                   </button>
                   <button
                     type="button"
-                    aria-label="Archive agent"
+                    aria-label="Archive search"
                     onClick={() => statusMutation.mutate({ id: a.id, status: 'archived' })}
                     className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-700"
                   >

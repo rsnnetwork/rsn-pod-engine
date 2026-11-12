@@ -264,26 +264,6 @@ export function buildCalendarLinks(input: CalendarLinkInput): CalendarLinks {
   return { google: googleTemplateUrl(input), outlook: outlookComposeUrl(input) };
 }
 
-/**
- * A 1:1 meeting's links: "Meeting with {name} on REASON", "{Video|Audio} call on REASON. Join: {url}", and the join
- * link as where, so the entry has a way into the call.
- */
-export function meetingCalendarLinks(meeting: {
-  partnerName: string;
-  kind: 'audio' | 'video';
-  startAt: Date;
-  durationMin: number;
-  joinUrl: string;
-}): CalendarLinks {
-  return buildCalendarLinks({
-    title: `Meeting with ${meeting.partnerName} on REASON`,
-    start: meeting.startAt,
-    end: new Date(meeting.startAt.getTime() + meeting.durationMin * 60 * 1000),
-    details: `${meeting.kind === 'audio' ? 'Audio' : 'Video'} call on REASON. Join: ${meeting.joinUrl}`,
-    location: meeting.joinUrl,
-  });
-}
-
 /** Times in the compact UTC form Google expects; Google shows them in the viewer's own zone. */
 function googleTemplateUrl(input: CalendarLinkInput): string {
   const params = new URLSearchParams({

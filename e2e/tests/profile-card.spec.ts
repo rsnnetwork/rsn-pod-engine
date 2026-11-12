@@ -116,5 +116,5 @@ test('your own profile shows no meet, block or report actions', async () => {
   await expect(page.getByTestId('profile-about')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('meet-state')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Block/ })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /Report this member/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Report member/ })).toHaveCount(0);
 });

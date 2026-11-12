@@ -352,7 +352,8 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
   });
   it('a long unbroken author name on the circle wall and the pod wall (one set of components) breaks instead of widening the page, on a post and on a comment', () => {
     expect(read('components/wall/WallPostCard.tsx')).toMatch(/<p className="min-w-0 break-words text-sm font-semibold text-gray-900">\{p\.authorName \|\| 'Member'\}<\/p>/);
-    expect(read('components/wall/WallComments.tsx')).toMatch(/<p className="break-words text-xs font-semibold text-gray-700">\s*\{c\.authorName \|\| 'Member'\}/);
+    // S4 fix round 1: a comment's row moved out of WallComments into WallCommentRow, unchanged.
+    expect(read('components/wall/WallCommentRow.tsx')).toMatch(/<p className="break-words text-xs font-semibold text-gray-700">\s*\{c\.authorName \|\| 'Member'\}/);
   });
 });
 

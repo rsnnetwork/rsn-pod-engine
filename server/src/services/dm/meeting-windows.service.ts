@@ -15,11 +15,12 @@ import { query, transaction } from '../../db';
 import config from '../../config';
 import logger from '../../config/logger';
 import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
-import { ErrorCodes } from '@rsn/shared';
+import { ErrorCodes, type InviteEmailState } from '@rsn/shared';
 import * as dmService from './dm.service';
 import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
 import { combinedRequestMessage } from '../poke/request-text';
 import { emitMeetingChanged } from '../meetings/meeting-tags';
+import { INVITE_WAIT_MS, claimInvite, readInviteEmail, settleInvite, waitAtMost } from '../meetings/meeting-invite-emails';
 import { meetingTime } from '../meetings/meeting-time';
 import { CURRENT_MEETING_ID, lockConversation } from '../meetings/current-meeting';
 import { canVideoCall } from './call-eligibility';
@@ -57,6 +58,12 @@ export interface ConversationScheduling {
     type: 'audio' | 'video' | null;
     /** The meetings row this is (26 Oct 2026), for a link to its page. Null for a legacy day part. */
     meetingId: string | null;
+    /**
+     * The viewer's own calendar invitation for this meeting time (11 Nov 2026, RSN 09): whether it went by email, read
+     * from the sent-invitation log. getScheduling fills it in; an answer built without it (a conflict's details)
+     * leaves it out.
+     */
+    inviteEmail?: InviteEmailState | null;
   } | null;
   /** W-meet (8 Sep 2026): the partner changed their availability more recently
    *  than I last opened the scheduler — drives the calendar-icon dot. */
@@ -367,7 +374,11 @@ export async function getScheduling(conversationId: string, userId: string): Pro
     [conversationId],
   );
   const core = buildScheduling(conv, userId, rows.rows);
-  return { ...core, canCall: await canVideoCall(userId, core.partnerId) };
+  const [canCall, inviteEmail] = await Promise.all([
+    canVideoCall(userId, core.partnerId),
+    core.confirmed ? readInviteEmail(core.confirmed.meetingId, userId) : Promise.resolve(null),
+  ]);
+  return { ...core, confirmed: core.confirmed ? { ...core.confirmed, inviteEmail } : null, canCall };
 }
 
 /**
@@ -543,8 +554,9 @@ export async function setAvailability(
     return null;
   });
 
+  let unlogged: string[] = [];
   if (posted?.type === 'meeting_confirmed') {
-    await announceConfirmation(conversationId, userId, posted.confirmed);
+    unlogged = await announceConfirmation(conversationId, userId, posted.confirmed);
   } else {
     await announce(conversationId, userId, partnerId, posted, posted?.type === 'meeting_proposal'
       ? { type: 'meeting_proposed', title: 'You can both meet', body: 'Pick a time to confirm your meeting.' }
@@ -552,7 +564,7 @@ export async function setAvailability(
   }
 
   // The same shape as ever; once the save has booked a meeting, `confirmed` carries it.
-  return getScheduling(conversationId, userId);
+  return withUnloggedInvite(await getScheduling(conversationId, userId), userId, unlogged);
 }
 
 /**
@@ -822,8 +834,8 @@ export async function confirmInTx(
  * Every step is best-effort: the meeting is already saved, and a hiccup here
  * must never look like the booking failed.
  */
-async function announceConfirmation(conversationId: string, actorId: string, done: ConfirmResult): Promise<void> {
-  if (done.already) return;
+async function announceConfirmation(conversationId: string, actorId: string, done: ConfirmResult): Promise<string[]> {
+  if (done.already) return [];
   const { partnerId, window, startAt, durationMin, type, movedFrom, meeting } = done;
 
   let people: Array<{ id: string; display_name: string | null; email: string | null; timezone: string | null }> = [];
@@ -852,26 +864,43 @@ async function announceConfirmation(conversationId: string, actorId: string, don
   // 26 Oct 2026: both people's Events lists and the meeting's own page.
   if (meeting) await emitMeetingChanged(meeting.id, [actorId, partnerId]);
 
-  // W6: email BOTH people a real calendar invite (.ics + Google link) when an
-  // exact time was set. Best-effort — never let an email hiccup fail the confirm.
-  if (!startAt || !durationMin) return;
+  // W6: email BOTH people a real calendar invite (.ics) when an exact time was set. Best-effort: never let an email
+  // hiccup fail the confirm.
+  // 11 Nov 2026 (Shirley Palmer's RSN 09): each invitation is claimed in the sent-invitation log before it goes, so a
+  // retried or doubled booking never emails twice, and the log says whether it went, so the screens say "Calendar
+  // invitation sent by email." only when it did. The booking waits up to INVITE_WAIT_MS for the mail provider, so its
+  // own answer can already say so; when the provider answers, both people's screens are told to read it again.
+  if (!startAt || !durationMin) return [];
+  // The people whose invitation could not be written to the log, and so was not sent.
+  const unlogged: string[] = [];
   try {
     // Whoever booked the meeting first organises every copy of its file, moves included: a
     // calendar trusts an update to an entry from the organizer it already has.
     const organizer = meeting?.confirmedBy ? byId.get(meeting.confirmedBy) : undefined;
     const joinUrl = `${config.clientUrl}${meetingJoinPath(conversationId, type)}`;
-    const { generateIcsContent, meetingCalendarLinks, meetingCalendarUid } = await import('../calendar/calendar.service');
-    const { sendMeetingConfirmedEmail } = await import('../email/email.service');
+    const { generateIcsContent, meetingCalendarUid } = await import('../calendar/calendar.service');
+    const { emailProviderReady, sendMeetingConfirmedEmail } = await import('../email/email.service');
+    const provider = emailProviderReady();
     const title = 'REASON meeting';
     const threadUrl = `${config.clientUrl}/messages/${conversationId}`;
+    const sends: Promise<void>[] = [];
     for (const uid of [actorId, partnerId]) {
       const me = byId.get(uid);
       const other = byId.get(uid === actorId ? partnerId : actorId);
-      if (!me?.email) continue;
+      if (!me) continue;
+      const why = !me.email ? 'no_address' : !provider ? 'no_provider' : 'sending';
+      if (meeting) {
+        // Fail safe: an invitation that cannot be logged is not sent (it could go twice), and the booking says so.
+        const claimed = await claimInvite(meeting.id, uid, meeting.calendarSequence, why)
+          .catch((err) => {
+            logger.error({ err, uid, meetingId: meeting.id }, 'calendar invitation not sent: its log row could not be written');
+            unlogged.push(uid);
+            return false;
+          });
+        if (!claimed) continue;
+      }
+      if (why !== 'sending' || !me.email) continue;
       const partnerName = other?.display_name || 'your match';
-      // 1 Nov 2026 (T7): each person's Google and Outlook.com links are a meeting with the other, and carry the join
-      // link; the Google link used to be a bare "REASON meeting" with no way into the call.
-      const links = meetingCalendarLinks({ partnerName, kind: type ?? 'video', startAt, durationMin, joinUrl });
       const ics = generateIcsContent({
         title,
         description: `A 1:1 meeting arranged on REASON with ${partnerName}. Join: ${joinUrl}`,
@@ -886,23 +915,40 @@ async function announceConfirmation(conversationId: string, actorId: string, don
         organizerEmail: organizer?.email || undefined,
         attendees: people.filter(p => p.email).map(p => ({ name: p.display_name || undefined, email: p.email! })),
       });
-      void sendMeetingConfirmedEmail(me.email, me.display_name || 'there', {
+      const sent = sendMeetingConfirmedEmail(me.email, me.display_name || 'there', {
         partnerName,
         startAt,
         durationMin,
         recipientTimezone: me.timezone,
         threadUrl,
         eventsUrl: `${config.clientUrl}/sessions`,
-        googleCalendarUrl: links.google,
-        outlookCalendarUrl: links.outlook,
         icsContent: ics,
         joinUrl,
         kind: type ?? 'video',
         moved: !!movedFrom,
-      }).catch(err => logger.warn({ err, uid }, 'meeting-confirmed email failed (non-fatal)'));
+      }).then((r) => r.sent, (err) => { logger.warn({ err, uid }, 'meeting-confirmed email failed (non-fatal)'); return false; });
+      sends.push(sent
+        .then((ok) => (meeting ? settleInvite(meeting.id, uid, meeting.calendarSequence, ok) : undefined))
+        .catch((err) => logger.error({ err, uid }, 'calendar invitation log not updated: it will read as not sent once stale')));
     }
+    const settled = Promise.all(sends).then(() => (meeting ? tellInviteSettled(conversationId, meeting.id, [actorId, partnerId]) : undefined));
+    await waitAtMost(settled, INVITE_WAIT_MS);
   } catch (err) {
-    logger.warn({ err, conversationId }, 'meeting-confirmed email dispatch failed (non-fatal)');
+    logger.error({ err, conversationId }, 'meeting-confirmed email dispatch failed');
+  }
+  return unlogged;
+}
+
+/** The invitations' fate is known: both people's thread, scheduler and meeting page read it again. */
+async function tellInviteSettled(conversationId: string, meetingId: string, userIds: string[]): Promise<void> {
+  await emitMeetingChanged(meetingId, userIds);
+  try {
+    const { io } = await import('../../index');
+    const { emitEntities } = await import('../../realtime/emit');
+    const { E } = await import('../../realtime/entities');
+    await emitEntities(io, userIds, [E.dmConversation(conversationId)]);
+  } catch (err) {
+    logger.warn({ err, conversationId }, 'invite entity emit failed (non-fatal)');
   }
 }
 
@@ -936,6 +982,16 @@ export async function confirmWindow(
       })
     : writeConfirmation(client, conversationId, userId, { window: windowKey, startAt: null, durationMin: null, type: null }, expected)));
 
-  await announceConfirmation(conversationId, userId, done);
-  return getScheduling(conversationId, userId);
+  const unlogged = await announceConfirmation(conversationId, userId, done);
+  return withUnloggedInvite(await getScheduling(conversationId, userId), userId, unlogged);
+}
+
+/**
+ * A booking whose invitation for this member could not be written to the log was not emailed (fail safe: an unlogged
+ * send could go twice). Its own answer says so ("We couldn't email the calendar invitation"), as the log has no row
+ * to say it.
+ */
+function withUnloggedInvite(s: ConversationScheduling, userId: string, unlogged: string[]): ConversationScheduling {
+  if (!s.confirmed || !unlogged.includes(userId)) return s;
+  return { ...s, confirmed: { ...s.confirmed, inviteEmail: 'not_sent' } };
 }

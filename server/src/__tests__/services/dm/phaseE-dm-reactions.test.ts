@@ -81,8 +81,13 @@ describe('Phase E — DM message reactions', () => {
       const fnStart = src.indexOf('export async function addReaction(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/AUTH_FORBIDDEN/);
-      expect(fn).toMatch(/userAId|userBId|user_a_id|user_b_id/);
+      // 11 Nov 2026 (S5 fix round 1): the participant check and the block check live in assertMayReact, which both
+      // addReaction and removeReaction call (dm-reactions-blocks.test.ts runs them).
+      expect(fn).toMatch(/await assertMayReact\(ctx, userId\);/);
+      const helper = src.slice(src.indexOf('async function assertMayReact('), src.indexOf('export async function addReaction('));
+      expect(helper).toMatch(/AUTH_FORBIDDEN/);
+      expect(helper).toMatch(/userAId|userBId|user_a_id|user_b_id/);
+      expect(helper).toMatch(/blockService\.areBlocked\(userId, otherUserId\)/);
       // Helper exists and queries the conversation pair.
       expect(src).toMatch(/loadMessageContext/);
       expect(src).toMatch(/c\.user_a_id,\s*c\.user_b_id/);

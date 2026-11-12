@@ -1211,7 +1211,21 @@ describe('POST /onboarding/enrich', () => {
     expect(runEnrichment).toHaveBeenCalledTimes(1);
     const [userId, input] = (runEnrichment as jest.Mock).mock.calls[0];
     expect(userId).toBe('user-abc');
-    expect(input).toEqual({ linkedinUrl: 'https://www.linkedin.com/in/jane-doe', fullName: 'Jane Doe' });
+    // The profile holds no address, so this lookup's address is not saved anywhere: no later attempt is asked for.
+    expect(input).toEqual({ linkedinUrl: 'https://www.linkedin.com/in/jane-doe', fullName: 'Jane Doe', scheduleRetry: false });
+  });
+
+  // 12 Nov 2026: a later attempt looks up the address on the member's profile at the time, so this older route asks
+  // for one only when the address it looks up IS the profile's.
+  it.each([
+    ['the profile\'s own address (sent again, in another casing)', 'Jane-Doe', 'https://www.linkedin.com/in/jane-doe', true],
+    ['an address the profile does not hold', 'someone-else', 'https://www.linkedin.com/in/jane-doe', false],
+  ])('a lookup of %s: scheduleRetry %s', async (_what, sent, onProfile, expected) => {
+    (known.inferKnownProfile as jest.Mock).mockResolvedValue({ name: 'Jane Doe', linkedin: onProfile });
+
+    await request(app).post('/onboarding/enrich').set('Authorization', `Bearer ${makeToken()}`).send({ linkedinUrl: sent });
+
+    expect((runEnrichment as jest.Mock).mock.calls[0][1].scheduleRetry).toBe(expected);
   });
 
   it('falls back to the known LinkedIn URL when none is supplied on this call', async () => {
@@ -1229,6 +1243,7 @@ describe('POST /onboarding/enrich', () => {
     expect(runEnrichment).toHaveBeenCalledTimes(1);
     const [, input] = (runEnrichment as jest.Mock).mock.calls[0];
     expect(input.linkedinUrl).toBe('https://www.linkedin.com/in/jane-doe');
+    expect(input.scheduleRetry).toBe(true);
   });
 
   it('200s with the cached status on a fresh 90-day cache hit (still fires the orchestrator to keep state in sync)', async () => {

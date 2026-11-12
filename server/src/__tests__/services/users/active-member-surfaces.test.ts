@@ -103,12 +103,17 @@ describe('circles', () => {
   });
 
   it('the wall keeps a former member\'s posts and comments, as "Former member"', async () => {
+    // S4 (D2): the feed first asks whether the viewer is in the circle (every circle's wall is its members').
+    const inCircle = { rows: [{ name: 'C', archived: false, join_policy: 'open', member_role: 'member', viewer_name: 'Me' }] };
+    mockQuery.mockResolvedValueOnce(inCircle);
     await wall.listPosts(POD, ME);
-    // T14: the feed first asks whether the viewer may read the wall (a closed circle's is for its members).
     expect(sent().find((s) => /author_former/.test(s))).toContain(`(NOT ${ACTIVE}) AS author_former`);
     mockQuery.mockReset();
-    mockQuery.mockResolvedValue({ rows: [{ id: 'c1', author_id: THEM, display_name: 'Gone', avatar_url: 'x', author_former: true, content: 'hi', created_at: new Date() }] });
-    const [comment] = await wall.listComments(POD, ME);
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ circle_id: POD, author_id: THEM, content: 'hi', deleted_at: null, blocked: false }] })
+      .mockResolvedValueOnce(inCircle)
+      .mockResolvedValue({ rows: [{ id: 'c1', author_id: THEM, display_name: 'Gone', avatar_url: 'x', author_former: true, content: 'hi', created_at: new Date() }] });
+    const { comments: [comment] } = await wall.listComments(POD, ME);
     expect(sent().find((s) => /author_former/.test(s))).toContain(`(NOT ${ACTIVE}) AS author_former`);
     expect(comment).toMatchObject({ authorName: 'Former member', authorAvatarUrl: null, authorClosed: true, content: 'hi' });
   });

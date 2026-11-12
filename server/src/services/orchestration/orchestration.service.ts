@@ -86,7 +86,7 @@ import {
 
 // Timer Manager
 import { clearSessionTimers, TimerCallbacks } from './handlers/timer-manager';
-import { markActive, clearActive } from '../presence/presence.service';
+import { onPresenceDisconnect, watchPresence } from '../presence/presence-socket';
 import { endFinishedInPersonEvents, IN_PERSON_ENDING_INTERVAL_MS } from '../session/in-person-ending';
 import { replayRecentEntities } from '../../realtime/recent-entities';
 
@@ -359,14 +359,10 @@ export function initOrchestration(socketServer: SocketServer): void {
       logger.warn({ err, userId }, 'Replaying recent entity tags to a new connection failed (non-fatal)');
     }
 
-    // App-level presence (8 Sep 2026): mark active on connect, and refresh it
-    // on each foreground ping from the client. Drives the DM online dot and the
-    // "Meet now" gate — so "online" means actually on the platform, not just a
-    // lingering socket.
-    if (userId) {
-      void markActive(userId);
-      socket.on('presence:ping', () => { void markActive(userId); });
-    }
+    // App-level presence (8 Sep 2026; three states, pushed, 11 Nov 2026): online while a tab is in front of the
+    // member (its pings), away while REASON is only open somewhere, offline with no socket. Connecting alone no longer
+    // marks anyone online. Each change is pushed to the member's partners as user:<id>:presence (presence-socket.ts).
+    if (userId) watchPresence(io, socket, userId);
 
     // ── Participant Events (guarded — state-mutating) ──
     wrapHandler('session:join', socket, handleJoinSession);
@@ -498,15 +494,14 @@ export function initOrchestration(socketServer: SocketServer): void {
     socket.on('disconnect', async () => {
       try { await handleDisconnect(io, socket); }
       catch (err) { logger.error({ err, userId }, 'Disconnect handler error'); }
-      // App-level presence: if this was the member's LAST socket (they closed
-      // the app, not just one of several tabs), drop them to offline right away
-      // instead of waiting out the heartbeat TTL.
+      // App-level presence: the member's LAST socket going (they closed the app, not just one of several tabs) drops
+      // them to offline at once instead of waiting out the heartbeat TTL; one of several going leaves them away when
+      // none of the others is in front of them. Either change is pushed to their partners.
       if (userId) {
         try {
-          const remaining = await io.in(`user:${userId}`).fetchSockets();
-          if (remaining.length === 0) await clearActive(userId);
+          await onPresenceDisconnect(io, userId);
         } catch (err) {
-          logger.warn({ err, userId }, 'presence clear on disconnect failed (non-fatal)');
+          logger.warn({ err, userId }, 'presence on disconnect failed (non-fatal)');
         }
       }
     });

@@ -10,7 +10,9 @@ jest.mock('../../../db', () => ({
   __esModule: true,
 }));
 
-import { setEnrichmentState, getEnrichmentState } from '../../../services/onboarding/enrichment.repo';
+import {
+  setEnrichmentState, getEnrichmentState, failInterruptedLookups, FAIL_INTERRUPTED_LOOKUPS_SQL, INTERRUPTED_LOOKUP_ERROR,
+} from '../../../services/onboarding/enrichment.repo';
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -28,17 +30,23 @@ describe('setEnrichmentState', () => {
     expect(sql).toMatch(/ON CONFLICT \(user_id\) DO UPDATE/i);
   });
 
-  it('setting status "searching" nulls enrichment_error and stamps enrichment_started_at', async () => {
+  it('setting status "searching" nulls enrichment_error and enrichment_completed_at and stamps enrichment_started_at', async () => {
     await setEnrichmentState('u1', { status: 'searching' });
     const [, params] = mockQuery.mock.calls[0];
     // [userId, status, source, error, startedAt, completedAt, sourceProvided, errorProvided, startedAtProvided, completedAtProvided]
     expect(params[1]).toBe('searching');
     expect(params[3]).toBeNull(); // error forced null
-    expect(params[4]).toMatch(ISO_RE); // startedAt stamped
-    expect(params[5]).toBeNull(); // completedAt untouched (not terminal)
+    // Review M3: stamped by the database clock in the statement ($13 true: NOW()), never the host's.
+    expect(params[4]).toBeNull();
+    expect(params[12]).toBe(true);
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toContain('VALUES ($1, $2, $3, $4, CASE WHEN $13 THEN NOW() ELSE $5::timestamptz END');
+    expect(sql).toContain('enrichment_started_at = CASE WHEN $9 THEN (CASE WHEN $13 THEN NOW() ELSE $5::timestamptz END)');
+    // 12 Nov 2026: a retry in flight kept the previous attempt's completion time and read as stuck. A searching row has no end.
+    expect(params[5]).toBeNull(); // completedAt cleared
     expect(params[7]).toBe(true); // errorProvided (forced)
     expect(params[8]).toBe(true); // startedAtProvided (forced)
-    expect(params[9]).toBe(false); // completedAtProvided
+    expect(params[9]).toBe(true); // completedAtProvided (forced, to null)
   });
 
   it('searching resets error even if caller passes an explicit error value', async () => {
@@ -122,11 +130,12 @@ describe('setEnrichmentState: the address the lookup ran for', () => {
   it('records it beside the state, with the time of the write', async () => {
     await setEnrichmentState('u1', { status: 'searching', linkedinUrl: 'https://www.linkedin.com/in/ana' });
     const [sql, params] = mockQuery.mock.calls[0];
-    expect(sql).toMatch(/jsonb_build_object\('lastLookup', \$12::jsonb\)/);
+    // A search's record takes the database's NOW() as its time, like the started time beside it (review M3).
+    expect(sql).toContain("jsonb_build_object('lastLookup', (CASE WHEN $13 THEN $12::jsonb || jsonb_build_object('at', NOW()) ELSE $12::jsonb END))");
     expect(params[10]).toBe(true);
+    expect(params[12]).toBe(true);
     const lookup = JSON.parse(params[11] as string);
     expect(lookup.linkedinUrl).toBe('https://www.linkedin.com/in/ana');
-    expect(lookup.at).toBe(params[4]); // the same instant the state was stamped with
   });
 
   it('a terminal state carries its address and its completion time', async () => {
@@ -153,5 +162,32 @@ describe('setEnrichmentState: the address the lookup ran for', () => {
     await setEnrichmentState('u1', { status: 'failed', source: 'scrapingdog', error: 'timeout', linkedinUrl: 'https://www.linkedin.com/in/ana' });
     const [, params] = mockQuery.mock.calls[0];
     expect(params.slice(0, 4)).toEqual(['u1', 'failed', 'scrapingdog', 'timeout']);
+  });
+});
+
+// ─── 12 Nov 2026: every lookup ends in a terminal state ──────────────────────────────────────────────────────────
+// A lookup a stopped server left 'searching' (a deploy during a background retry, with nobody watching) is ended by the
+// retry worker's tick: marked failed, once, whichever instance gets there first. Run for real on PGlite (pglite-p6.mjs).
+describe('failInterruptedLookups', () => {
+  beforeEach(() => mockQuery.mockReset());
+
+  it('marks failed only searching rows started more than ten minutes ago, stamping the end, and says who', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ user_id: 'u1', enrichment_source: 'scrapingdog' }], rowCount: 1 });
+
+    expect(await failInterruptedLookups()).toEqual([{ userId: 'u1', source: 'scrapingdog' }]);
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toBe(FAIL_INTERRUPTED_LOOKUPS_SQL);
+    expect(sql).toMatch(/SET enrichment_status = 'failed', enrichment_error = \$2, enrichment_completed_at = NOW\(\)/);
+    expect(sql).toMatch(/WHERE enrichment_status = 'searching'/);
+    expect(sql).toMatch(/enrichment_started_at < NOW\(\) - make_interval\(secs => \$1\)/);
+    expect(sql).not.toMatch(/inferred_profile/); // the address record stays: it says which address failed
+    expect(params).toEqual([600, INTERRUPTED_LOOKUP_ERROR]);
+    expect(INTERRUPTED_LOOKUP_ERROR).not.toMatch(/retry/i); // no retry is promised
+  });
+
+  it('nothing interrupted: nobody', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    expect(await failInterruptedLookups()).toEqual([]);
   });
 });

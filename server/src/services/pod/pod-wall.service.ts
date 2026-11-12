@@ -22,10 +22,23 @@
 //     members only), and every bell is pushed live over the socket and honours the member's group-bell
 //     setting. No email.
 //
+// Shirley pilot S4 (11 Nov 2026), walls that work for owners:
+//   * An author edits their own post or comment while they may post (an active member of an open pod); the screen
+//     says "Edited". An edit that changes nothing writes and tells nothing. An edit of something just removed is told
+//     "This post was removed." Edits ring no bells.
+//   * D8: someone no longer in the pod (removed, left) may still delete their OWN posts and comments, and nothing
+//     else; anyone else outside the pod gets the refusal they always got (404 when the pod is hidden from them).
+//   * Two moderators removing the same thing: the first removes it, the second is answered alreadyRemoved.
+//   * At most WALL_PINNED_MAX (3) posts pinned, newest pin first; a fourth is refused until one is unpinned. Pins are
+//     counted under the pod row's lock, so two moderators pinning at once cannot make four.
+//   * Every moderation (removing someone else's words, pinning, unpinning) is in audit_log with a snapshot.
+//   * The new-post bell opens the post it is about (?post=), still at most one per member per pod per hour.
+//
 // Services return data and never touch req/res. A write tells the pod once it has been saved: a retried
 // submit, a refusal and a change that changed nothing (the same reaction sent again, a reaction cleared that
 // was not there, a like of a comment already liked) tell nobody.
 
+import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { AppError, ForbiddenError, NotFoundError } from '../../middleware/errors';
@@ -43,6 +56,10 @@ import {
   REACTION_BELL_DEDUPE_MINUTES, REACTION_KINDS, assertRate, extractLinkUrl, validateMedia,
 } from '../circle/circle-wall.service';
 import type { ReactionKind } from '../circle/circle-wall.service';
+import {
+  EDIT_EMPTY_COMMENT, EDIT_EMPTY_POST, ONLY_OWN_EDITS, WALL_PINNED_MAX, commentBellLink, commentRemoved, editConflict,
+  editStampHolds, pinsFull, postRemoved, purgeCommentBells, purgePostBells, recordModeration, tellBellOwners,
+} from '../wall/wall-moderation';
 
 /** Who is asking: their id and their PLATFORM role. Their role in the pod is read from the pod. */
 export interface WallViewer {
@@ -166,6 +183,7 @@ interface PostRow {
   comment_count: number;
   pinned_at: Date | null;
   created_at: Date;
+  edited_at: Date | null;
   reaction_count: number | null;
   reactions: PodWallPost['reactions'] | null;
   my_reaction: ReactionKind | null;
@@ -179,6 +197,8 @@ interface CommentRow {
   author_closed: boolean;
   content: string;
   created_at: Date;
+  edited_at: Date | null;
+  withdrawn_at?: Date | null;
   parent_comment_id: string | null;
   like_count: number | null;
   liked_by_me: boolean | null;
@@ -206,6 +226,7 @@ function mapPost(row: PostRow): PodWallPost {
     commentCount: row.comment_count,
     pinnedAt: row.pinned_at ? iso(row.pinned_at) : null,
     createdAt: iso(row.created_at),
+    editedAt: row.edited_at ? iso(row.edited_at) : null,
     reactionCount: row.reaction_count ?? 0,
     reactions: row.reactions ?? {},
     myReaction: row.my_reaction ?? null,
@@ -213,6 +234,14 @@ function mapPost(row: PostRow): PodWallPost {
 }
 
 function mapComment(row: CommentRow): PodWallComment {
+  // Fix round 2: a withdrawn comment is a neutral placeholder: no author id, name or picture, no words, no likes.
+  if (row.withdrawn_at) {
+    return {
+      id: row.id, authorId: '', authorName: null, authorAvatarUrl: null, authorClosed: false,
+      content: '', createdAt: iso(row.created_at), parentCommentId: row.parent_comment_id ?? null,
+      likeCount: 0, likedByMe: false, editedAt: null, withdrawn: true,
+    };
+  }
   return {
     id: row.id,
     authorId: row.author_id,
@@ -222,13 +251,15 @@ function mapComment(row: CommentRow): PodWallComment {
     parentCommentId: row.parent_comment_id ?? null,
     likeCount: row.like_count ?? 0,
     likedByMe: !!row.liked_by_me,
+    editedAt: row.edited_at ? iso(row.edited_at) : null,
+    withdrawn: false,
   };
 }
 
 /** The post columns every read shares. $2 is always the viewer. */
 const POST_SELECT = `
   SELECT p.id, p.pod_id, p.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_closed,
-         p.content, p.media, p.link_url, p.comment_count, p.pinned_at, p.created_at,
+         p.content, p.media, p.link_url, p.comment_count, p.pinned_at, p.created_at, p.edited_at,
          (SELECT count(*)::int FROM pod_post_reactions r WHERE r.post_id = p.id) AS reaction_count,
          (SELECT COALESCE(json_object_agg(x.reaction, x.n), '{}'::json)
             FROM (SELECT reaction, count(*)::int AS n FROM pod_post_reactions WHERE post_id = p.id GROUP BY reaction) x) AS reactions,
@@ -317,6 +348,9 @@ export async function listPosts(
     posts: rows.map(mapPost),
     nextCursor: page.rows.length > limit && last ? cursorOf(last) : null,
     viewer: { canPost: access.canPost, canModerate: access.canModerate },
+    // The pod's status as this read found it (12 Nov 2026): the page compares it with its own read of the pod and reads
+    // the pod again when the two disagree, so a page that read the pod a moment before a change still settles.
+    podStatus: access.podStatus,
   };
 }
 
@@ -366,7 +400,11 @@ interface BellRow {
   created_at: Date;
 }
 
-/** The pod's page, where the wall is. A new-post bell links here, so one bell serves every post of the hour. */
+/**
+ * The pod's page, where the wall is. Every bell about this pod's wall links here or under it (`?post=`), so the hourly
+ * new-post dedupe counts any such bell for the pod, whichever post it opened (and the bells written before S4, which
+ * linked here).
+ */
 const podLink = (podId: string) => `/pods/${podId}`;
 /** One post, for the bells about it and for a `?post=` link. */
 const postLink = (podId: string, postId: string) => `/pods/${podId}?post=${postId}`;
@@ -400,8 +438,10 @@ async function pushBells(rows: BellRow[], bell: BellPayload): Promise<void> {
 /**
  * A new post rings every other active member of the pod, once per member per pod per hour, in ONE statement:
  * the pod's active members who have not switched group bells off, whose account is open, who are not blocked
- * by the author or blocking them, and who have not been rung for this pod in the last hour. Never throws: a
- * bell must not fail the post it reports.
+ * by the author or blocking them, and who have not been rung for this pod in the last hour. The bell opens the
+ * post (S4); the hour is counted over every new-post bell of the pod (its link is the pod's page or under it),
+ * so the first post of the hour is the one opened and the wall shows the rest above it. Never throws: a bell
+ * must not fail the post it reports.
  */
 async function ringPodMembers(podId: string, authorId: string, bell: Omit<BellPayload, 'type'>): Promise<void> {
   try {
@@ -419,10 +459,11 @@ async function ringPodMembers(podId: string, authorId: string, bell: Omit<BellPa
               OR (b.blocker_id = $2 AND b.blocked_id = pm.user_id))
          AND NOT EXISTS (
            SELECT 1 FROM notifications n
-           WHERE n.user_id = pm.user_id AND n.type = 'pod_post' AND n.link = $5::text
+           WHERE n.user_id = pm.user_id AND n.type = 'pod_post'
+             AND (n.link = $6::text OR starts_with(n.link, $6::text || '?'))
              AND n.created_at > NOW() - INTERVAL '1 hour')
        RETURNING id, user_id, created_at`,
-      [podId, authorId, bell.title, bell.body, bell.link],
+      [podId, authorId, bell.title, bell.body, bell.link, podLink(podId)],
     );
     await pushBells(inserted.rows, { type: 'pod_post', ...bell });
   } catch (err) {
@@ -431,7 +472,8 @@ async function ringPodMembers(podId: string, authorId: string, bell: Omit<BellPa
 }
 
 /**
- * One bell to one person about something another member did, deduped per (person, type, link) inside a
+ * One bell to one person about something another member did, deduped per (person, type, post: its link, or a
+ * comment's link under it, S4 fix round 1) inside a
  * window. They must still be an active member who has not switched group bells off, with an open account, and
  * not be blocked by the actor or blocking them. Never throws.
  */
@@ -439,7 +481,7 @@ async function ringOne(
   podId: string,
   recipientId: string,
   actorId: string,
-  bell: BellPayload,
+  bell: BellPayload & { postLink: string },
   dedupeMinutes: number,
 ): Promise<void> {
   try {
@@ -458,12 +500,13 @@ async function ringOne(
               OR (b.blocker_id = $7 AND b.blocked_id = u.id))
          AND NOT EXISTS (
            SELECT 1 FROM notifications n
-           WHERE n.user_id = u.id AND n.type = $3::text AND n.link = $6::text
+           WHERE n.user_id = u.id AND n.type = $3::text
+             AND (n.link = $9::text OR starts_with(n.link, $9::text || '&'))
              AND n.created_at > NOW() - make_interval(mins => $8::int))
        RETURNING id, user_id, created_at`,
-      [recipientId, podId, bell.type, bell.title, bell.body, bell.link, actorId, dedupeMinutes],
+      [recipientId, podId, bell.type, bell.title, bell.body, bell.link, actorId, dedupeMinutes, bell.postLink],
     );
-    await pushBells(inserted.rows, bell);
+    await pushBells(inserted.rows, { type: bell.type, title: bell.title, body: bell.body, link: bell.link });
   } catch (err) {
     logger.warn({ err, podId, recipientId, type: bell.type }, 'pod wall bell failed (non-fatal)');
   }
@@ -539,57 +582,212 @@ export async function createPost(
   await ringPodMembers(podId, viewer.userId, {
     title: `New post in ${access.podName}`,
     body: excerpt(content, 'Shared an attachment'),
-    link: podLink(podId),
+    link: postLink(podId, postId),
   });
   await fanoutPodWall(podId);
   return loadPost(podId, postId, viewer.userId);
 }
 
 /**
- * The author deletes their own post; the pod's director or host and platform admins delete any. The pod's
- * state never matters: taking back your own words, and clearing what should not be there, are not switched
- * off by an archived, suspended or draft pod.
+ * The wall's gate for taking words back (D8): the pod's own gate for everyone it admits; for someone it refuses (they
+ * left, were removed, or were never in), no access, and the refusal it gave, which stands for anything but their
+ * own words.
  */
-export async function deletePost(podId: string, postId: string, viewer: WallViewer): Promise<void> {
-  const access = await resolveAccess(podId, viewer);
-  await transaction(async (client) => {
-    const r = await client.query<{ author_id: string; deleted_at: Date | null }>(
-      `SELECT author_id, deleted_at FROM pod_posts WHERE id = $1 AND pod_id = $2 FOR UPDATE`,
-      [postId, podId],
-    );
-    const post = r.rows[0];
-    if (!post || post.deleted_at) throw postNotFound(postId);
-    if (!access.canModerate && post.author_id !== viewer.userId) throw new ForbiddenError(ONLY_OWN_POSTS);
-    await client.query(`UPDATE pod_posts SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1`, [postId, viewer.userId]);
-  });
-  await fanoutPodWall(podId, [E.podWallPost(postId)]);
+async function accessForRemoving(podId: string, viewer: WallViewer): Promise<{ access: WallAccess | null; refusal: unknown }> {
+  try {
+    return { access: await resolveAccess(podId, viewer), refusal: null };
+  } catch (refusal) {
+    if (!(refusal instanceof AppError) || (refusal.statusCode !== 403 && refusal.statusCode !== 404)) throw refusal;
+    return { access: null, refusal };
+  }
 }
 
 /**
- * Pin or unpin: the pod's director or host, and platform admins, in any state of the pod. The feed shows the
- * last three pinned. Pinning a post that is already pinned moves it to the front of the strip; unpinning one
- * that is not pinned changes nothing and tells nobody.
+ * S4 fix round 1: whether the viewer moderates this pod, read on the transaction's own client after the row it acts on
+ * is locked, so a director or host demoted at that moment cannot finish one more removal or pin (the circle wall reads
+ * its roles the same way). A platform admin moderates every pod.
+ */
+async function moderatesPodNow(client: PoolClient, podId: string, viewer: WallViewer): Promise<boolean> {
+  if (hasRoleAtLeast(viewer.role as UserRole, UserRole.ADMIN)) return true;
+  const r = await client.query<{ role: string }>(
+    `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
+    [podId, viewer.userId],
+  );
+  const role = r.rows[0]?.role;
+  return role === 'director' || role === 'host';
+}
+
+interface LockedPost {
+  author_id: string;
+  content: string;
+  media: unknown;
+  created_at: Date;
+  edited_at: Date | null;
+  deleted_at: Date | null;
+}
+
+/**
+ * The author deletes their own post (D8: also once they are no longer in the pod); the pod's director or host and
+ * platform admins delete any. The pod's state never matters: taking back your own words, and clearing what should not
+ * be there, are not switched off by an archived, suspended or draft pod. A moderator's removal of someone else's post
+ * is recorded with its words. A post someone removed a moment before answers alreadyRemoved to whoever could have
+ * removed it, and tells nobody again. S4 fix round 1: the moderator's right is read under the post's lock, and every
+ * bell carrying the post's words is deleted in the same transaction (their people are told once it commits).
+ */
+export async function deletePost(podId: string, postId: string, viewer: WallViewer): Promise<{ alreadyRemoved: boolean }> {
+  const { access, refusal } = await accessForRemoving(podId, viewer);
+  const done = await transaction(async (client) => {
+    const r = await client.query<LockedPost>(
+      `SELECT author_id, content, media, created_at, edited_at, deleted_at FROM pod_posts WHERE id = $1 AND pod_id = $2 FOR UPDATE`,
+      [postId, podId],
+    );
+    const post = r.rows[0];
+    const own = post?.author_id === viewer.userId;
+    // Someone outside the pod is told what they were always told, unless these are their own words.
+    if (!access && !own) throw refusal;
+    if (!post) throw postNotFound(postId);
+    if (!own && !(await moderatesPodNow(client, podId, viewer))) {
+      throw post.deleted_at ? postRemoved(postId) : new ForbiddenError(ONLY_OWN_POSTS);
+    }
+    if (post.deleted_at) return { alreadyRemoved: true, rung: [] as string[] };
+    await client.query(`UPDATE pod_posts SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1`, [postId, viewer.userId]);
+    if (!own) {
+      await recordModeration(client, {
+        actorId: viewer.userId, action: 'wall_post_removed', space: 'pod', spaceId: podId,
+        snapshot: { postId, authorId: post.author_id, content: post.content, media: post.media, createdAt: post.created_at, editedAt: post.edited_at },
+      });
+    }
+    return { alreadyRemoved: false, rung: await purgePostBells(client, 'pod', postLink(podId, postId)) };
+  });
+  if (!done.alreadyRemoved) {
+    await tellBellOwners(done.rung);
+    await fanoutPodWall(podId, [E.podWallPost(postId)]);
+  }
+  return { alreadyRemoved: done.alreadyRemoved };
+}
+
+/**
+ * Pin or unpin: the pod's director or host, and platform admins, in any state of the pod. At most WALL_PINNED_MAX posts
+ * are pinned: a pin past that is refused until one is unpinned, and the strip shows them newest pin first. Pinning a
+ * post that is already pinned moves it to the front of the strip (it counts once); unpinning one that is not pinned
+ * changes nothing and tells nobody. Every pin and unpin is recorded.
  */
 export async function setPinned(podId: string, postId: string, viewer: WallViewer, pinned: boolean): Promise<void> {
   const access = await resolveAccess(podId, viewer);
   if (!access.canModerate) throw new ForbiddenError(ONLY_MODERATORS_PIN);
   // Whether the post was pinned is read under its row lock, in the transaction that writes the pin (H2b item 11,
   // 26 Oct 2026): read through a self-join in one UPDATE, a pin and an unpin at the same moment both saw the state
-  // before either, and one of them told the pod nothing.
-  const wasPinned = await transaction(async (client) => {
-    const r = await client.query<{ pinned_at: Date | null }>(
-      `SELECT pinned_at FROM pod_posts WHERE id = $1 AND pod_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+  // before either, and one of them told the pod nothing. S4: the pinned count is read under the pod row's lock, taken
+  // after the post's (the order a delete takes them in), so two pins at once are counted one after the other.
+  const changed = await transaction(async (client) => {
+    const r = await client.query<LockedPost & { pinned_at: Date | null }>(
+      `SELECT author_id, content, created_at, edited_at, deleted_at, pinned_at FROM pod_posts WHERE id = $1 AND pod_id = $2 FOR UPDATE`,
       [postId, podId],
     );
     const post = r.rows[0];
     if (!post) throw postNotFound(postId);
+    if (!(await moderatesPodNow(client, podId, viewer))) throw new ForbiddenError(ONLY_MODERATORS_PIN);
+    if (post.deleted_at) throw postRemoved(postId);
+    if (!pinned && post.pinned_at === null) return false;
+    if (pinned && post.pinned_at === null) {
+      await client.query(`SELECT id FROM pods WHERE id = $1 FOR NO KEY UPDATE`, [podId]);
+      const held = await client.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM pod_posts WHERE pod_id = $1 AND deleted_at IS NULL AND pinned_at IS NOT NULL`,
+        [podId],
+      );
+      if ((held.rows[0]?.n ?? 0) >= WALL_PINNED_MAX) throw pinsFull();
+    }
     await client.query(
       `UPDATE pod_posts SET pinned_at = CASE WHEN $2::boolean THEN NOW() ELSE NULL END WHERE id = $1`,
       [postId, pinned],
     );
-    return post.pinned_at !== null;
+    await recordModeration(client, {
+      actorId: viewer.userId, action: pinned ? 'wall_post_pinned' : 'wall_post_unpinned', space: 'pod', spaceId: podId,
+      snapshot: { postId, authorId: post.author_id, content: post.content, createdAt: post.created_at, editedAt: post.edited_at },
+    });
+    return true;
   });
-  if (pinned || wasPinned) await fanoutPodWall(podId, [E.podWallPost(postId)]);
+  if (changed) await fanoutPodWall(podId, [E.podWallPost(postId)]);
+}
+
+/**
+ * The author changes the words of their post, while they may post (an active member of an open pod). The pictures stay
+ * as they were. The same rules as posting: not empty (unless it keeps a picture), at most POST_MAX_CHARS, its link card
+ * read again from the new words. Words that are the same change nothing and tell nobody. A post removed a moment before
+ * is "This post was removed.", and `expectedEditedAt` (the stamp the editor opened) refuses an edit made over another
+ * one. No bell rings for an edit.
+ */
+export async function editPost(
+  podId: string,
+  postId: string,
+  viewer: WallViewer,
+  input: { content: string; expectedEditedAt?: string | null },
+): Promise<{ changed: boolean; editedAt: string | null }> {
+  const access = await resolveAccess(podId, viewer);
+  requireMemberOfOpenPod(access);
+  const content = input.content.trim();
+  if (content.length > POST_MAX_CHARS) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `Post too long (max ${POST_MAX_CHARS} characters)`);
+  }
+  const result = await transaction(async (client) => {
+    const r = await client.query<{ author_id: string; content: string; media: unknown[] | null; edited_at: Date | null; deleted_at: Date | null }>(
+      `SELECT author_id, content, media, edited_at, deleted_at FROM pod_posts WHERE id = $1 AND pod_id = $2 FOR UPDATE`,
+      [postId, podId],
+    );
+    const post = r.rows[0];
+    if (!post) throw postNotFound(postId);
+    if (post.author_id !== viewer.userId) throw new ForbiddenError(ONLY_OWN_EDITS);
+    if (post.deleted_at) throw postRemoved(postId);
+    if (!editStampHolds(post.edited_at, input.expectedEditedAt)) throw editConflict();
+    if (!content && (post.media ?? []).length === 0) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, EDIT_EMPTY_POST);
+    if (content === post.content) return { changed: false, editedAt: post.edited_at };
+    const w = await client.query<{ edited_at: Date }>(
+      `UPDATE pod_posts SET content = $2, link_url = $3, edited_at = NOW() WHERE id = $1 RETURNING edited_at`,
+      [postId, content, extractLinkUrl(content)],
+    );
+    return { changed: true, editedAt: w.rows[0].edited_at };
+  });
+  if (result.changed) await fanoutPodWall(podId, [E.podWallPost(postId)]);
+  return { changed: result.changed, editedAt: result.editedAt ? iso(result.editedAt) : null };
+}
+
+/** The author changes the words of their comment or reply: the rules of editPost, at most COMMENT_MAX_CHARS, never empty. */
+export async function editComment(
+  podId: string,
+  commentId: string,
+  viewer: WallViewer,
+  input: { content: string; expectedEditedAt?: string | null },
+): Promise<{ changed: boolean; editedAt: string | null; postId: string }> {
+  const access = await resolveAccess(podId, viewer);
+  requireMemberOfOpenPod(access);
+  const content = input.content.trim();
+  if (!content) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, EDIT_EMPTY_COMMENT);
+  if (content.length > COMMENT_MAX_CHARS) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `Comment too long (max ${COMMENT_MAX_CHARS} characters)`);
+  }
+  const result = await transaction(async (client) => {
+    const r = await client.query<{ author_id: string; post_id: string; content: string; edited_at: Date | null; deleted_at: Date | null; withdrawn_at: Date | null; post_deleted_at: Date | null }>(
+      `SELECT c.author_id, c.post_id, c.content, c.edited_at, c.deleted_at, c.withdrawn_at, p.deleted_at AS post_deleted_at
+       FROM pod_post_comments c JOIN pod_posts p ON p.id = c.post_id
+       WHERE c.id = $1 AND p.pod_id = $2
+       FOR UPDATE OF c`,
+      [commentId, podId],
+    );
+    const comment = r.rows[0];
+    if (!comment) throw commentNotFound(commentId);
+    if (comment.author_id !== viewer.userId) throw new ForbiddenError(ONLY_OWN_EDITS);
+    if (comment.post_deleted_at) throw postRemoved(comment.post_id);
+    if (comment.deleted_at || comment.withdrawn_at) throw commentRemoved(commentId);
+    if (!editStampHolds(comment.edited_at, input.expectedEditedAt)) throw editConflict();
+    if (content === comment.content) return { changed: false, editedAt: comment.edited_at, postId: comment.post_id };
+    const w = await client.query<{ edited_at: Date }>(
+      `UPDATE pod_post_comments SET content = $2, edited_at = NOW() WHERE id = $1 RETURNING edited_at`,
+      [commentId, content],
+    );
+    return { changed: true, editedAt: w.rows[0].edited_at, postId: comment.post_id };
+  });
+  if (result.changed) await fanoutPodWall(podId, [E.podWallPost(result.postId)], { wall: false });
+  return { changed: result.changed, editedAt: result.editedAt ? iso(result.editedAt) : null, postId: result.postId };
 }
 
 // ── Reactions ────────────────────────────────────────────────────────────────
@@ -646,6 +844,7 @@ export async function reactToPost(
         title: `${nameOf(access)} reacted to your post`,
         body: excerpt(post.content, 'Your post on the wall'),
         link: postLink(podId, postId),
+        postLink: postLink(podId, postId),
       }, REACTION_BELL_DEDUPE_MINUTES);
     }
   } else {
@@ -671,11 +870,13 @@ export async function listComments(podId: string, postId: string, viewer: WallVi
   await loadPostHead(podId, postId, viewer.userId);
   const r = await query<CommentRow>(
     `SELECT c.id, c.author_id, u.display_name, u.avatar_url, (NOT ${activeMemberSql('u')}) AS author_closed,
-            c.content, c.created_at, c.parent_comment_id,
+            c.content, c.created_at, c.edited_at, c.withdrawn_at, c.parent_comment_id,
             (SELECT count(*)::int FROM pod_comment_likes l WHERE l.comment_id = c.id) AS like_count,
             EXISTS (SELECT 1 FROM pod_comment_likes l WHERE l.comment_id = c.id AND l.user_id = $2) AS liked_by_me
      FROM pod_post_comments c JOIN users u ON u.id = c.author_id
      WHERE c.post_id = $1 AND c.deleted_at IS NULL
+       AND (c.withdrawn_at IS NULL OR EXISTS (
+         SELECT 1 FROM pod_post_comments wr WHERE wr.parent_comment_id = c.id AND wr.deleted_at IS NULL))
        ${commentVisibleTo('$2')}
      ORDER BY c.created_at ASC, c.id ASC LIMIT $3`,
     // One more than is shown, to know whether there is more.
@@ -710,7 +911,7 @@ export async function addComment(
   if (input.parentCommentId) {
     const parent = await query<{ id: string; author_id: string; parent_comment_id: string | null }>(
       `SELECT c.id, c.author_id, c.parent_comment_id FROM pod_post_comments c
-       WHERE c.id = $1 AND c.post_id = $2 AND c.deleted_at IS NULL
+       WHERE c.id = $1 AND c.post_id = $2 AND c.deleted_at IS NULL AND c.withdrawn_at IS NULL
          ${commentVisibleTo('$3')}`,
       [input.parentCommentId, postId, viewer.userId],
     );
@@ -730,11 +931,12 @@ export async function addComment(
     return ins.rows[0];
   });
 
-  const link = postLink(podId, postId);
+  const ofPost = postLink(podId, postId);
+  const link = commentBellLink(ofPost, made.id);
   const name = nameOf(access);
   if (repliedToAuthor && repliedToAuthor !== viewer.userId) {
     await ringOne(podId, repliedToAuthor, viewer.userId, {
-      type: 'pod_reply', title: `${name} replied to your comment`, body: excerpt(content, 'See the reply'), link,
+      type: 'pod_reply', title: `${name} replied to your comment`, body: excerpt(content, 'See the reply'), link, postLink: ofPost,
     }, COMMENT_BELL_DEDUPE_MINUTES);
   }
   if (post.authorId !== viewer.userId && post.authorId !== repliedToAuthor) {
@@ -743,6 +945,7 @@ export async function addComment(
       title: `${name} commented on your post`,
       body: excerpt(content, excerpt(post.content, 'See the comment')),
       link,
+      postLink: ofPost,
     }, COMMENT_BELL_DEDUPE_MINUTES);
   }
   await fanoutPodWall(podId, [E.podWallPost(postId)]);
@@ -760,7 +963,7 @@ export async function likeComment(
   requireMemberOfOpenPod(access);
   const target = await query<{ post_id: string }>(
     `SELECT c.post_id FROM pod_post_comments c JOIN pod_posts p ON p.id = c.post_id
-     WHERE c.id = $1 AND p.pod_id = $3 AND c.deleted_at IS NULL AND p.deleted_at IS NULL
+     WHERE c.id = $1 AND p.pod_id = $3 AND c.deleted_at IS NULL AND c.withdrawn_at IS NULL AND p.deleted_at IS NULL
        ${BLOCK_FILTER}
        ${commentVisibleTo('$2')}`,
     [commentId, viewer.userId, podId],
@@ -790,35 +993,89 @@ export async function likeComment(
 }
 
 /**
- * Delete a comment: its author, the pod's director or host, or a platform admin, in any state of the pod (see
- * deletePost). Its replies go with it, and the post's count drops by all of them. Answers the post, which
- * names the thread to tell.
+ * Delete a comment: its author (D8: also once they are no longer in the pod), the pod's director or host, or a platform
+ * admin, in any state of the pod (see deletePost). Each row records who removed it, and the bells that carry its words
+ * are deleted in the same transaction (their people are told once it commits).
+ *   * A moderator (the right read under the comment's lock) removes the comment and its replies, and the post's count
+ *     drops by every live one; the removal of someone else's words is recorded with them.
+ *   * Its author (S4 fix round 1, controller ruling) never takes other people's words with theirs: a top-level comment
+ *     that still has replies is withdrawn (its words cleared, "This comment was deleted", the replies stay); any other
+ *     is removed alone. An author's own deletion is not a moderation and is not recorded.
+ * A comment removed or withdrawn a moment before answers alreadyRemoved. Answers the post, which names the thread.
  */
-export async function deleteComment(podId: string, commentId: string, viewer: WallViewer): Promise<{ postId: string }> {
-  const access = await resolveAccess(podId, viewer);
-  const postId = await transaction(async (client) => {
-    const r = await client.query<{ author_id: string; post_id: string; deleted_at: Date | null }>(
-      `SELECT c.author_id, c.post_id, c.deleted_at
+export async function deleteComment(
+  podId: string,
+  commentId: string,
+  viewer: WallViewer,
+): Promise<{ postId: string; alreadyRemoved: boolean }> {
+  const { access, refusal } = await accessForRemoving(podId, viewer);
+  const done = await transaction(async (client) => {
+    const r = await client.query<{
+      author_id: string; post_id: string; content: string; created_at: Date; edited_at: Date | null;
+      deleted_at: Date | null; withdrawn_at: Date | null; has_replies: boolean;
+    }>(
+      `SELECT c.author_id, c.post_id, c.content, c.created_at, c.edited_at, c.deleted_at, c.withdrawn_at,
+              EXISTS (SELECT 1 FROM pod_post_comments rr WHERE rr.parent_comment_id = c.id AND rr.deleted_at IS NULL) AS has_replies
        FROM pod_post_comments c JOIN pod_posts p ON p.id = c.post_id
        WHERE c.id = $1 AND p.pod_id = $2 AND p.deleted_at IS NULL
        FOR UPDATE OF c`,
       [commentId, podId],
     );
     const comment = r.rows[0];
-    if (!comment || comment.deleted_at) throw commentNotFound(commentId);
-    if (!access.canModerate && comment.author_id !== viewer.userId) throw new ForbiddenError(ONLY_OWN_COMMENTS);
-    const gone = await client.query<{ id: string }>(
-      `UPDATE pod_post_comments SET deleted_at = NOW()
-       WHERE (id = $1 OR parent_comment_id = $1) AND deleted_at IS NULL
-       RETURNING id`,
-      [commentId],
+    const own = comment?.author_id === viewer.userId;
+    if (!access && !own) throw refusal;
+    if (!comment) throw commentNotFound(commentId);
+    // Fix round 2: a withdrawn comment's thread is a moderator's to clear, the comment's own author included when they
+    // moderate (their withdrawal was theirs; removing the replies is moderation).
+    const moderates = (!own || !!comment.withdrawn_at) && !!access && (await moderatesPodNow(client, podId, viewer));
+    if (!own && !moderates) {
+      throw comment.deleted_at ? commentRemoved(commentId) : new ForbiddenError(ONLY_OWN_COMMENTS);
+    }
+    const moderation = !own || (!!comment.withdrawn_at && moderates);
+    const ofPost = postLink(podId, comment.post_id);
+    const nothing = { postId: comment.post_id, alreadyRemoved: true, rung: [] as string[] };
+    if (comment.deleted_at || (comment.withdrawn_at && !moderation)) return nothing;
+
+    if (!moderation && comment.has_replies) {
+      await client.query(
+        `UPDATE pod_post_comments SET content = '', withdrawn_at = NOW(), deleted_by = $2 WHERE id = $1`,
+        [commentId, viewer.userId],
+      );
+      await client.query(`UPDATE pod_posts SET comment_count = GREATEST(comment_count - 1, 0) WHERE id = $1`, [comment.post_id]);
+      const rung = await purgeCommentBells(client, 'pod', [commentBellLink(ofPost, commentId)]);
+      return { ...nothing, alreadyRemoved: false, rung };
+    }
+
+    // Its author's comment with no replies, or a moderator's removal of a comment and its thread.
+    const gone = await client.query<{ id: string; withdrawn_at: Date | null }>(
+      `UPDATE pod_post_comments SET deleted_at = NOW(), deleted_by = $2
+       WHERE (id = $1 OR ($3::boolean AND parent_comment_id = $1)) AND deleted_at IS NULL
+       RETURNING id, withdrawn_at`,
+      [commentId, viewer.userId, moderation],
     );
-    await client.query(
-      `UPDATE pod_posts SET comment_count = GREATEST(comment_count - $2, 0) WHERE id = $1`,
-      [comment.post_id, Math.max(gone.rowCount ?? 1, 1)],
-    );
-    return comment.post_id;
+    // A withdrawn comment was already taken off the count when it was withdrawn.
+    const counted = gone.rows.filter((row) => !row.withdrawn_at).length;
+    if (counted > 0) {
+      await client.query(
+        `UPDATE pod_posts SET comment_count = GREATEST(comment_count - $2, 0) WHERE id = $1`,
+        [comment.post_id, counted],
+      );
+    }
+    if (moderation) {
+      await recordModeration(client, {
+        actorId: viewer.userId, action: 'wall_comment_removed', space: 'pod', spaceId: podId,
+        snapshot: {
+          postId: comment.post_id, commentId, authorId: comment.author_id, content: comment.content,
+          createdAt: comment.created_at, editedAt: comment.edited_at, repliesRemoved: Math.max(gone.rows.length - 1, 0),
+        },
+      });
+    }
+    const rung = await purgeCommentBells(client, 'pod', gone.rows.map((row) => commentBellLink(ofPost, row.id)));
+    return { ...nothing, alreadyRemoved: false, rung };
   });
-  await fanoutPodWall(podId, [E.podWallPost(postId)]);
-  return { postId };
+  if (!done.alreadyRemoved) {
+    await tellBellOwners(done.rung);
+    await fanoutPodWall(podId, [E.podWallPost(done.postId)]);
+  }
+  return { postId: done.postId, alreadyRemoved: done.alreadyRemoved };
 }

@@ -881,6 +881,19 @@ async function loadMessageContext(messageId: string): Promise<{
 }
 
 /**
+ * Who may react, or take a reaction back: one of the two people, and never across a block in either direction (11 Nov
+ * 2026, Shirley Palmer's item 16). Blocks always win, so a reaction cannot reach the person who blocked, nor come from
+ * them into a thread they see read-only; REST and the socket both come through here.
+ */
+async function assertMayReact(ctx: { userAId: string; userBId: string }, userId: string): Promise<void> {
+  if (ctx.userAId !== userId && ctx.userBId !== userId) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You cannot react in this conversation');
+  }
+  const otherUserId = ctx.userAId === userId ? ctx.userBId : ctx.userAId;
+  if (await blockService.areBlocked(userId, otherUserId)) throw new BroadcastBlockedError();
+}
+
+/**
  * Add an emoji reaction to a DM. Idempotent — adding the same emoji twice
  * by the same user is a no-op (ON CONFLICT DO NOTHING). Authorization is
  * conversation-participant: only the two users in the conversation can
@@ -903,9 +916,7 @@ export async function addReaction(
   }
 
   const ctx = await loadMessageContext(messageId);
-  if (ctx.userAId !== userId && ctx.userBId !== userId) {
-    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You cannot react in this conversation');
-  }
+  await assertMayReact(ctx, userId);
 
   await query(
     `INSERT INTO dm_message_reactions (message_id, user_id, emoji)
@@ -937,9 +948,7 @@ export async function removeReaction(
   }
 
   const ctx = await loadMessageContext(messageId);
-  if (ctx.userAId !== userId && ctx.userBId !== userId) {
-    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You cannot react in this conversation');
-  }
+  await assertMayReact(ctx, userId);
 
   await query(
     `DELETE FROM dm_message_reactions

@@ -51,6 +51,7 @@ jest.mock('../../../realtime/fanout', () => ({
 import { reviewJoinRequest, listJoinRequests, getJoinRequestById } from '../../../services/join-request/join-request.service';
 import { confirmActionToken, peekActionToken } from '../../../services/join-request/admin-action-tokens.service';
 import { sendJoinRequestWelcomeEmail } from '../../../services/email/email.service';
+import logger from '../../../config/logger';
 
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r)); };
 
@@ -121,6 +122,27 @@ describe('approving from the dashboard (reviewJoinRequest)', () => {
     expect(lookups()).toBe(1);
     expect(mockRunProvider.mock.calls[0][1]).toMatchObject({ linkedinUrl: 'https://www.linkedin.com/in/jane-doe', fullName: 'Jane Doe', email: 'jane@example.com' });
     expect(enrichedWrites()).toHaveLength(1);
+  });
+
+  // 12 Nov 2026: `if (!result) return;` hid six days of ScrapingDog's "not stored yet, try again after 2-3 minutes".
+  it('a lookup ScrapingDog asks to repeat later is logged with the request id and gets ONE later attempt; the approval stands', async () => {
+    claim('https://www.linkedin.com/in/jane-doe');
+    mockRunProvider.mockResolvedValue({ kind: 'retry_exhausted', notReady: true });
+    mockResultFromOutcome.mockReturnValue(null);
+
+    const reviewed = await reviewJoinRequest('jr-1', 'approved', 'admin-1');
+    await flush();
+
+    expect(reviewed.status).toBe('approved');
+    expect(sendJoinRequestWelcomeEmail).toHaveBeenCalledTimes(1);
+    expect(enrichedWrites()).toHaveLength(0);
+    // The schedule runs in its own transaction (its advisory lock first): it reaches the transaction client.
+    const retries = [...mockQuery.mock.calls, ...mockClientQuery.mock.calls].filter((c) => /INSERT INTO enrichment_retries/.test(String(c[0])));
+    expect(mockClientQuery.mock.calls.some((c) => /pg_advisory_xact_lock/.test(String(c[0])))).toBe(true);
+    expect(retries).toHaveLength(1);
+    expect(retries[0][1]).toEqual(['jr-1', 'https://www.linkedin.com/in/jane-doe', 'Jane Doe', 600, 3, 1]);
+    const said = (logger.warn as jest.Mock).mock.calls.filter((c) => c[1] === 'join-request enrichment preload found nothing');
+    expect(said).toEqual([[expect.objectContaining({ joinRequestId: 'jr-1', outcome: 'retry_exhausted', reason: 'not stored yet (asked to try again later)' }), 'join-request enrichment preload found nothing']]);
   });
 });
 

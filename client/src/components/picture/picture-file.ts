@@ -39,3 +39,15 @@ export function serverCouldNotOpen(err: unknown): boolean {
   const failed = (err ?? {}) as { response?: { status?: number; data?: { error?: { message?: unknown } } } };
   return failed.response?.status === 400 && failed.response.data?.error?.message === COULD_NOT_OPEN;
 }
+
+/**
+ * What the banner editor says under the picture (Shirley pilot S6, RSN 13): the size the server keeps a banner at
+ * (PICTURE_SHAPES.banner, 2400 by 800), and that a wide screen shows only its middle band. Every profile draws its banner
+ * in one box (ProfileBanner: 3:1, at most 260px tall), so on a page wider than 780px the top and bottom are cropped.
+ */
+export function bannerHints(width: number, height: number): { size: string; crop: string } {
+  return {
+    size: `Recommended size: ${width} × ${height} px (3:1).`,
+    crop: 'Wide screens crop the top and bottom of your banner, so keep faces and words near the middle.',
+  };
+}

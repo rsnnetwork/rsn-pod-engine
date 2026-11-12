@@ -51,8 +51,8 @@ describe('Entities: every query is told by the contract\'s realtime tags', () =>
       if (n > 0) expect({ f, lock: /if \((?:!joinAs \|\| )?(?:sending|joining|busy)\.current\) return;/.test(s) }).toEqual({ f, lock: true });
     }
     // Create, edit, role, join (from a 409), join (on the page), leave, archive; T15: approve or decline, remove a
-    // member, save a picture, remove a picture.
-    expect(mutations).toBe(11);
+    // member, save a picture, remove a picture; Shirley pilot S7: save the services.
+    expect(mutations).toBe(12);
   });
 });
 
@@ -325,7 +325,8 @@ describe('Entities: claims wait for the admins (T15, L23)', () => {
     expect(panel).toMatch(/className=\{QUIET_BUTTON\}/);
     const p = page('EntityProfilePage.tsx');
     expect(p).toMatch(/const toRequests = params\.get\('requests'\) === '1';/);
-    expect(p).toMatch(/<EntityRequests page=\{page\} focus=\{toRequests\} \/>\n\s*<EntityPeople page=\{page\} me=\{me\} \/>/);
+    // Shirley pilot S7: the Services section sits between the Requests and the People.
+    expect(p).toMatch(/<EntityRequests page=\{page\} focus=\{toRequests\} \/>\n\s*<EntityServices page=\{page\} onEdit=\{[^}]*\} \/>\n\s*<EntityPeople page=\{page\} me=\{me\} \/>/);
   });
   it('Remove on a member card asks first, and is never on yourself, on an admin (unless a platform admin), or on the last admin', () => {
     const people = page('EntityPeople.tsx');

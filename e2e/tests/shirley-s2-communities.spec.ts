@@ -136,14 +136,17 @@ test(`an owner with no admin rights runs the circle, hands it over, and private 
   const mp = await signedIn(m, { width: 360, height: 780 });
   await gotoRetry(op, `${APP}/circles/${circleId}`);
   await expect(op.getByTestId(`circle-owner-${circleId}`)).toHaveText('You own this circle', { timeout: 30_000 });
+  // Shirley pilot S3: the owner's controls are entries of the Manage menu.
+  await op.getByTestId('manage-open').click();
   await expect(op.getByTestId('circle-edit')).toBeVisible();
   await expect(op.getByTestId('circle-invitations')).toBeVisible();
   await expect(op.getByTestId('circle-settings')).toBeVisible();
+  await op.keyboard.press('Escape');
   // Both private pods are named to their director, marked Private.
   await expect(op.getByTestId(`circle-pod-badge-${podA}`)).toHaveText('Private');
   await gotoRetry(mp, `${APP}/circles/${circleId}`);
   await expect(mp.getByTestId(`circle-join-${circleId}`)).toHaveText('Leave', { timeout: 30_000 });
-  await expect(mp.getByTestId('circle-edit')).toHaveCount(0);
+  await expect(mp.getByTestId('manage-open')).toHaveCount(0);
   // A plain member is not shown the private pods at all.
   await expect(mp.getByText(`${RUN} Human Edge`)).toHaveCount(0);
 
@@ -151,16 +154,23 @@ test(`an owner with no admin rights runs the circle, hands it over, and private 
   await op.getByTestId('circle-member-action-make-moderator').click();
   await expect(op.getByTestId(`circle-role-${m.id}`)).toHaveText('MOD', { timeout: 20_000 });
   // The moderator's page flips without a reload: the managers' controls appear, Who can join does not.
-  await expect(mp.getByTestId('circle-edit')).toBeVisible({ timeout: 30_000 });
+  await expect(mp.getByTestId('manage-open')).toBeVisible({ timeout: 30_000 });
+  await mp.getByTestId('manage-open').click();
+  await expect(mp.getByTestId('circle-edit')).toBeVisible();
   await expect(mp.getByTestId('circle-settings')).toHaveCount(0);
   await fitsViewport(mp, mp.getByTestId('circle-invitations'));
+  await mp.keyboard.press('Escape');
 
   // The handover, with its confirm (answered by acceptConfirmDialogs).
   await op.getByTestId(`circle-member-manage-${m.id}`).click();
   await op.getByTestId('circle-member-action-make-owner').click();
   await expect(op.getByTestId(`circle-role-${m.id}`)).toHaveText('OWNER', { timeout: 20_000 });
   await expect(op.getByTestId(`circle-role-${o.id}`)).toHaveText('MOD', { timeout: 20_000 });
+  // S3: the old owner, now a moderator, still has the Manage menu, but no Visibility (who can join) in it.
+  await op.getByTestId('manage-open').click();
+  await expect(op.getByTestId('circle-edit')).toBeVisible();
   await expect(op.getByTestId('circle-settings')).toHaveCount(0, { timeout: 20_000 });
+  await op.keyboard.press('Escape');
   await expect(mp.getByTestId(`circle-owner-${circleId}`)).toHaveText('You own this circle', { timeout: 30_000 });
   // The old owner now has a moderator's rights only.
   expect((await api(o, 'PATCH', `/circles/${circleId}/members/${r.id}/role`, { role: 'moderator' })).status).toBe(403);

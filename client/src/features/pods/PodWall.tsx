@@ -8,13 +8,15 @@
 // Everyone who is not an active member of the pod (a visitor to a public pod, someone with a request still
 // waiting, someone who left or was removed) is told so instead of being shown posts.
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import Wall, { WallNotMember } from '@/components/wall/Wall';
 import { useAuthStore } from '@/stores/authStore';
 import { podWallConfig } from './pod-wall-config';
+import { usePodStatusRecheck } from './usePodStatusRecheck';
 
-// The page reads the pod's status from its own query, which the archive's tags refresh once the archive is saved
-// (H2b item 20): the wall no longer has to notice a status the page has not heard yet (P1 item 16).
+// The page reads the pod's status from its own query, which the pod's tags refresh once a change is saved. A read
+// that landed a moment before the change keeps the old status: the wall's feed says the status it found, and when the
+// two disagree the pod is read again, once (usePodStatusRecheck).
 export default function PodWall({ podId, podStatus, isMember, isActiveMember, highlightPostId }: {
   podId: string;
   podStatus: string | undefined;
@@ -31,6 +33,9 @@ export default function PodWall({ podId, podStatus, isMember, isActiveMember, hi
     [podId, me, podStatus, isActiveMember],
   );
 
+  const [feedPodStatus, setFeedPodStatus] = useState<string | undefined>(undefined);
+  usePodStatusRecheck(podId, feedPodStatus, podStatus);
+
   if (!isMember) return <WallNotMember config={config} />;
-  return <Wall key={podId} config={config} highlightPostId={highlightPostId} />;
+  return <Wall key={podId} config={config} highlightPostId={highlightPostId} onFeedPodStatus={setFeedPodStatus} />;
 }

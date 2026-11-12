@@ -12,6 +12,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import { eventAverageText } from './report/report-text';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 interface Connection {
   userId: string;
@@ -72,7 +73,7 @@ function MessagePartnerButton({ userId, displayName }: { userId: string; display
   // post-event page, not the call, so nothing is lost by leaving it. The live end screen keeps its new tab.
   return (
     <Link
-      to={`/messages/new/${userId}`}
+      to={writeToPath(userId)}
       title={`Message ${displayName || 'this user'}`}
       className="ml-auto shrink-0 inline-flex min-h-[44px] items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
       data-testid={`recap-dm-button-${userId}`}

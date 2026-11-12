@@ -18,6 +18,7 @@ import { personName, visibleText } from '../person';
 import { BUSY } from './busy';
 import { PRIMARY_LABEL } from './labels';
 import type { KnownSource } from './profile-text';
+import { writeToPath } from '@/features/messages/compose-intent';
 
 export interface HumanCardPerson {
   userId: string;
@@ -67,7 +68,7 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
 
   const onPrimary = () => {
     if (action === 'meet') onMeet(person);
-    else if (action === 'continue') navigate(`/messages/new/${person.userId}`);
+    else if (action === 'continue') navigate(writeToPath(person.userId));
     else if (action === 'respond') navigate(profileUrl);
   };
   const openProfile = (e: MouseEvent) => {

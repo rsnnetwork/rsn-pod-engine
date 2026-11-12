@@ -21,7 +21,8 @@ describe('client public profile renders Block / Unblock button', () => {
   it('renders a Block button when not blocked', () => {
     expect(src).toMatch(/blockMutation\.mutate/);
     // The Block label is rendered as text content next to the icon.
-    expect(src).toMatch(/<Ban[\s\S]+?\/>\s*Block/);
+    // 11 Nov 2026 (item 16): "Block member", from the one place the safety words live.
+    expect(src).toMatch(/<Ban[\s\S]+?\/>\s*\{BLOCK_MEMBER\}/);
   });
 
   it('renders an Unblock button when blocked', () => {
@@ -31,8 +32,9 @@ describe('client public profile renders Block / Unblock button', () => {
 
   it('block button shows confirm dialog with user-friendly explanation', () => {
     // T2 (1 Nov 2026): the question is a ConfirmDialog in the page (useConfirm), never window.confirm.
-    expect(src).toMatch(/await ask\(\{ title: `Block /);
+    // 11 Nov 2026 (item 16): every consequence said before it is done (safety-words.ts blockConsequence).
+    expect(src).toMatch(/await ask\(\{ title: blockTitle\(user\.displayName\), body: blockConsequence\(user\.displayName, 'profile'\)/);
     expect(src).not.toMatch(/(^|[^\w.])confirm\(/m);
-    expect(src).toMatch(/won't be matched together/);
+    expect(nodeFs.readFileSync(nodePath.join(__dirname, '../../../../client/src/components/safety/safety-words.ts'), 'utf8')).toMatch(/won't be matched together/);
   });
 });

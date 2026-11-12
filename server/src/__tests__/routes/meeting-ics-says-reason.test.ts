@@ -31,7 +31,7 @@ jest.mock('../../services/dm/meeting-windows.service', () => ({
   __esModule: true,
 }));
 jest.mock('../../services/dm/meeting-call.service', () => ({ __esModule: true }));
-jest.mock('../../services/presence/presence.service', () => ({ areActive: jest.fn(), __esModule: true }));
+jest.mock('../../services/presence/presence.service', () => ({ presenceOf: jest.fn(), presenceState: jest.fn(), __esModule: true }));
 // The two people, and (26 Oct 2026) the meeting's own row: the SEQUENCE its invite is at and who booked it.
 const mockMeetingRow = jest.fn();
 const mockQuery = jest.fn((sql: string, params?: unknown[]) => {

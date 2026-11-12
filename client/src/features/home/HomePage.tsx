@@ -152,7 +152,7 @@ export default function HomePage() {
           separate-buttons layout. */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up">
         <Tile id="suggestions" label="Suggestions" value={suggestionCount}
-              hint="people your agents found" to="/agents" action="View suggestions" />
+              hint="people your searches found" to="/agents" action="View suggestions" />
         <Tile id="pods" label="Pods" value={podCount}
               hint="you belong to" to="/pods" action="Create a pod" />
         <Tile id="circles" label="Circles" value={circleCount}

@@ -10,8 +10,7 @@ import config from '../../config';
 import { AppError, ConflictError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import { sendJoinRequestConfirmationEmail, sendJoinRequestWelcomeEmail, sendJoinRequestDeclineEmail, sendJoinRequestReminderEmail } from '../email/email.service';
-import { applyMatchVerification, normalizeLinkedinUrl } from '../onboarding/enrichment.service';
-import { resolveEnrichProvider, runProvider, resultFromOutcome } from '../onboarding/providers/registry';
+import { preloadJoinRequestEnrichment } from './enrichment-preload';
 import { reopenClosedAccount, announceReopened, promoteEventGuest, announceGuestPromoted } from '../identity/account-access';
 import { applicantBaseUrl, signInOriginFor } from './applicant-links';
 
@@ -97,7 +96,7 @@ export async function createJoinRequest(input: CreateJoinRequestInput, requestOr
     [input.fullName, email, input.linkedinUrl, input.reason, signInOriginFor(requestOrigin)]
   );
 
-  logger.info({ email }, 'New join request submitted');
+  logger.info({ id: result.rows[0].id }, 'New join request submitted');
 
   // Notify all admins about the new join request, and tell each admin's bell through its tag (H2b item 6, 26 Oct 2026)
   try {
@@ -118,7 +117,7 @@ export async function createJoinRequest(input: CreateJoinRequestInput, requestOr
 
   // Send confirmation email (non-blocking)
   sendJoinRequestConfirmationEmail(email, input.fullName).catch(err =>
-    logger.error({ err, email }, 'Failed to send join request confirmation')
+    logger.error({ err, id: result.rows[0].id }, 'Failed to send join request confirmation')
   );
 
   // Fan out the email-action review email to every admin (non-blocking).
@@ -284,7 +283,7 @@ export async function reviewJoinRequest(
   // A suspended or banned account stays that way: no "you're in" email or
   // notification that approval cannot honour. The admin sees why on the row.
   if (account?.blockedStatus) {
-    logger.warn({ id, email: reviewed.email, status: account.blockedStatus }, 'Approved a join request for a suspended/banned account; it stays blocked');
+    logger.warn({ id, status: account.blockedStatus }, 'Approved a join request for a suspended/banned account; it stays blocked');
     return reviewed;
   }
 
@@ -294,47 +293,21 @@ export async function reviewJoinRequest(
     // falls back to, open on the site the applicant asked from (the preview, or the app).
     const applicantUrl = applicantBaseUrl(row);
     const approvalLoginUrl = await generateApprovalMagicLink(reviewed.email, applicantUrl).catch(err => {
-      logger.warn({ err, email: reviewed.email }, 'Failed to generate approval magic link — falling back to login URL');
+      logger.warn({ err, id }, 'Failed to generate approval magic link — falling back to login URL');
       return `${applicantUrl}/login`;
     });
     sendJoinRequestWelcomeEmail(reviewed.email, reviewed.fullName, approvalLoginUrl).catch(err =>
-      logger.error({ err, email: reviewed.email }, 'Failed to send welcome email')
+      logger.error({ err, id }, 'Failed to send welcome email')
     );
 
     // Preload the LinkedIn enrichment NOW — during the approval → login gap — so the
     // member's profile card is fully populated the instant they log in (instead of
     // running the ~50s lookup at onboarding). Background; never blocks approval.
-    // Routed through the same provider registry the onboarding orchestrator uses
-    // (A5) — but this preload has no user row yet, so it CANNOT use the
-    // user-scoped enrichment state machine; it keeps its original shape (write
-    // straight to join_requests.enriched, fire-and-forget).
-    (async (): Promise<void> => {
-      const provider = resolveEnrichProvider();
-      if (provider === 'none') return;
-      // LinkedIn is optional on the form: with no address (NULL, or an empty string in older rows) there
-      // is nothing to look up, and no paid lookup is run. Approval itself never depends on it.
-      const linkedinUrl = normalizeLinkedinUrl(reviewed.linkedinUrl);
-      if (!linkedinUrl) return;
-      const outcome = await runProvider(provider, {
-        linkedinUrl,
-        fullName: reviewed.fullName,
-        email: reviewed.email,
-      });
-      const result = resultFromOutcome(outcome);
-      if (!result) return;
-      const verified = applyMatchVerification(result, linkedinUrl);
-      if (verified.confidence > 0) {
-        // Stash the RESOLVED provider onto the cached blob (additive — every
-        // existing reader of this JSONB duck-types it and none reads
-        // `provider` strictly) so identity.service.ts's copy-forward can
-        // attribute the preload to whichever provider actually ran instead of
-        // assuming a fixed one.
-        await query(`UPDATE join_requests SET enriched = $1::jsonb WHERE id = $2`, [
-          JSON.stringify({ ...verified, provider }),
-          id,
-        ]);
-      }
-    })().catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
+    // An empty end is logged, and "try again later" gets up to two later attempts (enrichment-preload.ts).
+    preloadJoinRequestEnrichment(
+      { id, fullName: reviewed.fullName, email: reviewed.email, linkedinUrl: reviewed.linkedinUrl },
+      { retryAttempt: 0 },
+    ).catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
 
     // In-app notification for the approved user (only if they already have an account), told to their bell through
     // its tag (H2b item 6, 26 Oct 2026)
@@ -356,7 +329,7 @@ export async function reviewJoinRequest(
     }
   } else {
     sendJoinRequestDeclineEmail(reviewed.email, reviewed.fullName).catch(err =>
-      logger.error({ err, email: reviewed.email }, 'Failed to send decline email')
+      logger.error({ err, id }, 'Failed to send decline email')
     );
   }
 
@@ -424,10 +397,10 @@ export async function pokeJoinRequest(id: string): Promise<JoinRequest> {
   // Send reminder email (non-blocking). It opens the site the applicant asked from.
   const loginUrl = `${applicantBaseUrl(updated.rows[0])}/login`;
   sendJoinRequestReminderEmail(poked.email, poked.fullName, loginUrl, poked.reminderCount).catch(err =>
-    logger.error({ err, email: poked.email }, 'Failed to send reminder email')
+    logger.error({ err, id }, 'Failed to send reminder email')
   );
 
-  logger.info({ id, email: poked.email, reminderCount: poked.reminderCount }, 'Join request poked');
+  logger.info({ id, reminderCount: poked.reminderCount }, 'Join request poked');
   return poked;
 }
 
@@ -493,7 +466,7 @@ export async function processAutoReminders(): Promise<{ reminded: number; expire
         [jr.id]
       );
       expired++;
-      logger.info({ id: jr.id, email: jr.email }, 'Auto-expired join request (30 days, never activated)');
+      logger.info({ id: jr.id }, 'Auto-expired join request (30 days, never activated)');
       continue;
     }
 
@@ -555,6 +528,6 @@ async function generateApprovalMagicLink(email: string, baseUrl: string): Promis
   );
 
   const magicLinkUrl = `${baseUrl}/auth/verify?token=${token}`;
-  logger.info({ email: normalizedEmail }, 'Approval magic link generated (7-day expiry)');
+  logger.info('Approval magic link generated (7-day expiry)');
   return magicLinkUrl;
 }

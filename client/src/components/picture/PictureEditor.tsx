@@ -5,13 +5,13 @@
 // `src` is what it opens on: a picture the member already has (an address or a data URL; Save then sends only the
 // new crop, as null) or a file they just chose (a Blob; Save sends it). With none it asks for a picture.
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { PICTURE_CENTRED, clampPictureCrop, type PictureCrop } from '@rsn/shared';
+import { PICTURE_CENTRED, PICTURE_SHAPES, clampPictureCrop, type PictureCrop } from '@rsn/shared';
 import { Skeleton } from '@/components/ui/Spinner';
 import Sheet from '@/features/reason/ui/Sheet';
 import { errorMessage } from '@/features/reason/errors';
 import PictureFrame from './PictureFrame';
 import ZoomControl from './ZoomControl';
-import { PICTURE_TYPES, pictureFileProblem } from './picture-file';
+import { PICTURE_TYPES, bannerHints, pictureFileProblem } from './picture-file';
 import { zoomPicture, type Natural } from './picture-geometry';
 import { PICTURE_TOO_LARGE, UNREADABLE_PICTURE } from './prepare-picture';
 
@@ -38,6 +38,9 @@ export interface PictureEditorProps {
 }
 
 interface Shown { src: string; file: Blob | null }
+
+// A banner (3:1, a member's or an entity's) is kept at the server's own size, and drawn in the one banner box.
+const BANNER_HINTS = bannerHints(PICTURE_SHAPES.banner.width, PICTURE_SHAPES.banner.height);
 
 const QUIET = 'flex min-h-[44px] items-center justify-center rounded-[11px] border border-reason-line bg-white px-4 text-[14px] font-bold disabled:opacity-60';
 const PRIMARY = 'flex min-h-[44px] items-center justify-center rounded-[11px] bg-reason-red px-5 text-[14px] font-bold text-white disabled:opacity-60';
@@ -140,6 +143,12 @@ export default function PictureEditor({ open, title, name, subject, aspect, src,
             </div>
           )}
         </div>
+        {aspect === 3 && (
+          <div className="grid gap-1 text-[13px] leading-snug text-reason-muted" data-testid="banner-hints">
+            <p>{BANNER_HINTS.size}</p>
+            <p role="note" className="font-semibold text-reason-ink">{BANNER_HINTS.crop}</p>
+          </div>
+        )}
         {shown && natural && (
           <>
             <p className="text-[13px] text-reason-muted">Drag the picture to place it. Pinch, or use the slider, to zoom.</p>

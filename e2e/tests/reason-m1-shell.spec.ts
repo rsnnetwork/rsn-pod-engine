@@ -353,7 +353,7 @@ async function expectTopbar(page: Page, width: number, where: string): Promise<v
   const targets = [
     { name: 'search field', loc: page.getByRole('search').getByRole('textbox', { name: 'Search people' }) },
     { name: 'notifications', loc: page.getByRole('button', { name: 'Notifications' }) },
-    { name: 'your profile', loc: page.getByRole('link', { name: 'Your profile' }) },
+    { name: 'account menu', loc: page.getByRole('button', { name: 'Account menu' }) },
   ];
   if (modeOf(width) === 'phone') targets.push({ name: 'REASON home', loc: page.getByRole('link', { name: 'REASON home' }) });
   await expectTapSize(targets, where);

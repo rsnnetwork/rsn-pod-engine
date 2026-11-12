@@ -40,7 +40,7 @@ jest.mock('../../services/dm/meeting-call.service', () => ({
   getOutgoingCallRequest: (...a: unknown[]) => mockOutgoing(...a),
 }));
 jest.mock('../../services/dm/meeting-windows.service', () => ({ __esModule: true }));
-jest.mock('../../services/presence/presence.service', () => ({ areActive: jest.fn(), __esModule: true }));
+jest.mock('../../services/presence/presence.service', () => ({ presenceOf: jest.fn(), presenceState: jest.fn(), __esModule: true }));
 jest.mock('../../db', () => ({ query: jest.fn(), transaction: jest.fn(), __esModule: true }));
 
 import callsRoutes from '../../routes/calls';

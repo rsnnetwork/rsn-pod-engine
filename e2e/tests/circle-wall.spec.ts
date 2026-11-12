@@ -52,13 +52,26 @@ test('the wall: members-only, idempotent, block-filtered, rate-limited, pinned �
   await apiAs(admin, 'POST', `/circles/${circleId}/pods`, { podId });
   for (const u of [m1, m2, m3]) await apiAs(u, 'POST', `/circles/${circleId}/join`);
 
-  // (1) P3b: the pod knows its circles.
-  const ofPod = await apiAs(m1, 'GET', `/circles/of-pod/${podId}`);
+  // (1) P3b: the pod knows its circles. S2 (11 Nov 2026): which circles a pod is in is read only by someone who may see
+  // the pod. This pod is private and m1 is not in it, so m1 gets the pod's own 404 (its existence is not confirmed);
+  // the admin who made it, who may see it, reads the attachment.
+  const ofPod = await apiAs(admin, 'GET', `/circles/of-pod/${podId}`);
+  expect(ofPod.status).toBe(200);
   expect(ofPod.json.data.map((c: any) => c.id)).toContain(circleId);
-  console.log('  ✓ of-pod lookup shows the attachment (P3b).');
+  const ofPodOutsider = await apiAs(m1, 'GET', `/circles/of-pod/${podId}`);
+  expect(ofPodOutsider.status, 'a private pod\'s circles are not read by someone outside it').toBe(404);
+  expect(ofPodOutsider.json.data).toBeUndefined();
+  console.log('  ✓ of-pod lookup shows the attachment to who may see the pod, 404 to who may not (P3b, S2).');
 
   // (2) POSTING IS MEMBERS-ONLY — even the admin must be in it. Since R10a the admin who made the circle is its owner
-  // and a member, so the admin leaves it first to be the platform admin outside it.
+  // and a member, so the admin leaves it first to be the platform admin outside it. S2 (D3): a circle always has one
+  // owner, and the owner cannot leave without handing it on, so the admin hands it to m1 (the admin becomes a
+  // moderator) and then leaves.
+  const ownerLeave = await apiAs(admin, 'POST', `/circles/${circleId}/leave`);
+  expect(ownerLeave.status, 'the owner cannot leave').toBe(400);
+  expect(ownerLeave.json.error.message).toBe('Hand the circle to someone else before you leave it.');
+  const handed = await apiAs(admin, 'POST', `/circles/${circleId}/transfer`, { toUserId: m1.id });
+  expect(handed.status, JSON.stringify(handed.json)).toBe(200);
   expect((await apiAs(admin, 'POST', `/circles/${circleId}/leave`)).status).toBe(200);
   const adminPost = await apiAs(admin, 'POST', `/circles/${circleId}/posts`, { clientId: uuid(), content: 'hi' });
   expect(adminPost.status).toBe(403);

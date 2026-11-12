@@ -40,6 +40,7 @@ import { processAutoReminders } from './services/join-request/join-request.servi
 import { pruneExpiredAuthTokens } from './services/maintenance/token-cleanup';
 import { processPendingJobs } from './services/post-event-message/post-event-message.worker';
 import { processMeetingReminders } from './services/meetings/meeting-reminder.worker';
+import { processEnrichmentRetries, ENRICH_RETRY_INTERVAL_MS } from './services/onboarding/enrichment-retry.worker';
 import { closeOverdueEvents, OVERDUE_EVENT_INTERVAL_MS } from './services/session/overdue-events';
 import { processEventReminders, EVENT_REMINDER_INTERVAL_MS } from './services/session/event-reminder.worker';
 
@@ -70,6 +71,7 @@ import meetingRoutes from './routes/meeting';
 import meetingsRoutes from './routes/meetings';
 import callsRoutes from './routes/calls';
 import circleRoutes from './routes/circles';
+import { circleExportRoutes, podExportRoutes } from './routes/space-export';
 import entityRoutes from './routes/entities';
 import reportRoutes from './routes/reports';
 import groupRoutes from './routes/groups';
@@ -84,6 +86,10 @@ import eventQuestionRoutes from './routes/event-questions';
 import eventAdmissionRoutes from './routes/event-admission';
 import eventWaitlistRoutes from './routes/event-waitlist';
 import callLinkRoutes, { sessionCallLinkRoutes } from './routes/call-links';
+import publicProfileRoutes, { publicLinkRoutes } from './routes/public-profiles';
+import calendarSyncRoutes from './routes/calendar-sync';
+import publicConfigRoutes from './routes/public-config';
+import { logCalendarSyncState } from './services/calendar-sync/settings';
 import scheduleRoutes from './routes/schedule';
 import eventImageRoutes from './routes/event-image';
 import eventReportRoutes from './routes/event-report';
@@ -348,6 +354,7 @@ app.get('/health/deep', async (_req, res) => {
 app.use('/api/auth', authRoutes);
 // The member's own email change and account close (Part 3 Task 2) before the users router, so /me/email/* and /me/close
 // are served there and never read as /:id.
+app.use('/api/users/me/public-link', publicLinkRoutes); // The member's own public profile link (Shirley pilot S6)
 app.use('/api/users/me', accountSecurityRoutes);
 app.use('/api/users', userRoutes);
 // Onboarding v2 (21 Oct 2026) before v1, so its /v2 paths never reach the v1 router.
@@ -355,6 +362,7 @@ app.use('/api/onboarding/v2', onboardingV2Routes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/pods', podRoutes);
 app.use('/api/pods', podWallRoutes); // a pod's wall: /:podId/wall/…, a path shape the pods router does not use
+app.use('/api/pods', podExportRoutes); // its organisers' export: /:id/export (Shirley pilot S7)
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/invites', inviteRoutes);
 app.use('/api/ratings', ratingRoutes);
@@ -369,6 +377,10 @@ app.use('/api/sessions', eventAdmissionRoutes); // Who gets a place: /api/sessio
 app.use('/api/sessions', eventWaitlistRoutes); // A full event's waiting list: /api/sessions/:id/waitlist* (Part 3 Task 3)
 app.use('/api/sessions', sessionCallLinkRoutes); // An event's RSN Call link for its organisers: /api/sessions/:id/call-link
 app.use('/api/call-links', callLinkRoutes); // The RSN Call link itself: open, verify by code, enter (Part 2 Task 6)
+app.use('/api/public/profiles', publicProfileRoutes); // A member's public profile link, read signed out (Shirley pilot S6)
+app.use('/api/public/config', publicConfigRoutes); // What the server has switched on, for the client (Shirley pilot S8)
+// Calendar free/busy (Shirley pilot S8): every route answers 404 until CALENDAR_SYNC is on with its key and a provider.
+app.use('/api/calendar', calendarSyncRoutes);
 app.use('/api/sessions', scheduleRoutes); // The organisers' matching board draft: /api/sessions/:id/schedule
 app.use('/api/sessions', eventImageRoutes); // An event's image: /api/sessions/:id/image (Part 3 Task 1)
 app.use('/api/sessions', eventReportRoutes); // The organisers' event report and its CSVs: /api/sessions/:id/report (Part 3 Task 4)
@@ -390,6 +402,7 @@ app.use('/api/matches', matchesRoutes);
 app.use('/api/people', peopleRoutes);
 app.use('/api/agents', agentRoutes);
 app.use('/api/circles', circleRoutes);
+app.use('/api/circles', circleExportRoutes); // its organisers' export: /:id/export (Shirley pilot S7)
 app.use('/api/entities', entityRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/groups', groupRoutes);
@@ -456,6 +469,13 @@ async function start(): Promise<void> {
         logger.error({ err }, 'Meeting reminder cycle failed'));
     }, MEETING_REMINDER_INTERVAL);
 
+    // A LinkedIn lookup ScrapingDog asked us to repeat later runs once more when due (12 Nov 2026). The claim
+    // deletes the row under FOR UPDATE SKIP LOCKED, so several instances run each retry once.
+    setInterval(() => {
+      processEnrichmentRetries().catch(err =>
+        logger.error({ err }, 'Enrichment retry cycle failed'));
+    }, ENRICH_RETRY_INTERVAL_MS);
+
     // Event reminders, 24 hours and 1 hour before (Part 2 Task 10): dark until EVENT_COMMS is report or on. Each
     // reminder is claimed in the database, so several instances running it tell a person once.
     if (config.eventComms !== 'off') {
@@ -465,6 +485,9 @@ async function start(): Promise<void> {
       }, EVENT_REMINDER_INTERVAL_MS);
       logger.info({ mode: config.eventComms }, 'Event reminders started');
     }
+
+    // Calendar free/busy (Shirley pilot S8): say whether it is on, and when it was asked for but stays off, why.
+    logCalendarSyncState();
 
     // Overdue events close themselves (10 Nov 2026, F7): every minute, a live or never-started event whose start,
     // length and grace have passed is completed (end mode) or listed in the log (report mode, the default). Each

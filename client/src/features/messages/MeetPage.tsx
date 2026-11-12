@@ -15,7 +15,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LiveKitRoom, RoomAudioRenderer, ParticipantTile, ControlBar, useTracks, useRoomContext, type TrackReference } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Track } from 'livekit-client';
+import { DisconnectReason, RoomEvent, Track } from 'livekit-client';
 import { ArrowLeft, CalendarClock, Loader2, Maximize2, MessageSquare, Minimize2, PhoneOff } from 'lucide-react';
 import { MEETING_JOIN_EARLY_MIN } from '@rsn/shared';
 import api from '@/lib/api';
@@ -29,10 +29,12 @@ import PartnerSeen from './PartnerSeen';
 import { isMeetingOver, viewerZone, whenWithZone } from './scheduler-flow';
 import { schedulingKey, type Scheduling } from './scheduling-types';
 import { useAuthStore } from '@/stores/authStore';
+import { useToastStore } from '@/stores/toastStore';
 import CallChatPanel from '@/features/meet/CallChatPanel';
 import { newestAt, unreadFrom } from '@/features/meet/call-chat';
 import { useThreadMessages } from './thread/useThreadMessages';
 import { useConversationPartner, type ConversationPartner } from './thread/useConversationPartner';
+import { afterDisconnect, readCallPermission, readCallPermissionWithin } from './call-permission';
 
 /** A stable key for a track reference (participant + source + track sid). */
 function trackId(t: TrackReference | { participant?: { identity?: string }; source?: string; publication?: { trackSid?: string } }): string {
@@ -195,6 +197,27 @@ function CallEndWatcher({ conversationId, onLeave, leaving, depart }: {
   );
 }
 
+/**
+ * The room losing its connection asks the server whether the call may still go on (S5 fix 6): a block made meanwhile
+ * ends it at once instead of leaving the person in LiveKit's reconnect loop.
+ */
+function RecheckOnReconnect({ recheck }: { recheck: () => unknown }) {
+  const room = useRoomContext();
+  useEffect(() => {
+    const onReconnecting = () => { void recheck(); };
+    room.on(RoomEvent.Reconnecting, onReconnecting);
+    room.on(RoomEvent.SignalReconnecting, onReconnecting);
+    return () => {
+      room.off(RoomEvent.Reconnecting, onReconnecting);
+      room.off(RoomEvent.SignalReconnecting, onReconnecting);
+    };
+  }, [room, recheck]);
+  return null;
+}
+
+/** What the thread says when the call's room was closed under both people. */
+export const CALL_ENDED = 'The call has ended.';
+
 /** The leave before the room is there (or after it has gone): nothing to say goodbye to. */
 const noDeparture = (): Promise<void> => Promise.resolve();
 
@@ -213,7 +236,9 @@ export default function MeetPage() {
   const [now, setNow] = useState<number>(Date.now());
   const [forceJoin, setForceJoin] = useState(false);
 
-  const leave = useCallback(() => navigate(`/messages/${conversationId}`), [navigate, conversationId]);
+  // Every way out of the room REPLACES it in the history (11 Nov 2026, Shirley Palmer's RSN 08): Back from the
+  // conversation never re-enters the call, which asked for a call token again on arrival.
+  const leave = useCallback(() => navigate(`/messages/${conversationId}`, { replace: true }), [navigate, conversationId]);
   // Feedback after meetings (30 Oct 2026): whether the other person has been in the room with me. Leaving the room
   // after that asks how a scheduled meeting went; the room's own leave can fire twice (its button, then the
   // disconnect), so it goes once.
@@ -272,8 +297,19 @@ export default function MeetPage() {
         readMeetingId: isScheduled ? readMeetingId : undefined,
       }),
       departRef.current(),
-    ]).then(([to]) => navigate(to));
+    ]).then(([to]) => navigate(to, { replace: true }));
   }, [navigate, conversationId, meeting?.meetingId, conn?.meetingId, isScheduled, readMeetingId]);
+  // The room was closed under both people (a block during the call, S5 fix round 2): straight back to the chat, with
+  // no "How did your meeting go?", which would ask each to rate the person just blocked (or the one who blocked them).
+  // It says "The call has ended." itself, once (S5 fix 6: three signals can lead here, see CallRoom).
+  const addToast = useToastStore((s) => s.addToast);
+  const leaveClosedRoom = useCallback(() => {
+    if (leftRoom.current) return;
+    leftRoom.current = true;
+    setLeaving(true);
+    addToast(CALL_ENDED, 'info');
+    navigate(`/messages/${conversationId}`, { replace: true });
+  }, [navigate, conversationId, addToast]);
   const live = conn && conn.room === roomKey ? conn : null;
 
   // A scheduled meeting opened early waits on a countdown; one long over says
@@ -392,7 +428,7 @@ export default function MeetPage() {
     return <div className="min-h-[100dvh] bg-[#0b0b12]"><PageLoader /></div>;
   }
 
-  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} leaving={leaving} onPartnerSeen={partnerSeen} partnerProbe={partnerProbe} departRef={departRef} />;
+  return <CallRoom conversationId={conversationId ?? ''} kind={kind} live={live} leaveRoom={leaveRoom} onRoomClosed={leaveClosedRoom} leaving={leaving} onPartnerSeen={partnerSeen} partnerProbe={partnerProbe} departRef={departRef} />;
 }
 
 /**
@@ -402,12 +438,14 @@ export default function MeetPage() {
  * phone, with the stage shrinking above it; it lives inside the LiveKit room, so the call runs on while they type.
  * The page is 100dvh and keeps the iPhone's home-indicator inset clear under whatever is lowest.
  */
-function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSeen, partnerProbe, departRef }: {
+function CallRoom({ conversationId, kind, live, leaveRoom, onRoomClosed, leaving, onPartnerSeen, partnerProbe, departRef }: {
   conversationId: string;
   kind: 'audio' | 'video';
   live: { token: string; url: string };
   /** Leaving the room: to the feedback question after a meeting the other person was in, else to the chat (T8). */
   leaveRoom: () => void;
+  /** The room was closed under both people: back to the chat, asking nothing. */
+  onRoomClosed: () => void;
   /** The person has pressed leave and is on their way out. */
   leaving: boolean;
   onPartnerSeen: () => void;
@@ -417,6 +455,24 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
   departRef: MutableRefObject<() => Promise<void>>;
 }) {
   const myUserId = useAuthStore((s) => s.user?.id);
+  // Whether this call may go on (S5 fix 6, call-permission.ts): read as the room opens, and again the moment a block
+  // changes (user:<me>:blocks reaches both people) or the room starts reconnecting. Refused, the call ends for this
+  // side exactly as a closed room does, whatever LiveKit has or has not said.
+  const permission = useQuery({
+    queryKey: ['call-permission', conversationId],
+    queryFn: () => readCallPermission(conversationId),
+    enabled: !!myUserId && !!conversationId,
+    retry: false,
+    // Never decided on an answer an earlier call left behind (a block since lifted): read afresh, kept for no one.
+    refetchOnMount: 'always',
+    gcTime: 0,
+    meta: { entities: myUserId ? [E.userBlocks(myUserId)] : [] },
+  });
+  const recheckPermission = permission.refetch;
+  const refusedNow = permission.isFetchedAfterMount && !permission.isFetching && permission.data === 'refused';
+  useEffect(() => {
+    if (refusedNow) onRoomClosed();
+  }, [refusedNow, onRoomClosed]);
   // Kept once known: a block made during the call takes the conversation off the inbox, and the panel must still
   // try the send, so the person reads the server's refusal instead of a Send that went dead.
   const found = useConversationPartner(conversationId);
@@ -482,7 +538,25 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
         connect
         video={kind === 'video'}
         audio
-        onDisconnected={leaveRoom}
+        onDisconnected={(reason) => {
+          // The room was closed under both people (a block during the call, 11 Nov 2026): said calmly on the thread,
+          // and no question about a meeting with someone just blocked.
+          if (reason === DisconnectReason.ROOM_DELETED) {
+            onRoomClosed();
+            return;
+          }
+          // This side's own leave (its button, or the page moving on): the leave already under way.
+          if (reason === DisconnectReason.CLIENT_INITIATED) {
+            leaveRoom();
+            return;
+          }
+          // Any other disconnect (S5 fix 6): a call no longer allowed ends as a closed room does, never as a meeting to
+          // rate; otherwise the ordinary leave. The read is bounded, so the page always moves on.
+          void readCallPermissionWithin(conversationId).then((now) => {
+            if (afterDisconnect(reason, now) === 'closed') onRoomClosed();
+            else leaveRoom();
+          });
+        }}
         style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: 'transparent' }}
       >
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
@@ -490,6 +564,7 @@ function CallRoom({ conversationId, kind, live, leaveRoom, leaving, onPartnerSee
             <CallStage />
             <CallEndWatcher conversationId={conversationId} onLeave={leaveRoom} leaving={leaving} depart={departRef} />
             <PartnerSeen onSeen={onPartnerSeen} probe={partnerProbe} />
+            <RecheckOnReconnect recheck={recheckPermission} />
             <div className={`shrink-0 pb-[env(safe-area-inset-bottom)] ${chatOpen ? 'max-sm:pb-0' : ''}`}>
               {/* LiveKit's own Leave disconnects the room itself, before any goodbye can be said (fix round 1), so the
                   bar's red hang-up is ours: the person leaving, like the top bar's button and the notice's Leave. */}

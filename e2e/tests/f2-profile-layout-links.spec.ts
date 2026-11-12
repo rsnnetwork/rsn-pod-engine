@@ -5,7 +5,7 @@
 // perhaps other social media too?"
 //
 //   No banner     another member's profile has no banner element at all when they have none, and the photo is the
-//                 first thing in the hero, centred. Your own profile shows a slim "Add a cover image" button instead.
+//                 first thing in the hero, centred. Your own profile shows a slim "Add banner" button instead.
 //   Links         the edit form saves Website, Instagram, X and Facebook (a wrong one is said under its own box, nothing
 //                 is saved), and another member's profile shows each as an icon + label button that opens the right address in a new tab.
 //   Every size    360, 768 and 1280: nothing scrolls sideways, the photo's centre is the card's centre, every link fits the window.
@@ -145,7 +145,7 @@ for (const size of SIZES) {
   });
 }
 
-test(`a member with no links sees no links row, and your own profile offers "Add a cover image" instead of an empty strip (${ENGINE})`, async () => {
+test(`a member with no links sees no links row, and your own profile offers "Add banner" instead of an empty strip (${ENGINE})`, async () => {
   test.setTimeout(180_000);
   await pool.query(`UPDATE users SET website_url = NULL, instagram_url = NULL, x_url = NULL, facebook_url = NULL, linkedin_url = NULL WHERE id = $1`, [owner.id]);
   const them = await signedIn(viewer, { width: 390, height: 844 });
@@ -158,8 +158,8 @@ test(`a member with no links sees no links row, and your own profile offers "Add
   await gotoRetry(me.page, `${APP}/profile`);
   await expect(me.page.getByRole('heading', { level: 1, name: OWNER_NAME })).toBeVisible({ timeout: SLOW });
   await expect(me.page.getByTestId('profile-banner')).toHaveCount(0);
-  const add = me.page.getByRole('button', { name: 'Add a cover image' });
-  await expectReachable(me.page, add, 'Add a cover image');
+  const add = me.page.getByRole('button', { name: 'Add banner' });
+  await expectReachable(me.page, add, 'Add banner');
   await add.click();
   await expect(me.page.getByRole('dialog', { name: 'Edit your banner' })).toBeVisible();
   await noSidewaysScroll(me.page, 'your profile, 390px');

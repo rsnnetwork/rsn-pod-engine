@@ -93,7 +93,7 @@ export default function AgentDetailPage() {
   if (!data) {
     return (
       <div className="mx-auto w-full max-w-6xl">
-        <Card className="!p-8 text-center text-sm text-gray-500">That agent no longer exists.</Card>
+        <Card className="!p-8 text-center text-sm text-gray-500">That search no longer exists.</Card>
       </div>
     );
   }
@@ -163,7 +163,7 @@ export default function AgentDetailPage() {
         onClick={() => navigate('/agents')}
         className="mb-3 flex min-h-[44px] items-center gap-1.5 text-sm text-gray-500 hover:text-[#1a1a2e]"
       >
-        <ArrowLeft className="h-4 w-4" /> All agents
+        <ArrowLeft className="h-4 w-4" /> All your searches
       </button>
 
       <Card className="!p-4">
@@ -198,7 +198,7 @@ export default function AgentDetailPage() {
           {!editing && (
             <button
               type="button"
-              aria-label="Edit what this agent looks for"
+              aria-label="Edit what this search looks for"
               onClick={() => { setWantText(agent.wantText); setEditing(true); }}
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-700"
             >
@@ -219,7 +219,7 @@ export default function AgentDetailPage() {
             {inProgress.length > 0 ? 'Nobody new right now' : 'Nobody fits this yet'}
           </p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-gray-500">
-            This agent keeps searching. You will be told the moment someone who fits joins.
+            This search keeps looking. You will be told the moment someone who fits joins.
           </p>
         </Card>
       ) : (

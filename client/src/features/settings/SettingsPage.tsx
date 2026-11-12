@@ -15,6 +15,7 @@ import { isEventGuest } from '@/features/call/guest-routes';
 import ChangeEmailDialog from './ChangeEmailDialog';
 import CloseAccountDialog from './CloseAccountDialog';
 import { REAUTH_WORDS } from './reauth';
+import CalendarsCard from '@/features/calendar/CalendarsCard';
 
 /**
  * Phase J (1 May 2026 spec) — per-channel toggles for chat notifications.
@@ -147,17 +148,19 @@ const plans = [
   },
 ];
 
-/** The five switches the Save button writes, in the order they are compared. */
-const PREF_KEYS = ['notifyEmail', 'notifyEventReminders', 'notifyMatches', 'profileVisible', 'inviteOptOutPublicEvents'] as const;
+/** The six switches the Save button writes, in the order they are compared. */
+const PREF_KEYS = ['notifyEmail', 'notifyEventReminders', 'notifyMatches', 'profileVisible', 'inviteOptOutPublicEvents', 'showCommunities'] as const;
 type PrefKey = (typeof PREF_KEYS)[number];
-type Prefs = Pick<User, PrefKey>;
+type Prefs = Record<PrefKey, boolean>;
 
-const pickPrefs = (u: Prefs): Prefs => ({
+// Shirley pilot S3: an older server sends no showCommunities; it is on by default, so a missing one reads as on.
+const pickPrefs = (u: Pick<User, PrefKey>): Prefs => ({
   notifyEmail: u.notifyEmail,
   notifyEventReminders: u.notifyEventReminders,
   notifyMatches: u.notifyMatches,
   profileVisible: u.profileVisible,
   inviteOptOutPublicEvents: u.inviteOptOutPublicEvents,
+  showCommunities: u.showCommunities !== false,
 });
 
 /** What the switches show, and the server values they were last brought up to date with. */
@@ -175,7 +178,7 @@ const followServer = (mine: Prefs, from: Prefs, to: Prefs): Prefs => {
 };
 
 /**
- * The member's five saved switches.
+ * The member's six saved switches.
  *
  * They are read from the server (GET /users/me), not from the login session, and the
  * query is tagged user:<id>, so a change made on another screen reaches this page
@@ -417,7 +420,14 @@ export default function SettingsPage() {
                 enabled={prefs.profileVisible}
                 onToggle={() => toggle('profileVisible')}
                 label="Show me in search and suggestions"
-                description="When off, you won't appear in Find people or suggestions. Members with a link can still open your profile."
+                description="When off, you won't appear in Find people or suggestions. Members with a link can still open your profile, and your public profile link (if you made one) is paused until you turn this back on."
+              />
+              {/* Shirley pilot S3 (RSN 14). */}
+              <Toggle
+                enabled={prefs.showCommunities}
+                onToggle={() => toggle('showCommunities')}
+                label="Show my communities on my profile"
+                description="Members who open your profile see the open circles and public pods you are in, and can ask to join them. Private pods and closed circles are only shown to people in them with you. Nothing is shown while you are hidden from search."
               />
               <Toggle
                 enabled={prefs.inviteOptOutPublicEvents}
@@ -427,10 +437,13 @@ export default function SettingsPage() {
               />
             </>
           ) : (
-            <PrefsPlaceholder rows={2} failed={failed} announce={false} onRetry={retry} />
+            <PrefsPlaceholder rows={3} failed={failed} announce={false} onRetry={retry} />
           )}
         </div>
       </Card>
+
+      {/* Shirley pilot S8: optional calendar free/busy. Shows nothing while the server has it switched off. */}
+      <CalendarsCard />
 
       <AccountCard />
 

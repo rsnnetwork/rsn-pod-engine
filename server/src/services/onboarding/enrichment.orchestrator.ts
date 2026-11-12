@@ -10,7 +10,7 @@
 // Steps (task A5 spec, revised in fix round 1 — see the review findings this
 // file's tests are organized around):
 //   0. concurrency guards — an in-flight Map (same process) and a persisted
-//      'searching' state fresher than 5 minutes (crash-tolerant, cross-process)
+//      'searching' state fresher than SEARCHING_LOCK_MS, 3 minutes (crash-tolerant)
 //      both short-circuit a duplicate attempt before it can double-spend a
 //      provider call.
 //   1. fresh 90-day cache — evaluated BEFORE the no-URL branch below, using
@@ -43,43 +43,68 @@ import {
   type EnrichResult,
 } from './enrichment.service';
 
-import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
+import { getCachedEnrichment, getEnrichmentState, getLastLookupUrl, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
 import { resolveEnrichProvider, runProvider, statusFromResult, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
 import { tryGravatar } from './avatar.service';
+import { nextRetryAttempt, scheduleEnrichmentRetry } from './enrichment-retry.repo';
+import { DEADLINE_REASON, raceProviderDeadline } from './providers/deadline';
+import { fanoutUserEntity } from '../../realtime/fanout';
 import { record as recordStageEvent, type StageEventStage, sanitizeErrorMessage } from './stage-events.repo';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
-/** 18 Sep 2026 (Shradha): a member sat on the wait page for six minutes
- *  because nothing above the provider bounded the wait. The whole provider
- *  call (live page, cached copy, gap fill) is bounded here: past this the
- *  attempt is marked failed and the member's poll resolves. The provider's own
- *  budgets (scrapingdog.provider.ts) finish well inside it in practice. */
-const PROVIDER_DEADLINE_MS = 150 * 1000;
 /** How fresh a persisted 'searching' state has to be to be trusted as "still
  *  actually running" rather than a crashed attempt that never reached a
  *  terminal state. See the module-level in-flight guard below for layer (i).
- *  Longer than the provider deadline: a live attempt always terminal-s first. */
+ *  Longer than the provider deadline (providers/deadline.ts, 150 s): a live
+ *  attempt always terminal-s first. */
 export const SEARCHING_LOCK_MS = 3 * 60 * 1000;
 
-/** Race the provider against the job deadline. A late answer is logged and dropped. */
-function withDeadline(run: Promise<ProviderOutcome>, userId: string): Promise<ProviderOutcome> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<ProviderOutcome>((resolve) => {
-    timer = setTimeout(() => {
-      logger.warn({ userId, deadlineMs: PROVIDER_DEADLINE_MS }, 'enrichment: provider deadline reached');
-      run
-        .then((late) => logger.info({ userId, kind: late.kind }, 'enrichment: provider answered after the deadline (ignored)'))
-        .catch(() => {});
-      resolve({ kind: 'provider_error', reason: `provider deadline of ${Math.round(PROVIDER_DEADLINE_MS / 1000)}s reached` });
-    }, PROVIDER_DEADLINE_MS);
-  });
-  return Promise.race([run, deadline]).finally(() => clearTimeout(timer));
+/**
+ * The lookup answered after its deadline (12 Nov 2026): the member was already
+ * marked failed, but a profile ScrapingDog billed is kept rather than thrown
+ * away, and a "try again later" still gets its next later attempt. Only over
+ * this attempt's own deadline failure, for the address it looked up: if a
+ * newer lookup has started or finished since, or looked up another address,
+ * its state stands. No extras pass here (one more paid call).
+ */
+async function keepLateAnswer(
+  userId: string,
+  provider: EnrichProviderName,
+  late: ProviderOutcome,
+  linkedinUrl: string,
+  startedAtMs: number,
+  nextAttempt: number | null,
+): Promise<void> {
+  logger.info({ userId, kind: late.kind }, 'enrichment: provider answered after the deadline');
+  if (late.kind === 'retry_exhausted') {
+    if (nextAttempt !== null) await scheduleEnrichmentRetry({ userId }, { linkedinUrl }, nextAttempt);
+    return;
+  }
+  if (late.kind !== 'found' && late.kind !== 'partial') return;
+  const now = await getEnrichmentState(userId).catch(() => null);
+  if (now?.status !== 'failed' || now.error !== DEADLINE_REASON) return;
+  // Re-review N1: and for this address. Another attempt, on another address, may have been cut at its deadline too.
+  const lastLookedUp = await getLastLookupUrl(userId).catch(() => null);
+  if (!lastLookedUp || linkedinSlug(lastLookedUp) !== linkedinSlug(linkedinUrl)) return;
+  const result = applyMatchVerification(late.result, linkedinUrl);
+  await saveEnrichedCandidate(userId, result).catch((err) =>
+    logger.warn({ err, userId }, 'enrichment: saveEnrichedCandidate failed (non-fatal)'),
+  );
+  await writeState(userId, { status: late.kind, source: provider, linkedinUrl });
+  logTerminal(userId, provider, late.kind, startedAtMs, { late: true });
+  await fanoutUserEntity(userId);
 }
 
 export interface RunEnrichmentInput {
   linkedinUrl: string | null;
   fullName?: string;
+  /** False when no later attempt may be asked for at all (the older /onboarding/enrich route, for an address it does
+   *  not save). */
+  scheduleRetry?: boolean;
+  /** Which later attempt this run is (enrichment-retry.worker.ts): 1 or 2; absent for a member's own lookup. A run
+   *  asks for the next attempt only while it is allowed (enrichment-retry.repo: at most 2), so attempt 2 asks for none. */
+  retryAttempt?: number;
 }
 
 /** True when `cached` is usable as-is for `requestedLinkedinUrl` — no genuinely
@@ -139,7 +164,7 @@ async function writeState(userId: string, state: Parameters<typeof setEnrichment
   try {
     await setEnrichmentState(userId, state);
   } catch (err) {
-    logger.warn({ err, userId, state }, 'enrichment: failed to persist state transition (non-fatal)');
+    logger.warn({ err, userId, status: state.status }, 'enrichment: failed to persist state transition (non-fatal)');
   }
 }
 
@@ -178,6 +203,9 @@ function parseExtras(text: string): ExtrasFields | null {
  * Never throws into the orchestrator: any failure here is logged and the
  * enrichment proceeds to its success state without the extras.
  */
+/** The extras call's own bound: 30 s a try, one retry at most. */
+export const EXTRAS_REQUEST_OPTIONS = { timeout: 30_000, maxRetries: 1 } as const;
+
 async function runExtrasPass(profile: EnrichedProfile, userId: string): Promise<ExtrasFields | null> {
   try {
     const resp = await getClient().messages.create({
@@ -192,7 +220,9 @@ async function runExtrasPass(profile: EnrichedProfile, userId: string): Promise<
             JSON.stringify(profile),
         },
       ],
-    });
+    // 12 Nov 2026: bounded (the SDK's default is 10 minutes and 2 retries), so a slow pass can neither keep the row
+    // 'searching' until the interrupted-lookup sweep (enrichment.repo) nor be paid for three times.
+    }, EXTRAS_REQUEST_OPTIONS);
     const text = resp.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('\n');
     return parseExtras(text);
   } catch (err) {
@@ -208,16 +238,20 @@ async function withExtras(result: EnrichResult, userId: string): Promise<EnrichR
   return { ...result, profile: { ...result.profile, ...extras } };
 }
 
+/** The terminal state of a lookup that found no profile. The text says "retrying later" only when a retry is waiting. */
 function mapFailureOutcome(
   outcome: Extract<ProviderOutcome, { kind: 'not_found' | 'retry_exhausted' | 'provider_error' }>,
+  retryScheduled: boolean,
 ): { status: 'not_found' | 'failed'; error: string } {
   switch (outcome.kind) {
     case 'not_found':
       return { status: 'not_found', error: outcome.reason };
     case 'provider_error':
       return { status: 'failed', error: outcome.reason };
-    case 'retry_exhausted':
-      return { status: 'failed', error: 'retry exhausted' };
+    case 'retry_exhausted': {
+      const what = outcome.notReady ? 'not stored yet' : outcome.timedOut ? 'timed out' : 'retry exhausted';
+      return { status: 'failed', error: retryScheduled ? `${what}, retrying later` : what };
+    }
   }
 }
 
@@ -259,8 +293,8 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // Crash-tolerant backstop for layer (i) above (which only protects a
     // single process/instance, and only for the lifetime of the in-memory
     // Map): if the DB already says 'searching' and that attempt started under
-    // 5 minutes ago, assume it's still genuinely running and skip rather than
-    // double-spend. Older than 5 minutes means that attempt crashed before
+    // SEARCHING_LOCK_MS (3 minutes) ago, assume it is still running and skip rather than
+    // double-spend. Older than that means that attempt crashed before
     // reaching a terminal state — safe (and necessary) to re-run.
     const existingState = await getEnrichmentState(userId).catch(() => null);
     if (existingState?.status === 'searching' && existingState.startedAt) {
@@ -319,16 +353,16 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
 
     // Step 3: searching.
     await writeState(userId, { status: 'searching', source: provider, linkedinUrl: resolvedLinkedinUrl });
-    logger.info({ userId, slug: linkedinSlug(resolvedLinkedinUrl), provider }, 'enrichment searching');
+    logger.info({ userId, provider }, 'enrichment searching');
     recordStageEvent(userId, 'enrich_started', { provider }).catch(() => {});
 
-    // Step 4: call the provider, bounded by the job deadline.
-    const outcome = await withDeadline(
+    // Step 4: call the provider, bounded by the job deadline (providers/deadline.ts).
+    const { outcome, late } = await raceProviderDeadline(
       runProvider(provider as Exclude<EnrichProviderName, 'none'>, {
         linkedinUrl: resolvedLinkedinUrl,
         fullName: input.fullName,
       }),
-      userId,
+      { userId },
     );
 
     // Steps 5-6: found/partial.
@@ -359,9 +393,26 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
 
     // Step 7: not_found / retry_exhausted / provider_error.
     tryGravatar(userId).catch(() => {});
-    const { status, error } = mapFailureOutcome(outcome);
+    // 12 Nov 2026: ScrapingDog said "not stored yet, try again after 2-3 minutes" (or kept answering 202, or
+    // rate-limited past the budget, or the call was cut): the next later attempt, while one is allowed, for this
+    // address (the latest address wins).
+    const nextAttempt = input.scheduleRetry === false ? null : nextRetryAttempt(input.retryAttempt ?? 0);
+    const retryScheduled = outcome.kind === 'retry_exhausted' && nextAttempt !== null
+      ? await scheduleEnrichmentRetry({ userId }, { linkedinUrl: resolvedLinkedinUrl, fullName: input.fullName }, nextAttempt)
+      : false;
+    const { status, error } = mapFailureOutcome(outcome, retryScheduled);
     await writeState(userId, { status, error, source: provider, linkedinUrl: resolvedLinkedinUrl });
-    logTerminal(userId, provider, status, startedAtMs, error ? { reason: sanitizeErrorMessage(error) } : undefined);
+    logTerminal(userId, provider, status, startedAtMs, {
+      ...(error ? { reason: sanitizeErrorMessage(error) } : {}),
+      ...(outcome.kind === 'retry_exhausted' ? { retryScheduled } : {}),
+    });
+    // Cut at the deadline: whatever the lookup still brings is kept (after the failed state above is written).
+    if (late) {
+      const url = resolvedLinkedinUrl;
+      late
+        .then((answer) => keepLateAnswer(userId, provider, answer, url, startedAtMs, nextAttempt))
+        .catch((err) => logger.warn({ err, userId }, 'enrichment: keeping the late answer failed (non-fatal)'));
+    }
   } catch (err) {
     // Never throws: any unexpected failure still lands in a terminal, visible
     // state rather than disappearing into an unhandled rejection.

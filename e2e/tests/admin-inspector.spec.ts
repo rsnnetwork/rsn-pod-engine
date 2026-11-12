@@ -1,7 +1,7 @@
 import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
-import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
+import { confirmInPage } from '../helpers/confirm-dialog';
 
 // Task E3 — admin per-user inspector UI, driven through the REAL client:
 //   1. An admin opens /admin/users/:id for a seeded member and sees the
@@ -176,27 +176,34 @@ test('Refresh enrichment fires the admin endpoint with the target user id (via r
 
   // Intercept + fulfill locally — never let this reach the real backend, which
   // would fire a genuine (billable) LinkedIn lookup against prod.
+  // The route is in place (awaited) before anything is pressed, so the POST can never slip through to the backend.
   let capturedBody: unknown = null;
-  const requestSeen = new Promise<void>((resolve) => {
-    page.route(`${SERVER}/api/onboarding/admin/refresh-enrichment`, async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.continue();
-        return;
-      }
-      capturedBody = route.request().postDataJSON();
-      await route.fulfill({
-        status: 202,
-        contentType: 'application/json',
-        body: JSON.stringify({ success: true, data: { cleared: true, status: 'searching' } }),
-      });
-      resolve();
+  let seen: () => void = () => undefined;
+  const requestSeen = new Promise<void>((resolve) => { seen = resolve; });
+  await page.route(`${SERVER}/api/onboarding/admin/refresh-enrichment`, async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    capturedBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { cleared: true, status: 'searching' } }),
     });
+    seen();
   });
 
-  page.once('dialog', (dialog) => dialog.accept());
-  await acceptConfirmDialogs(page);
+  // The question is answered here, step by step (prod smoke 12 Nov: the run hung to the test's timeout with no step
+  // named). A locator handler only answers it before a later Playwright action, and after the click this test only
+  // waited for the request, so nothing was ever there to press it. Each step now has its own bound.
   await page.getByRole('button', { name: /Refresh enrichment/i }).click();
-  await requestSeen;
+  await expect(page.getByRole('dialog', { name: "Refresh this member's enrichment?" })).toBeVisible({ timeout: 15_000 });
+  await confirmInPage(page);
+  await Promise.race([
+    requestSeen,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the refresh request was not sent within 20s of confirming')), 20_000)),
+  ]);
 
   expect(capturedBody).toEqual({ userId: target.id });
 
@@ -218,14 +225,15 @@ test('a member reports another member from the profile page, and it appears in t
   const reporterPage = await openPage(reporter);
   await gotoRetry(reporterPage, `${APP}/profile/${reported.id}`);
 
-  const reportEntry = reporterPage.getByRole('button', { name: /Report this member/i });
+  const reportEntry = reporterPage.getByRole('button', { name: /Report member/i });
   await expect(reportEntry).toBeVisible({ timeout: 20_000 });
   await reportEntry.click();
 
-  await reporterPage.getByLabel('Reason').selectOption('inappropriate_content');
+  // Scoped and exact: a bare getByLabel('Reason') also matches the shell's "REASON home" links and marks.
+  await reporterPage.getByTestId('report-form').getByLabel('Reason', { exact: true }).selectOption('inappropriate_content');
   await reporterPage.getByPlaceholder(/helps our team understand/i).fill('Kept sending unsolicited spammy links.');
-  await reporterPage.getByRole('button', { name: 'Submit report' }).click();
-  await expect(reporterPage.getByText('Thanks. Our team will review this.')).toBeVisible({ timeout: 15_000 });
+  await reporterPage.getByRole('button', { name: 'Send report' }).click();
+  await expect(reporterPage.getByText('Thanks. The REASON team will review it.')).toBeVisible({ timeout: 15_000 });
 
   const adminPage = await openPage(admin);
   await gotoRetry(adminPage, `${APP}/admin/users/${reported.id}`);

@@ -75,6 +75,9 @@ export const ErrorCodes = {
   POD_MEMBER_EXISTS: 'POD_MEMBER_EXISTS',
   CIRCLE_MEMBER_EXISTS: 'CIRCLE_MEMBER_EXISTS',
   CIRCLE_CLOSED: 'CIRCLE_CLOSED',  // 403; a closed circle: joining needs an ask its managers approve, and its wall, members and events are for members
+  CIRCLE_ARCHIVED: 'CIRCLE_ARCHIVED',  // 409; an archived circle's wall is read-only (S4, 11 Nov 2026)
+  WALL_PINS_FULL: 'WALL_PINS_FULL',    // 409; a wall already has its most pinned posts (WALL_PINNED_MAX): unpin one first
+  WALL_EDIT_CONFLICT: 'WALL_EDIT_CONFLICT',  // 409; the post or comment was edited elsewhere since the editor opened it
   POD_MEMBER_NOT_FOUND: 'POD_MEMBER_NOT_FOUND',
   POD_UNAUTHORIZED: 'POD_UNAUTHORIZED',
 
@@ -172,6 +175,19 @@ export const ErrorCodes = {
   // Call errors (1 Nov 2026)
   CALL_PARTNER_OFFLINE: 'CALL_PARTNER_OFFLINE',  // 409; the person rung is not on REASON right now (no ring, no bell)
   CALL_ALREADY_WAITING: 'CALL_ALREADY_WAITING',  // 409; this pair already has a call ringing, from either side
+
+  // A member's public profile link (Shirley pilot S6)
+  PUBLIC_LINK_NONE: 'PUBLIC_LINK_NONE',  // 409; making a new link needs a link to replace (turned off in another tab)
+
+  // Calendar free/busy (Shirley pilot S8)
+  CALENDAR_LINK_EXPIRED: 'CALENDAR_LINK_EXPIRED',    // 400; the connect step was too slow, already used, or not ours
+  CALENDAR_WRONG_ACCOUNT: 'CALENDAR_WRONG_ACCOUNT',  // 403; the connect was started while signed in as another member
+  CALENDAR_SCOPE_MISSING: 'CALENDAR_SCOPE_MISSING',  // 400; the calendar permission was unticked on the provider's screen
+  CALENDAR_PROVIDER_FAILED: 'CALENDAR_PROVIDER_FAILED',  // 502; the provider did not finish the connection
+  CALENDAR_PROVIDER_NOT_OFFERED: 'CALENDAR_PROVIDER_NOT_OFFERED',  // 404; that provider is not configured on this server
+
+  // Reports (11 Nov 2026)
+  REPORT_ALREADY_SENT: 'REPORT_ALREADY_SENT',  // 409; the same reporter reported the same member, message or post in the last 24 hours
 
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',

@@ -49,7 +49,7 @@ describe('NotFoundError', () => {
     ['Session', 'event', 'SESSION_NOT_FOUND'],
     ['PodMember', 'member', 'PODMEMBER_NOT_FOUND'],
     ['Circle', 'circle', 'CIRCLE_NOT_FOUND'],
-    ['Agent', 'agent', 'AGENT_NOT_FOUND'],
+    ['Agent', 'search', 'AGENT_NOT_FOUND'],
     ['Entity', 'entity', 'ENTITY_NOT_FOUND'],
     ['Conversation', 'conversation', 'CONVERSATION_NOT_FOUND'],
     ['Invite', 'invite', 'INVITE_NOT_FOUND'],

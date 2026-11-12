@@ -29,6 +29,8 @@ export interface WallPost extends WallPostBase {
   circleId?: string;
   authorClosed?: boolean;
   sharedFrom?: SharedFrom | null;
+  /** S4 fix round 1: a share whose original this viewer may not see (removed, closed to them, or blocked either way). */
+  sharedUnavailable?: boolean;
 }
 
 export interface WallComment extends SharedWallComment {
@@ -42,8 +44,10 @@ export interface WallFeedPage {
   pinned: WallPost[];
   posts: WallPost[];
   nextCursor: string | null;
-  /** Only the pod wall's feed names it; the circle wall's page decides from the member's place in the circle. */
+  /** What the viewer may do. Both walls' feeds name it (the circle wall's since S4); the page's fallback covers an old answer. */
   viewer?: WallViewer;
+  /** The pod's status as the read found it (the pod wall's feed only): the pod page compares it with its own read. */
+  podStatus?: string;
 }
 
 export interface WallCommentList {
@@ -92,22 +96,28 @@ export interface WallConfig {
     post: (postId: string) => QueryKey;
     comments: (postId: string) => QueryKey;
   };
-  /** The entity tags each query declares in meta.entities. Empty: the wall's routes tell no one, so it is not live. */
+  /** The entity tags each query declares in meta.entities. Both walls' routes send them (S4), so no wall polls. */
   entities: {
     feed: string[];
     post: (postId: string) => string[];
     comments: (postId: string) => string[];
   };
-  /** Refetch the feed this often (ms). Only a wall whose routes send no entity tags needs it. */
-  pollMs?: number;
   /** open: the composer is always a box. collapsible: one line until it is tapped. */
   composer: 'open' | 'collapsible';
   /** Show this many posts at first, then this many more at a time. Unset: everything that is loaded. */
   visibleAtFirst?: number;
-  /** A link that names a post opens its comments, when it has any (the bell says someone commented). */
+  /** A link that names a post (a bell, a shared address) opens its comments, and the box to write one (S4). */
   openCommentsOnLink: boolean;
   copy: WallCopy;
   /** Where an author's name and picture lead. Unset: they lead nowhere. */
   authorHref?: (authorId: string) => string;
   share?: WallShare;
+  /**
+   * The tags of the space's own reads (its page: its status, the viewer's place in it). Read again when a write is
+   * refused because the space itself changed (archived, suspended, a draft), so its note and controls correct themselves
+   * even when the change was never heard over the socket (12 Nov 2026).
+   */
+  spaceEntities: string[];
+  /** What a "Report post" on someone else's post reports (11 Nov 2026). Unset: no Report post. */
+  reportKind?: 'pod_post' | 'circle_post';
 }
