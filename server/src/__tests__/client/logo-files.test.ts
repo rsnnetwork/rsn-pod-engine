@@ -17,7 +17,24 @@ interface Png { width: number; height: number; rgba: Buffer }
 
 /** Decode an 8-bit RGBA or RGB, non-interlaced PNG (what the logo files are) into RGBA bytes. */
 function readPng(name: string): Png {
+  return decodePng(fs.readFileSync(path.join(PUBLIC, name)));
+}
+
+/** The frames of an .ico whose images are stored as PNG (how favicon.ico is written). */
+function readIcoFrames(name: string): Png[] {
   const file = fs.readFileSync(path.join(PUBLIC, name));
+  expect(file.readUInt16LE(2)).toBe(1); // an icon, not a cursor
+  const frames: Png[] = [];
+  for (let i = 0; i < file.readUInt16LE(4); i++) {
+    const entry = 6 + i * 16;
+    const size = file.readUInt32LE(entry + 8);
+    const offset = file.readUInt32LE(entry + 12);
+    frames.push(decodePng(file.subarray(offset, offset + size)));
+  }
+  return frames;
+}
+
+function decodePng(file: Buffer): Png {
   expect(file.subarray(1, 4).toString('ascii')).toBe('PNG');
   let offset = 8;
   let width = 0; let height = 0; let colorType = 0;
@@ -132,9 +149,42 @@ describe('the lockup on the sign-in page and in every email (reason-logo.png)', 
   });
 });
 
+// 14 Nov 2026 (Stefan): the browser-tab icon has no white square behind the sheep. Only the ground outside the sheep is
+// transparent; the face inside the outline stays white. The home-screen icons keep their white ground: iOS fills a
+// transparent apple-touch-icon with black (a black sheep would vanish) and a maskable icon must fill its square.
+const FACE = { x: 0.115, y: 0.47 }; // a point inside the sheep's white face, as a fraction of the square
+const TRANSPARENT = { r: 0, g: 0, b: 0, a: 0 };
+
+describe('the browser-tab favicons', () => {
+  it.each([['favicon.png', 32], ['favicon-64.png', 64], ['favicon-192.png', 192]])(
+    '%s is a %ipx square with a transparent ground, a white face, and the sheep clear of every edge',
+    (name, size) => {
+      const png = readPng(name);
+      expect({ width: png.width, height: png.height }).toEqual({ width: size, height: size });
+      for (const [x, y] of [[0, 0], [size - 1, 0], [0, size - 1], [size - 1, size - 1]]) expect(pixel(png, x, y)).toEqual(TRANSPARENT);
+      expect(edgeArt(png)).toEqual(NONE);
+      if (size >= 64) {
+        const face = pixel(png, Math.round(FACE.x * size), Math.round(FACE.y * size));
+        expect(face.a).toBe(255);
+        expect(Math.min(face.r, face.g, face.b)).toBeGreaterThanOrEqual(245);
+      }
+    },
+  );
+
+  it('favicon.ico holds 16, 32 and 48px frames, each with a transparent ground', () => {
+    const frames = readIcoFrames('favicon.ico');
+    expect(frames.map((f) => f.width).sort((a, b) => a - b)).toEqual([16, 32, 48]);
+    for (const frame of frames) {
+      expect(frame.height).toBe(frame.width);
+      expect(pixel(frame, 0, 0)).toEqual(TRANSPARENT);
+      expect(pixel(frame, frame.width - 1, frame.height - 1)).toEqual(TRANSPARENT);
+    }
+  });
+});
+
 describe('the app icons', () => {
   it.each([
-    ['favicon.png', 32], ['favicon-64.png', 64], ['favicon-192.png', 192], ['apple-touch-icon.png', 180],
+    ['apple-touch-icon.png', 180],
     ['icon-192.png', 192], ['icon-512.png', 512], ['icon-maskable-192.png', 192], ['icon-maskable-512.png', 512],
   ])('%s is a %ipx square with a white ground, the sheep clear of every edge', (name, size) => {
     const png = readPng(name);
