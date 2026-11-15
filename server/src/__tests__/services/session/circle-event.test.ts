@@ -71,8 +71,14 @@ const base = {
 };
 
 /** The circle row, whether this person runs it, and every other statement echoes a session row. */
-function arm(world: { circle?: typeof CIRCLE | null; manager?: boolean; session?: Record<string, unknown> } = {}) {
+function arm(world: { circle?: typeof CIRCLE | null; manager?: boolean; podInCircle?: boolean; session?: Record<string, unknown> } = {}) {
   mockQuery.mockImplementation(async (sql: string) => {
+    // Ben field test (13 Nov 2026): the schedule gate reads the circle with whether the event's pod is one of its pods.
+    if (/AS pod_in_circle\s+FROM circles c WHERE c\.id = \$1 AND c\.archived_at IS NULL/.test(sql)) {
+      return world.circle
+        ? { rows: [{ ...world.circle, pod_in_circle: world.podInCircle ?? true }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
     if (/SELECT id, name FROM circles WHERE id = \$1 AND archived_at IS NULL/.test(sql)) {
       return { rows: world.circle ? [world.circle] : [], rowCount: world.circle ? 1 : 0 };
     }
@@ -130,6 +136,14 @@ describe('a circle event on create', () => {
     arm({ circle: CIRCLE, manager: false });
     await expect(createSession(DIRECTOR, { ...base, circleId: CIRCLE_ID }, UserRole.MEMBER)).rejects.toMatchObject({
       statusCode: 403, code: 'AUTH_FORBIDDEN', message: 'Only the people who run Founding Circle can schedule an event for it.',
+    });
+    expect(call(/INSERT INTO sessions/)).toBeUndefined();
+  });
+
+  it('a pod that is not one of the circle\'s is refused in words, and nothing is written (Ben field test)', async () => {
+    arm({ circle: CIRCLE, manager: true, podInCircle: false });
+    await expect(createSession(DIRECTOR, { ...base, circleId: CIRCLE_ID }, UserRole.MEMBER)).rejects.toMatchObject({
+      statusCode: 400, message: "Choose one of Founding Circle's pods for this event. To use another pod, add it to Founding Circle first.",
     });
     expect(call(/INSERT INTO sessions/)).toBeUndefined();
   });

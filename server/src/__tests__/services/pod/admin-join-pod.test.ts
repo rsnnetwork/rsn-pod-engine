@@ -19,6 +19,8 @@ function answer(sql: string) {
   if (s.startsWith('INSERT INTO pod_members') || s.startsWith('UPDATE pod_members')) {
     return { rows: [{ podId: 'p1', userId: 'u1', role: 'member', status: 'active' }] };
   }
+  // Ben field test (13 Nov 2026): the pod is in no closed or invite-only circle (pod-circle-gate.ts).
+  if (s.includes('FROM circle_pods cp JOIN circles c')) return { rows: [] };
   if (s.includes('FROM pods')) return { rows: [podRow] };
   throw new Error(`unexpected SQL: ${s.slice(0, 80)}`);
 }

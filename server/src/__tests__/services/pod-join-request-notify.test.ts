@@ -4,6 +4,12 @@
 // bell notification for every active director/host and push it live via
 // notification:new + the userNotifications entity tag.
 
+// Ben field test (13 Nov 2026): these pods are in no closed or invite-only circle; the gate has its own tests
+// (ben-field-circle-access.sql.test.ts), so this file's queued answers stay the notification path's.
+jest.mock('../../services/pods/pod-circle-gate', () => ({
+  __esModule: true,
+  assertInPodsRestrictedCircles: jest.fn().mockResolvedValue(undefined),
+}));
 const mockQuery = jest.fn();
 const mockTransaction = jest.fn();
 

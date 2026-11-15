@@ -30,6 +30,7 @@ const EMAIL_TYPE_LABELS: Record<string, { label: string; description: string }> 
   event_entry_code:       { label: 'Event Entry Code', description: 'Sent when someone asks for a code to join an event from its link' },
   // Seeded by migration 145 (Part 3 Task 3): the first person on a full event's waiting list is given a place that opened.
   event_waitlist_promoted: { label: 'Waiting List Place', description: 'Sent when a place opens in a full event and goes to the next person on its waiting list' },
+  circle_request_answered: { label: 'Circle Request Answer', description: 'Sent to a member when an admin approves or declines the circle they asked for' },
 };
 
 export default function AdminEmailPage() {

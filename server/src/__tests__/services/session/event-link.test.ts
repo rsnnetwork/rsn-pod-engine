@@ -524,7 +524,8 @@ describe('the SQL the rules are written in', () => {
     expect(sql).toContain("(s.visibility IS NOT NULL AND s.visibility IN ('public', 'public_with_approval'))");
     expect(sql).toContain("s.visibility IS NULL AND EXISTS (SELECT 1 FROM pods el_p WHERE el_p.id = s.pod_id AND el_p.visibility = 'public')");
     expect(sql).toContain("s.admission_mode IS DISTINCT FROM 'restricted'");
-    expect(sql).toContain("el_c.join_policy = 'closed'");
+    // Ben field test (13 Nov 2026): a closed or an invite-only circle's events both carry a tail.
+    expect(sql).toContain("el_c.join_policy <> 'open'");
     expect(() => eventLinkNeedsTailSql('s; DROP')).toThrow();
     expect(() => eventLinkNeedsTailSql('s', "'public'")).toThrow();
     expect(eventLinkNeedsTailSql('s', '$2')).toContain('COALESCE($2::text, s.visibility)');

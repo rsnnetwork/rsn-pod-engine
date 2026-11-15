@@ -50,12 +50,13 @@ describe('migration 118 (circle invites ring the bell; a creator owns the circle
   });
 
   // 135 (Part 2 Task 2) restates it next, as 118's list plus the four event bells (migration-135.test.ts), then 145
-  // (Part 3 Task 3) as 135's list plus the waiting-list bell (migration-145.test.ts).
-  it('was the latest definition until 135: no other later migration but 145 restates the allowlist', () => {
+  // (Part 3 Task 3) as 135's list plus the waiting-list bell (migration-145.test.ts), then 157 (Ben field test, 13 Nov
+  // 2026) as 145's list plus the two circle request bells.
+  it('was the latest definition until 135: no other later migration but 145 and 157 restates the allowlist', () => {
     const restating = fs.readdirSync(MIGRATIONS)
       .filter((file) => /^\d{3}_.+\.sql$/.test(file) && Number(file.slice(0, 3)) > 108)
       .filter((file) => /notifications_type_check/.test(code(fs.readFileSync(path.join(MIGRATIONS, file), 'utf8'))));
-    expect(restating).toEqual([FILE, '135_event_lifecycle.sql', '145_event_waitlist.sql']);
+    expect(restating).toEqual([FILE, '135_event_lifecycle.sql', '145_event_waitlist.sql', '157_circle_requests_and_invite_only.sql']);
   });
 
   it('lets circle_members.role be owner, keeping member and moderator', () => {

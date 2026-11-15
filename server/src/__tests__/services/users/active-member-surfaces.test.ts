@@ -80,8 +80,10 @@ describe('pods', () => {
 });
 
 describe('circles', () => {
+  // The circle row carries its policy (NOT NULL in the table): since the Ben field test a row the code cannot read a
+  // policy from is read as closed, and a closed circle's page sends nothing to someone outside it.
   it('the members, the member counts and the events on a circle page', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: POD, name: 'C' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: POD, name: 'C', join_policy: 'open' }] });
     await circles.getCircleDetail(POD, ME, 'member');
     const [detail, members, , events, children] = sent();
     expect(detail).toContain(activeMemberSql('cm_u'));
@@ -92,7 +94,7 @@ describe('circles', () => {
   });
 
   it('an admin is named every attached pod\'s event', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: POD, name: 'C' }] });
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: POD, name: 'C', join_policy: 'open' }] });
     await circles.getCircleDetail(POD, ME, 'admin');
     expect(mockQuery.mock.calls[3][1]).toEqual([POD, ME, true]);
   });

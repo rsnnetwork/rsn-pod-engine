@@ -91,6 +91,7 @@ import meetingRoutes from '../../routes/meeting';
 import meetingsRoutes from '../../routes/meetings';
 import callsRoutes from '../../routes/calls';
 import circleRoutes from '../../routes/circles';
+import circleRequestRoutes from '../../routes/circle-requests';
 import { circleExportRoutes, podExportRoutes } from '../../routes/space-export';
 import entityRoutes from '../../routes/entities';
 import reportRoutes from '../../routes/reports';
@@ -159,6 +160,8 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/agents', agentRoutes],
   ['/api/circles', circleRoutes],
   ['/api/circles', circleExportRoutes],
+  // Ben field test (13 Nov 2026): asking for a new circle, and the admins' queue.
+  ['/api/circle-requests', circleRequestRoutes],
   ['/api/entities', entityRoutes],
   ['/api/reports', reportRoutes],
   ['/api/groups', groupRoutes],
@@ -196,6 +199,9 @@ const MEMBER_ONLY: Array<[Verb, string]> = [
   ['get', `/api/circles/${OTHER}/export?section=members`],
   ['get', `/api/pods/${OTHER}/export?section=members`],
   ['get', '/api/circles/archived/mine'],
+  // Ben field test: a guest from an event link has no circles to ask for.
+  ['post', '/api/circle-requests'],
+  ['get', '/api/circle-requests/mine'],
   ['get', '/api/matches/platform'],
   ['get', '/api/agents'],
   ['get', '/api/pokes/received'],

@@ -206,12 +206,12 @@ describe('an event of a closed circle', () => {
     const list = visibleEventsSql('s', '$2').replace(/\s+/g, ' ');
     expect(list).toContain(`AND NOT ${closedCircleOutsiderSql('s', '$2').replace(/\s+/g, ' ')}`);
     const hidden = closedCircleOutsiderSql('s', '$2').replace(/\s+/g, ' ');
-    expect(hidden).toContain("s.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles cc_c WHERE cc_c.id = s.circle_id AND cc_c.join_policy = 'closed'");
+    expect(hidden).toContain("s.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles cc_c WHERE cc_c.id = s.circle_id AND cc_c.join_policy <> 'open'");
     // Shirley pilot S2: having made the circle is no tie to it; only a member row is.
     expect(hidden).not.toContain('created_by');
     expect(hidden).toContain('NOT EXISTS (SELECT 1 FROM circle_members cc_m WHERE cc_m.circle_id = s.circle_id AND cc_m.user_id = $2)');
     expect(publicEventsSql('s').replace(/\s+/g, ' ')).toContain(
-      "AND NOT (s.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles pc_c WHERE pc_c.id = s.circle_id AND pc_c.join_policy = 'closed'))",
+      "AND NOT (s.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles pc_c WHERE pc_c.id = s.circle_id AND pc_c.join_policy <> 'open'))",
     );
     expect(() => closedCircleOutsiderSql('s; DROP', '$2')).toThrow();
   });

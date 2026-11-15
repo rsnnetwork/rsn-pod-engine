@@ -56,8 +56,11 @@ describe('migration 154 (event links)', () => {
     expect(code(sql).replace(/ON DELETE CASCADE/g, '')).not.toMatch(/\b(DELETE|TRUNCATE|DROP|RENAME)\b/i);
   });
 
+  // Ben field test (13 Nov 2026, migration 157): the service reads any circle that is not open (closed or invitation
+  // only) as closed. When 154 ran only open and closed existed, so its "= 'closed'" is that same rule.
   it('writes out the service\'s tail rule exactly (the backfill and every later open agree on who gets a tail)', () => {
-    const rule = (text: string) => text.replace(/\s+/g, ' ').replace(/el_p|el_c/g, 'x').replace(/\bp\b|\bc\b/g, 'x').trim();
+    const rule = (text: string) => text.replace(/\s+/g, ' ').replace(/el_p|el_c/g, 'x').replace(/\bp\b|\bc\b/g, 'x')
+      .replace(/join_policy = 'closed'/g, "join_policy <> 'open'").trim();
     const service = rule(eventLinkNeedsTailSql('s'));
     const start = flat(sql).indexOf('COALESCE(NOT ( ((s.visibility IS NOT NULL');
     const end = flat(sql).indexOf(' AS secret');

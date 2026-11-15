@@ -162,11 +162,11 @@ describe('every notification type the server inserts is allowed by notifications
     expect(new Set(scanned.flatMap((s) => s.types)).size).toBeGreaterThanOrEqual(18);
   });
 
-  it("reads the latest definition of the list: 145, which restates 135's list (118's and the four event bells) and adds the waiting-list bell", () => {
-    expect(path.basename(latestAllowlistMigration())).toBe('145_event_waitlist.sql');
+  it("reads the latest definition of the list: 157, which restates 145's list (135's, 118's, the event bells and the waiting-list bell) and adds the two circle request bells", () => {
+    expect(path.basename(latestAllowlistMigration())).toBe('157_circle_requests_and_invite_only.sql');
     expect(allowed).toEqual(expect.arrayContaining([
       'circle_invite', 'event_cancelled', 'event_reminder', 'event_rescheduled', 'event_schedule_changed',
-      'event_waitlist_promoted',
+      'event_waitlist_promoted', 'circle_request', 'circle_request_answered',
     ]));
   });
 

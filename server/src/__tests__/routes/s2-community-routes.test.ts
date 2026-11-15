@@ -143,7 +143,7 @@ beforeEach(() => {
   jest.mocked(circleService.updateCircle).mockResolvedValue({ approvedUserIds: [] });
   jest.mocked(circleService.attachPod).mockResolvedValue(undefined);
   jest.mocked(circleService.detachPod).mockResolvedValue({ detached: true });
-  jest.mocked(circleService.listCirclesOfPod).mockResolvedValue([{ id: CIRCLE, name: 'Curious Humans' }]);
+  jest.mocked(circleService.listCirclesOfPod).mockResolvedValue([{ id: CIRCLE, name: 'Curious Humans', joinPolicy: 'open', keepsYouOut: false }]);
   jest.mocked(joinService.ringApproved).mockResolvedValue(undefined);
   jest.mocked(joinService.ringNewOwner).mockResolvedValue(undefined);
   jest.mocked(roleService.setCircleMemberRole).mockResolvedValue({ changed: true, circleName: 'Curious Humans', from: 'member', to: 'moderator' });

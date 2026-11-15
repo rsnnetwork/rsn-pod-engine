@@ -25,7 +25,8 @@ describe('PodDetailPage membership and management are separate', () => {
   });
 
   it('Join shows whenever the viewer is not a member, for an admin on any visibility', () => {
-    expect(SRC).toMatch(/\{!isMember && !isPending && pod\.status === 'active' && \(/);
+    // Ben field test (13 Nov 2026): unless a closed or invite-only circle of the pod keeps the viewer out (keptOutBy).
+    expect(SRC).toMatch(/\{!isMember && !isPending && pod\.status === 'active' && !keptOutBy && \(/);
     expect(SRC).toMatch(/pod\.visibility === 'public' \|\| isAdminUser/);
     expect(SRC).not.toMatch(/\bisDirector\b/);
   });

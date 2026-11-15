@@ -148,7 +148,8 @@ describe('the circle page (S2 controls)', () => {
   it('the edit sheet: name and description validated inline; who can join only for the owner; a Sheet (portalled)', () => {
     const edit = read('features/circles/EditCircleSheet.tsx');
     expect(edit).toMatch(/const mayChoosePolicy = !!circle\.isOwner;/);
-    expect(edit).toMatch(/\{mayChoosePolicy && \(\s*<fieldset/);
+    // Ben field test (13 Nov 2026): the three choices are one shared field (CirclePolicyField).
+    expect(edit).toMatch(/\{mayChoosePolicy && <CirclePolicyField field=\{register\('joinPolicy'\)\}/);
     expect(edit).toMatch(/useForm<Values>/);
     expect(edit).toMatch(/errors\.root/);
     expect(edit).toMatch(/<Sheet\s/);

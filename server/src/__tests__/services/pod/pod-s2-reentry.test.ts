@@ -66,6 +66,8 @@ function answer(sql: string, params: unknown[] = []) {
     return { rows: [], rowCount: 0 };
   }
   if (s.startsWith('INSERT INTO notifications')) return { rows: [], rowCount: 0 };
+  // Ben field test (13 Nov 2026): the pod is in no closed or invite-only circle (pod-circle-gate.ts).
+  if (s.includes('FROM circle_pods cp JOIN circles c')) return { rows: [] };
   throw new Error(`unmodelled: ${s.slice(0, 120)}`);
 }
 
