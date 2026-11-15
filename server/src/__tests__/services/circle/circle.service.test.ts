@@ -24,6 +24,7 @@ import {
   createCircle, joinCircle, leaveCircle, archiveCircle, getCircleDetail,
   MAX_NESTING_DEPTH,
 } from '../../../services/circle/circle.service';
+import type { CircleJoinPolicy } from '@rsn/shared';
 
 beforeEach(() => { mockQuery.mockReset(); mockClientSql.length = 0; });
 
@@ -236,7 +237,9 @@ describe('creating a circle (1 Nov 2026, L21)', () => {
 
     const insertCircle = mockQuery.mock.calls.find(c => /INSERT INTO circles/.test(c[0] as string));
     expect(insertCircle![0]).toMatch(/member_count/);
-    expect(insertCircle![0]).toMatch(/VALUES \(\$1, \$2, \$3, \$4, 1\)/);
+    expect(insertCircle![0]).toMatch(/VALUES \(\$1, \$2, \$3, \$4, 1, \$5\)/);
+    // Ben field test (13 Nov 2026): a circle made without a choice is closed from its first moment, never open.
+    expect(insertCircle![1]).toEqual(['Doctors', null, null, 'admin-1', 'closed']);
     const insertOwner = mockQuery.mock.calls.find(c => /INSERT INTO circle_members/.test(c[0] as string));
     expect(insertOwner![0]).toMatch(/'owner'/);
     expect(insertOwner![1]).toEqual(['new-circle', 'admin-1']);
@@ -341,13 +344,23 @@ describe('joining a closed circle (T14, 1 Nov 2026)', () => {
 describe('what a viewer may do with a circle (toCircleAccess)', () => {
   const { toCircleAccess } = jest.requireActual('../../../services/circle/circle-managers') as typeof import('../../../services/circle/circle-managers');
   const row = (over: Partial<Parameters<typeof toCircleAccess>[0]>) => ({
-    join_policy: 'open' as const, is_member: false, can_manage: false, my_request: null, request_count: 3, ...over,
+    join_policy: 'open' as CircleJoinPolicy | null, is_member: false, can_manage: false, my_request: null, request_count: 3, ...over,
   });
 
-  it('a legacy circle (no policy stored) reads as open', () => {
+  // Ben field test (13 Nov 2026): a policy the code cannot read (none stored, or one it does not know) keeps outsiders
+  // out rather than letting them in. The column is NOT NULL with a CHECK, so this is a guard, not a real state.
+  it('a circle with no readable policy reads as closed, never open', () => {
     expect(toCircleAccess(row({ join_policy: null }))).toEqual({
-      joinPolicy: 'open', myStatus: null, canManage: false, canInvite: false, locked: false, myRole: null, isOwner: false,
+      joinPolicy: 'closed', myStatus: null, canManage: false, canInvite: false, locked: true, myRole: null, isOwner: false,
     });
+  });
+
+  it('an invite-only circle is locked to outsiders, and only the people who run it invite', () => {
+    expect(toCircleAccess(row({ join_policy: 'invite_only' }))).toEqual({
+      joinPolicy: 'invite_only', myStatus: null, canManage: false, canInvite: false, locked: true, myRole: null, isOwner: false,
+    });
+    expect(toCircleAccess(row({ join_policy: 'invite_only', is_member: true })).canInvite).toBe(false);
+    expect(toCircleAccess(row({ join_policy: 'invite_only', is_member: true })).locked).toBe(false);
   });
 
   it('open: a member may invite; a stranger may not; nothing is locked', () => {

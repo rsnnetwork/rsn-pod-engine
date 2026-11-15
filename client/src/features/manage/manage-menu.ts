@@ -45,7 +45,7 @@ export const CIRCLE_HINT: Partial<Record<ManageKey, string>> = {
   invitations: 'Who you invited, and withdrawing an invitation',
   pods: 'Make a new pod or attach one you run',
   events: 'Schedule an event for everyone in the circle',
-  visibility: 'Who can join: Open or Closed',
+  visibility: 'Who can join: Open, Closed or Invitation only',
   moderation: 'Join requests waiting for an answer',
   export: 'Download the circle\'s members, events and posts',
 };

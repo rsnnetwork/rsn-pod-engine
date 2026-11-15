@@ -19,7 +19,7 @@ import { activeMemberSql } from '../users/active-member';
 import { visibleEventsSql } from '../session/event-access';
 import { eventImageColumns, eventImageUrlOf } from '../session/event-image-url';
 import {
-  CircleAccessRow, circleAccessColumns, isCircleManager, isPlatformAdmin, toCircleAccess,
+  CircleAccessRow, circleAccessColumns, isCircleManager, isPlatformAdmin, isRestrictedPolicy, readJoinPolicy, toCircleAccess,
 } from './circle-managers';
 import { entitiesOfCircle } from './circle-entities.service';
 import type { ReturningInvite } from '../pod/pod.service';
@@ -28,6 +28,16 @@ import type { ReturningInvite } from '../pod/pod.service';
 export const CIRCLE_CLOSED_JOIN = 'This circle is closed. Ask to join and its owner will let you in.';
 /** An invite whose maker no longer runs the circle, accepted after it closed (final fix wave S2, 2 Nov 2026). */
 export const CIRCLE_CLOSED_INVITE = 'This circle is closed now, so this invite no longer lets you in. Ask to join and its owner will let you in.';
+/** What someone outside an invite-only circle is told (Ben field test, 13 Nov 2026): there is no asking, only invites. */
+export const CIRCLE_INVITE_ONLY_JOIN = 'This circle is by invitation only. Its owner or a moderator can invite you.';
+/** An invite whose maker no longer runs an invite-only circle. */
+export const CIRCLE_INVITE_ONLY_INVITE = 'This invitation no longer lets you in: the person who sent it does not run this circle now. Its owner or a moderator can invite you.';
+
+/** The refusal for someone a closed or invite-only circle keeps out, worded for its policy. */
+export function restrictedJoinRefusal(policy: CircleJoinPolicy, withInvite: boolean): string {
+  if (policy === 'invite_only') return withInvite ? CIRCLE_INVITE_ONLY_INVITE : CIRCLE_INVITE_ONLY_JOIN;
+  return withInvite ? CIRCLE_CLOSED_INVITE : CIRCLE_CLOSED_JOIN;
+}
 
 /**
  * T14 (1 Nov 2026): an attached pod is named on a circle's page only when it is not archived and, if private, only to
@@ -118,37 +128,54 @@ async function assertValidParent(parentId: string, circleId: string | null): Pro
 
 // ── Admin CRUD ───────────────────────────────────────────────────────────────
 
-export async function createCircle(
-  adminUserId: string,
-  input: { name: string; description?: string | null; parentCircleId?: string | null },
-): Promise<{ id: string }> {
-  const name = input.name.trim();
-  if (name.length < 2) {
+/** What a new circle is made from: an admin's form, or an approved ask (circle-request.service.ts). */
+export interface NewCircleInput {
+  name: string;
+  description?: string | null;
+  parentCircleId?: string | null;
+  /** Who can join. Absent: closed (Ben field test, 13 Nov 2026: a new circle was open to everyone until its maker
+   *  closed it, and someone joined in that minute). */
+  joinPolicy?: CircleJoinPolicy;
+}
+
+/** The refusal for a name already taken among its sibling circles. */
+export const CIRCLE_NAME_TAKEN = 'A circle with that name already exists here';
+
+/**
+ * Write a new circle and its owner inside the caller's transaction. The owner is in it from the first moment, so the
+ * circle never exists without the person who runs it and member_count matches the member rows (1 Nov 2026, L21). The
+ * policy is written with the row, so a circle is never, even for a moment, more open than its maker chose.
+ */
+export async function insertCircle(client: PoolClient, ownerId: string, input: NewCircleInput): Promise<{ id: string }> {
+  const r = await client.query<{ id: string }>(
+    `INSERT INTO circles (name, description, parent_circle_id, created_by, member_count, join_policy)
+     VALUES ($1, $2, $3, $4, 1, $5) RETURNING id`,
+    [input.name.trim(), input.description?.trim() || null, input.parentCircleId ?? null, ownerId, input.joinPolicy ?? 'closed'],
+  );
+  await client.query(
+    `INSERT INTO circle_members (circle_id, user_id, role) VALUES ($1, $2, 'owner')`,
+    [r.rows[0].id, ownerId],
+  );
+  return r.rows[0];
+}
+
+/** A new circle's name and parent, checked before any write. */
+export async function assertNewCircleShape(input: Pick<NewCircleInput, 'name' | 'parentCircleId'>): Promise<void> {
+  if (input.name.trim().length < 2) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Circle name must be at least 2 characters');
   }
   if (input.parentCircleId) await assertValidParent(input.parentCircleId, null);
+}
 
+/** A platform admin makes a circle directly (an approved ask goes through circle-request.service.ts). */
+export async function createCircle(adminUserId: string, input: NewCircleInput): Promise<{ id: string }> {
+  await assertNewCircleShape(input);
   try {
-    // The creator is the circle's owner from the first moment, in the same transaction as the circle row, so the
-    // circle never exists without the person who runs it and member_count matches the member rows (1 Nov 2026, L21).
-    const created = await transaction(async (client) => {
-      const r = await client.query<{ id: string }>(
-        `INSERT INTO circles (name, description, parent_circle_id, created_by, member_count)
-         VALUES ($1, $2, $3, $4, 1) RETURNING id`,
-        [name, input.description?.trim() || null, input.parentCircleId ?? null, adminUserId],
-      );
-      await client.query(
-        `INSERT INTO circle_members (circle_id, user_id, role) VALUES ($1, $2, 'owner')`,
-        [r.rows[0].id, adminUserId],
-      );
-      return r.rows[0];
-    });
-    logger.info({ circleId: created.id, name, adminUserId }, 'Circle created');
+    const created = await transaction((client) => insertCircle(client, adminUserId, input));
+    logger.info({ circleId: created.id, name: input.name.trim(), adminUserId, joinPolicy: input.joinPolicy ?? 'closed' }, 'Circle created');
     return created;
   } catch (err: any) {
-    if (err?.code === '23505') {
-      throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'A circle with that name already exists here');
-    }
+    if (err?.code === '23505') throw new AppError(409, ErrorCodes.VALIDATION_ERROR, CIRCLE_NAME_TAKEN);
     throw err;
   }
 }
@@ -195,7 +222,9 @@ export async function updateCircle(
   try {
     const changed = await transaction(async (client) => {
       await client.query(`UPDATE circles SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1`, params);
-      if (input.joinPolicy === 'closed') {
+      // Invite only (Ben field test) withdraws the same invites as closing does. Asks already waiting stay for its
+      // managers to answer: they were made while asking was allowed, and letting one in is the managers' choice.
+      if (input.joinPolicy === 'closed' || input.joinPolicy === 'invite_only') {
         return { approvedUserIds: [], invitesChangedFor: await withdrawInvitesOfNonManagers(client, circleId) };
       }
       if (input.joinPolicy !== 'open') return { approvedUserIds: [] };
@@ -377,7 +406,9 @@ export async function joinCircle(
   const circle = await query<{ id: string; join_policy: CircleJoinPolicy | null }>(
     `SELECT id, join_policy FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
   if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
-  const closed = circle.rows[0].join_policy === 'closed';
+  // Invite-only circles (Ben field test, 13 Nov 2026) keep outsiders out exactly as closed ones do.
+  const policy = readJoinPolicy(circle.rows[0].join_policy);
+  const closed = isRestrictedPolicy(policy);
 
   // S2 fix round 1 (controller ruling): someone the circle's organisers removed does not come back by themselves. An
   // open circle refuses their own join; a closed one tells them to ask (an organiser decides). Only a personal invite
@@ -385,7 +416,7 @@ export async function joinCircle(
   if (!isPlatformAdmin(opts.role) && !(await isCircleMember(circleId, userId))) {
     const removedAt = await circleRemovalOf(circleId, userId);
     if (removedAt && !(await organiserInvitedBack(circleId, removedAt, opts))) {
-      if (closed) throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_JOIN);
+      if (closed) throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, restrictedJoinRefusal(policy, false));
       throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, REMOVED_FROM_CIRCLE);
     }
   }
@@ -393,7 +424,7 @@ export async function joinCircle(
   if (closed
       && !(await isCircleMember(circleId, userId)) && !(await isCircleManager(circleId, userId, opts.role))
       && !(opts.invitedBy !== undefined && await inviterRunsCircle(circleId, opts.invitedBy))) {
-    throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, opts.invitedBy !== undefined ? CIRCLE_CLOSED_INVITE : CIRCLE_CLOSED_JOIN);
+    throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, restrictedJoinRefusal(policy, opts.invitedBy !== undefined));
   }
 
   await transaction((client) => admitToCircle(client, circleId, userId));

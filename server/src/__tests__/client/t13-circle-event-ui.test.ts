@@ -103,12 +103,12 @@ describe('the event form with a circle', () => {
     expect(form).toContain('No pod to schedule in yet');
   });
 
-  it('shows who it is for, lists the circle\'s pods first, starts private and sends the circle', () => {
+  // Ben field test (13 Nov 2026): only the circle's own pods are offered (ben-field-circles-13nov.test.ts pins the rest).
+  it('shows who it is for, lists only the circle\'s pods, starts private and sends the circle', () => {
     expect(form).toMatch(/data-testid="event-circle-preset"/);
     expect(form).toMatch(/circleForLine\(circle\.name, circle\.memberCount\)/);
-    expect(form).toMatch(/podsForCircle\(pods, circle\?\.pods\.map\(\(p\) => p\.podId\) \?\? \[\]\)/);
-    expect(form).toMatch(/<optgroup label=\{`In \$\{circle\.name\}`\}>/);
-    expect(form).toMatch(/<optgroup label="Your other pods">/);
+    expect(form).toMatch(/podsForCircle\(schedulable, c\.pods\.map\(\(p\) => p\.podId\)\)/);
+    expect(form).toMatch(/\{circle \? `Select a pod in \$\{circle\.name\}` : 'Select a pod'\}/);
     expect(form).toMatch(/chosenVisibility \?\? \(circle \? 'private' : defaultEventVisibility\(pod\?\.visibility\)\)/);
     expect(form).toMatch(/\.\.\.\(circle \? \{ circleId: circle\.id \} : \{\}\)/);
     expect(form).toMatch(/circleName=\{circle\?\.name\}/);

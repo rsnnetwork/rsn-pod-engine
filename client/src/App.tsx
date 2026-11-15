@@ -59,6 +59,7 @@ import AdminJoinRequestActionPage from '@/features/admin/AdminJoinRequestActionP
 import AdminUsersPage from '@/features/admin/AdminUsersPage';
 import AdminUserInspectorPage from '@/features/admin/AdminUserInspectorPage';
 import AdminJoinRequestsPage from '@/features/admin/AdminJoinRequestsPage';
+import AdminCircleRequestsPage from '@/features/admin/AdminCircleRequestsPage';
 import AdminPodsPage from '@/features/admin/AdminPodsPage';
 import AdminSessionsPage from '@/features/admin/AdminSessionsPage';
 import AdminModerationPage from '@/features/admin/AdminModerationPage';
@@ -298,6 +299,8 @@ export default function App() {
         <Route path="/admin/users" element={<AdminUsersPage />} />
         <Route path="/admin/users/:id" element={<AdminUserInspectorPage />} />
         <Route path="/admin/join-requests" element={<AdminJoinRequestsPage />} />
+        {/* Ben field test (13 Nov 2026): members ask for a circle; an admin approves or declines. */}
+        <Route path="/admin/circle-requests" element={<AdminCircleRequestsPage />} />
         <Route path="/admin/pods" element={<AdminPodsPage />} />
         <Route path="/admin/sessions" element={<AdminSessionsPage />} />
         <Route path="/admin/moderation" element={<AdminModerationPage />} />

@@ -1,12 +1,13 @@
 // ─── "Who can join", for the people who run a circle (T14, 1 Nov 2026; 30 Oct review 7.5) ─────────────────────────
-// Two choices in the pod form's wording style. Saving Open lets everyone still waiting in (the server approves them).
+// Three choices in the pod form's wording style (invitation only since the Ben field test, 13 Nov 2026). Saving Open lets
+// everyone still waiting in (the server approves them).
 import { useState } from 'react';
 import type { CircleJoinPolicy } from '@rsn/shared';
 import Sheet from '@/features/reason/ui/Sheet';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 import { useToastStore } from '@/stores/toastStore';
-import { POLICY_COPY, POLICY_LABEL, WHO_CAN_JOIN } from './circle-logic';
+import { POLICY_COPY, POLICY_LABEL, POLICY_ORDER, WHO_CAN_JOIN, policySavedToast } from './circle-logic';
 import { circleErrorSentence, useJoinPolicy } from './useCircleActions';
 
 interface Props { circleId: string; name: string; current: CircleJoinPolicy; waiting: number; onClose: () => void }
@@ -16,7 +17,7 @@ export default function CircleSettingsSheet({ circleId, name, current, waiting, 
   const [error, setError] = useState<string | null>(null);
   const addToast = useToastStore((s) => s.addToast);
   const save = useJoinPolicy(circleId);
-  const opening = current === 'closed' && choice === 'open' && waiting > 0;
+  const opening = current !== 'open' && choice === 'open' && waiting > 0;
 
   const submit = () => {
     if (save.isPending) return;
@@ -24,7 +25,7 @@ export default function CircleSettingsSheet({ circleId, name, current, waiting, 
     setError(null);
     save.mutate(choice, {
       onSuccess: () => {
-        addToast(choice === 'closed' ? `${name} is closed. People now ask to join.` : `${name} is open. Anyone on REASON can join.`, 'success');
+        addToast(policySavedToast(name, choice), 'success');
         onClose();
       },
       onError: (err) => setError(circleErrorSentence(err, 'That could not be saved. Try again.')),
@@ -45,7 +46,7 @@ export default function CircleSettingsSheet({ circleId, name, current, waiting, 
     >
       <fieldset className="mt-3 grid gap-2">
         <legend className="sr-only">{WHO_CAN_JOIN}</legend>
-        {(['open', 'closed'] as const).map((policy) => (
+        {POLICY_ORDER.map((policy) => (
           <label
             key={policy}
             className={cn(

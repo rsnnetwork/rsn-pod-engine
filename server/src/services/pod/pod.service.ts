@@ -12,6 +12,7 @@ import {
 import { NotFoundError, ConflictError, ForbiddenError } from '../../middleware/errors';
 import { UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
+import { assertInPodsRestrictedCircles } from '../pods/pod-circle-gate';
 
 // ─── Column select helpers ──────────────────────────────────────────────────
 
@@ -558,6 +559,9 @@ export async function joinPod(podId: string, userId: string, actorRole?: UserRol
     throw new ForbiddenError('This pod requires an invite to join');
   }
 
+  // Ben field test (13 Nov 2026): a closed or invite-only circle's pod is not a side door into the circle.
+  await assertInPodsRestrictedCircles(podId, userId);
+
   if (pod.visibility === PodVisibility.PUBLIC_WITH_APPROVAL) {
     throw new ForbiddenError('This pod requires approval. Use "Request to Join" instead.');
   }
@@ -576,6 +580,10 @@ export async function requestToJoin(podId: string, userId: string): Promise<PodM
   if (pod.visibility === PodVisibility.PRIVATE || pod.visibility === PodVisibility.INVITE_ONLY) {
     throw new ForbiddenError('This is a private pod. You need an invite to join.');
   }
+
+  // Ben field test (13 Nov 2026): asking is refused too, so the pod's organisers are never asked to let in someone
+  // its circle keeps out.
+  await assertInPodsRestrictedCircles(podId, userId);
 
   if (pod.visibility === PodVisibility.PUBLIC) {
     // Public pods: join directly rather than requesting, unless an organiser removed them (S2 fix round 1). On an

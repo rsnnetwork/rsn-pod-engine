@@ -459,7 +459,7 @@ describe('listPosts — keyset, blocks, pinned strip', () => {
   it('a share\'s embedded original is carried only from an open circle or to someone in it', async () => {
     await listPosts(C1, VIEWER);
     expect(sqlOf(calls(/ORDER BY p\.created_at DESC/)[0])).toContain(
-      "AND (oc.join_policy <> 'closed' OR EXISTS (SELECT 1 FROM circle_members om WHERE om.circle_id = o.circle_id AND om.user_id = $2))",
+      "AND (oc.join_policy = 'open' OR EXISTS (SELECT 1 FROM circle_members om WHERE om.circle_id = o.circle_id AND om.user_id = $2))",
     );
   });
 

@@ -14,7 +14,7 @@ import { AppError, NotFoundError } from '../../middleware/errors';
 import { activeMemberSql } from '../users/active-member';
 import { activeLinkSql } from '../entity/entity-links';
 import { entityPictureColumns, entityPictureUrl, type EntityPictureRow } from '../entity/entity-picture-url';
-import { assertCircleManager, isCircleManager } from './circle-managers';
+import { assertCircleManager, isCircleManager, readJoinPolicy } from './circle-managers';
 
 /** The most links each page lists. */
 export const LINKS_SHOWN = 50;
@@ -90,7 +90,7 @@ export async function circlesOfEntity(entityId: string, viewerId: string, viewer
     `SELECT c.id, c.name, c.join_policy,
             (SELECT count(*)::int FROM circle_members cm JOIN users cu ON cu.id = cm.user_id
               WHERE cm.circle_id = c.id AND ${activeMemberSql('cu')}) AS member_count,
-            (c.join_policy = 'closed' AND NOT ($3::boolean
+            (c.join_policy <> 'open' AND NOT ($3::boolean
               OR EXISTS (SELECT 1 FROM circle_members mm WHERE mm.circle_id = c.id AND mm.user_id = $2))) AS locked
        FROM circle_entities ce JOIN circles c ON c.id = ce.circle_id
       WHERE ce.entity_id = $1 AND c.archived_at IS NULL
@@ -102,6 +102,6 @@ export async function circlesOfEntity(entityId: string, viewerId: string, viewer
     id: row.id,
     name: row.name,
     memberCount: row.locked ? null : row.member_count,
-    joinPolicy: row.join_policy === 'closed' ? 'closed' : 'open',
+    joinPolicy: readJoinPolicy(row.join_policy),
   }));
 }

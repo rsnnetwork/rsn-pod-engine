@@ -206,11 +206,12 @@ export function pictureWords(kind: 'logo' | 'banner', has: boolean): { edit: str
   return { edit: `${has ? 'Change' : 'Add'} ${kind}`, remove: `Remove ${kind}` };
 }
 
-/** "12 members" for a circle; a closed circle the viewer is outside is named only (L22). */
-export function circleCountLine(c: { memberCount: number | null; joinPolicy: 'open' | 'closed' }): string {
-  if (c.memberCount === null) return 'Closed circle';
+/** "12 members" for a circle; a closed circle the viewer is outside is named only (L22). Invite only: Ben field test. */
+export function circleCountLine(c: { memberCount: number | null; joinPolicy: 'open' | 'closed' | 'invite_only' }): string {
+  const kind = c.joinPolicy === 'invite_only' ? 'Invitation-only circle' : 'Closed circle';
+  if (c.memberCount === null) return kind;
   const members = c.memberCount === 1 ? '1 member' : `${c.memberCount} members`;
-  return c.joinPolicy === 'closed' ? `Closed circle · ${members}` : members;
+  return c.joinPolicy === 'open' ? members : `${kind} · ${members}`;
 }
 export const leftToast = (name: string, archived: boolean) =>
   (archived ? `You left ${name}. No one else was linked to it, so it is archived.` : `You left ${name}.`);

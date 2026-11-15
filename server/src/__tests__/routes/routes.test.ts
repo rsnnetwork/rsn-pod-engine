@@ -1230,6 +1230,30 @@ describe('Rating Routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.data).toHaveLength(1);
     });
+
+    // Ben field test (13 Nov 2026): "Your stars are not shown to them." Someone else's stars on you and their private
+    // note reach only a platform admin; meet again stays.
+    it('hides the stars and note others gave, from a member; an admin reads them', async () => {
+      const fromOther = { ...mockRating, fromUserId: 'user-999', toUserId: '05e70000-0000-4000-8000-000000000123', feedback: 'private note' };
+      (ratingService.getRatingsReceived as jest.Mock).mockResolvedValue([fromOther]);
+      const member = await request(app).get('/ratings/received').set('Authorization', `Bearer ${makeToken()}`);
+      expect(member.body.data[0]).toMatchObject({ qualityScore: null, feedback: null, meetAgain: true });
+      (ratingService.getRatingsReceived as jest.Mock).mockResolvedValue([fromOther]);
+      const admin = await request(app).get('/ratings/received').set('Authorization', `Bearer ${makeToken({ role: 'admin' })}`);
+      expect(admin.body.data[0]).toMatchObject({ qualityScore: 4, feedback: 'private note' });
+    });
+
+    it("a match's ratings keep the member's own stars and hide the partner's", async () => {
+      const mine = { ...mockRating, id: 'r-mine' };
+      const theirs = { ...mockRating, id: 'r-theirs', fromUserId: 'user-456', toUserId: mockRating.fromUserId, qualityScore: 2 };
+      (ratingService.isMatchParticipant as jest.Mock).mockResolvedValue(true);
+      (ratingService.getRatingsByMatch as jest.Mock).mockResolvedValue([mine, theirs]);
+      const res = await request(app).get('/ratings/match/match-1').set('Authorization', `Bearer ${makeToken()}`);
+      expect(res.body.data).toEqual([
+        expect.objectContaining({ id: 'r-mine', qualityScore: 4 }),
+        expect.objectContaining({ id: 'r-theirs', qualityScore: null, feedback: null }),
+      ]);
+    });
   });
 
   describe('GET /ratings/sessions/:id/people-met', () => {

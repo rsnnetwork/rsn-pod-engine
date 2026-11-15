@@ -18,8 +18,8 @@ import { E } from '../../realtime/entities';
 import { emitEntities, getRealtimeIo } from '../../realtime/emit';
 import { activeMemberSql } from '../users/active-member';
 import { escapeLike } from '../user/user-search.service';
-import { admitToCircle, isCircleMember, joinCircle } from './circle.service';
-import { assertCircleManager, isCircleManager, isPlatformAdmin } from './circle-managers';
+import { CIRCLE_INVITE_ONLY_JOIN, admitToCircle, isCircleMember, joinCircle } from './circle.service';
+import { assertCircleManager, isCircleManager, isPlatformAdmin, readJoinPolicy } from './circle-managers';
 
 /** What a manager is told when the ask they answer was answered already, withdrawn, or never made. */
 export const REQUEST_ALREADY_ANSWERED = 'This request has already been answered.';
@@ -164,11 +164,14 @@ export async function requestToJoinCircle(
   role?: string,
 ): Promise<CircleRequestResult & { created: boolean }> {
   const circle = await liveCircle(circleId);
-  if (circle.join_policy !== 'closed' || (await isCircleManager(circleId, userId, role))) {
+  const policy = readJoinPolicy(circle.join_policy);
+  if (policy === 'open' || (await isCircleManager(circleId, userId, role))) {
     await joinCircle(circleId, userId, { role });
     return { status: 'member', created: false };
   }
   if (await isCircleMember(circleId, userId)) return { status: 'member', created: false };
+  // Invite only (Ben field test, 13 Nov 2026): there is nothing to ask; only an invitation lets someone in.
+  if (policy === 'invite_only') throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_INVITE_ONLY_JOIN);
 
   const ins = await query<{ id: string }>(
     `INSERT INTO circle_join_requests (circle_id, user_id) VALUES ($1, $2)

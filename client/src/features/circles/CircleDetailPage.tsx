@@ -38,7 +38,7 @@ import EditCircleSheet from './EditCircleSheet';
 import CircleInvitesSheet from './CircleInvitesSheet';
 import SpaceExportSheet from '@/features/spaces/SpaceExportSheet';
 import CircleManageMenu from './CircleManageMenu';
-import { LOCKED_COPY, circleEntities, requestsLabel, type CircleDetail } from './circle-logic';
+import { POLICY_LABEL, circleEntities, isRestricted, lockedCopy, requestsLabel, type CircleDetail } from './circle-logic';
 
 const HEADER_ACTION = 'inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50';
 
@@ -93,7 +93,7 @@ export default function CircleDetailPage() {
           {circle.description && <p className="text-gray-500 text-sm mt-1 break-words">{circle.description}</p>}
           <p className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400 mt-2">
             <Users className="h-3.5 w-3.5" /> {circle.memberCount} {circle.memberCount === 1 ? 'member' : 'members'}
-            {circle.joinPolicy === 'closed' && <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-gray-600" data-testid="circle-closed-badge"><Lock className="h-3 w-3" /> Closed</span>}
+            {isRestricted(circle.joinPolicy) && <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-gray-600" data-testid="circle-closed-badge"><Lock className="h-3 w-3" /> {POLICY_LABEL[circle.joinPolicy!]}</span>}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -124,7 +124,7 @@ export default function CircleDetailPage() {
         <Card className="animate-fade-in-up" data-testid="circle-locked">
           <div className="flex items-start gap-3">
             <Lock className="mt-0.5 h-5 w-5 shrink-0 text-rsn-red" aria-hidden="true" />
-            <p className="text-sm text-gray-700">{LOCKED_COPY}</p>
+            <p className="text-sm text-gray-700">{lockedCopy(circle.joinPolicy)}</p>
           </div>
         </Card>
       )}

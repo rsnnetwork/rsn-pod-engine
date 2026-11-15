@@ -13,6 +13,7 @@ export const ADMIN_TABS = [
   { to: '/admin/pods', label: 'Pods', end: false },
   { to: '/admin/sessions', label: 'Events', end: false },
   { to: '/admin/join-requests', label: 'Join Requests', end: false },
+  { to: '/admin/circle-requests', label: 'Circle Requests', end: false },
   { to: '/admin/moderation', label: 'Moderation', end: false },
   { to: '/admin/templates', label: 'Templates', end: false },
   { to: '/admin/email', label: 'Email', end: false },

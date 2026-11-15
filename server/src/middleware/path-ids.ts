@@ -16,6 +16,7 @@ export const PATH_REFUSALS = {
   notification: "We couldn't find that notification.",
   agent: "We couldn't find that search.",
   circle: "We couldn't find that circle.",
+  circleRequest: "We couldn't find that circle request.",
   pod: "We couldn't find that pod.",
   event: "We couldn't find that event.",
   post: "We couldn't find that post.",

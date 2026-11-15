@@ -496,6 +496,18 @@ export const circleWriteLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// Asking for a new circle (Ben field test, 13 Nov 2026): ten asks an hour per member is plenty for a real community; the
+// service also caps the asks waiting at once.
+export const circleRequestAskLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('circle-request-ask'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have asked for several circles in a short time. Try again later.' } },
+});
+
 // Pods (Shirley pilot S2, 11 Nov 2026). Every route under /api/pods had only the general limiter. Any pod can be asked
 // for by id, so its reads get their own allowance: a pod page reads the pod, its members, counts, events count and
 // circles at once, and again on every change it is told of, so the allowance is twice the circles'. Every write (make,

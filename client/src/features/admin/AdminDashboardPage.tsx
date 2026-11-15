@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Users, Mail, Hexagon, Activity, Calendar, BarChart3, Star, Zap, TrendingUp, Handshake } from 'lucide-react';
+import { Shield, Users, Mail, Hexagon, Activity, Calendar, BarChart3, Star, Zap, TrendingUp, Handshake, CircleDashed } from 'lucide-react';
+import { useCircleRequestQueue } from '@/features/circles/useCircleRequests';
 import axios from 'axios';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
@@ -76,6 +77,8 @@ export default function AdminDashboardPage() {
     meta: { entities: [E.adminJoinRequests] },
   });
 
+  const { data: circleQueue } = useCircleRequestQueue(isAdmin(user?.role));
+
   const { data: recentMatches } = useQuery({
     queryKey: ['admin-recent-matches'],
     queryFn: () => api.get('/admin/matches?limit=10').then(r => r.data.data ?? []),
@@ -105,6 +108,8 @@ export default function AdminDashboardPage() {
   }
 
   const pendingRequests = joinRequestsData?.meta?.totalCount ?? 0;
+  // Ben field test (13 Nov 2026): asks for a new circle waiting for an answer (the queue shows up to 100).
+  const pendingCircles = circleQueue?.length ?? 0;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -150,6 +155,7 @@ export default function AdminDashboardPage() {
               { path: '/admin/analytics', icon: BarChart3, label: 'Analytics', badge: null },
               { path: '/admin/users', icon: Users, label: 'Manage Users', badge: null },
               { path: '/admin/join-requests', icon: Mail, label: 'Join Requests', badge: pendingRequests > 0 ? `${pendingRequests} pending` : null },
+              { path: '/admin/circle-requests', icon: CircleDashed, label: 'Circle Requests', badge: pendingCircles > 0 ? `${pendingCircles} pending` : null },
               { path: '/admin/pods', icon: Hexagon, label: 'Manage Pods', badge: null },
               { path: '/admin/sessions', icon: Calendar, label: 'Manage Events', badge: null },
               { path: '/admin/moderation', icon: Shield, label: 'Moderation Queue', badge: null },

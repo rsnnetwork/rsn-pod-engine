@@ -191,7 +191,8 @@ async function resolveWallAccess(circleId: string, viewerId: string, viewerRole?
   const access = await readAccess(circleId, viewerId, viewerRole);
   if (!access) throw new NotFoundError('Circle', circleId);
   if (access.mayRead) return access;
-  if (access.joinPolicy === 'closed') throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_READ);
+  // Invite-only circles (Ben field test, 13 Nov 2026) are read like closed ones.
+  if (access.joinPolicy !== 'open') throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CIRCLE_CLOSED_READ);
   throw new ForbiddenError(CIRCLE_WALL_MEMBERS_ONLY);
 }
 
@@ -409,7 +410,7 @@ const POST_SELECT = `
             JOIN circles oc ON oc.id = o.circle_id
             JOIN users ou ON ou.id = o.author_id
            WHERE o.id = p.shared_from_post_id AND o.deleted_at IS NULL
-             AND (oc.join_policy <> 'closed'
+             AND (oc.join_policy = 'open'
                   OR EXISTS (SELECT 1 FROM circle_members om WHERE om.circle_id = o.circle_id AND om.user_id = $2))
              -- S4 fix round 1: blocks win on a share card too, either way (neither the words nor the name).
              AND NOT EXISTS (SELECT 1 FROM user_blocks ob
@@ -793,7 +794,7 @@ export async function sharePost(
 /** T14: nothing posted in a closed circle is carried out of it, by anyone (into a closed circle, createPost asks membership). */
 async function assertNotClosed(circleId: string): Promise<void> {
   const r = await query<{ join_policy: string | null }>(`SELECT join_policy FROM circles WHERE id = $1`, [circleId]);
-  if (r.rows[0]?.join_policy === 'closed') throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CLOSED_POST_STAYS);
+  if (r.rows[0] && r.rows[0].join_policy !== 'open') throw new AppError(403, ErrorCodes.CIRCLE_CLOSED, CLOSED_POST_STAYS);
 }
 
 // ── Reactions ────────────────────────────────────────────────────────────────

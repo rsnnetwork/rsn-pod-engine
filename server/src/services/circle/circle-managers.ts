@@ -17,6 +17,18 @@ import { activeMemberSql } from '../users/active-member';
 
 export const isPlatformAdmin = (role: string | undefined) => role === UserRole.ADMIN || role === UserRole.SUPER_ADMIN;
 
+/**
+ * A stored join_policy as the code reads it. Anything not known is read as closed: a value this build does not know
+ * must never let people in (Ben field test, 13 Nov 2026: a circle was briefly open to someone it was meant to keep out).
+ */
+export function readJoinPolicy(raw: string | null | undefined): CircleJoinPolicy {
+  if (raw === 'open' || raw === 'invite_only') return raw;
+  return 'closed';
+}
+
+/** Closed and invite-only circles keep outsiders out the same way; they differ only in whether outsiders may ask. */
+export const isRestrictedPolicy = (policy: CircleJoinPolicy): boolean => policy !== 'open';
+
 /** What someone who is not the owner is told when they try an owner's action. */
 export const OWNER_ONLY = "Only the circle's owner can do that.";
 
@@ -64,7 +76,7 @@ async function liveCircleOrNotFound(circleId: string): Promise<LiveCircle> {
   );
   const circle = r.rows[0];
   if (!circle) throw new NotFoundError('Circle', circleId);
-  return { id: circle.id, name: circle.name, joinPolicy: circle.join_policy };
+  return { id: circle.id, name: circle.name, joinPolicy: readJoinPolicy(circle.join_policy) };
 }
 
 /** Only the people who run a circle may do this. 404 for a missing or archived circle, 403 for anyone else. */
@@ -134,7 +146,7 @@ const ROLES: readonly CircleRole[] = ['owner', 'moderator', 'member'];
 
 /** What the viewer may do with a circle, from circleAccessColumns. requestCount only for the people who run it. */
 export function toCircleAccess(row: CircleAccessRow): CircleAccess {
-  const joinPolicy: CircleJoinPolicy = row.join_policy === 'closed' ? 'closed' : 'open';
+  const joinPolicy = readJoinPolicy(row.join_policy);
   const isMember = !!row.is_member;
   const canManage = !!row.can_manage;
   const myRole: CircleRole | null = isMember && row.my_role && ROLES.includes(row.my_role) ? row.my_role : (isMember ? 'member' : null);
@@ -147,7 +159,7 @@ export function toCircleAccess(row: CircleAccessRow): CircleAccess {
     myStatus,
     canManage,
     canInvite: canManage || (joinPolicy === 'open' && isMember),
-    locked: joinPolicy === 'closed' && !isMember && !canManage,
+    locked: isRestrictedPolicy(joinPolicy) && !isMember && !canManage,
     myRole,
     isOwner: myRole === 'owner' || !!row.viewer_is_admin,
   };

@@ -68,7 +68,7 @@ export function eventLinkNeedsTailSql(s: string, visibilityParam?: string): stri
       OR (${v} IS NULL AND EXISTS (SELECT 1 FROM pods el_p WHERE el_p.id = ${s}.pod_id AND el_p.visibility = 'public')))
     AND ${s}.admission_mode IS DISTINCT FROM 'restricted'
     AND NOT (${s}.circle_id IS NOT NULL
-             AND EXISTS (SELECT 1 FROM circles el_c WHERE el_c.id = ${s}.circle_id AND el_c.join_policy = 'closed'))
+             AND EXISTS (SELECT 1 FROM circles el_c WHERE el_c.id = ${s}.circle_id AND el_c.join_policy <> 'open'))
   ), TRUE)`;
 }
 
@@ -529,7 +529,7 @@ async function wouldNeedTail(podId: string | null, circleId: string | null, visi
     `SELECT NOT (
        ($3::text IN ('public', 'public_with_approval')
          OR ($3::text IS NULL AND EXISTS (SELECT 1 FROM pods p WHERE p.id = $1 AND p.visibility = 'public')))
-       AND NOT EXISTS (SELECT 1 FROM circles c WHERE c.id = $2::uuid AND c.join_policy = 'closed')
+       AND NOT EXISTS (SELECT 1 FROM circles c WHERE c.id = $2::uuid AND c.join_policy <> 'open')
      ) AS needs_tail`,
     [podId, circleId, own],
   );

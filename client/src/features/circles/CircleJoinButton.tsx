@@ -25,15 +25,25 @@ export default function CircleJoinButton({ circle, size }: { circle: CircleSumma
   }
 
   const press = async () => {
-    if (membership.isPending) return;
+    if (action === 'none' || membership.isPending) return;
     if (action === 'leave' && !(await ask({
       title: `Leave ${circle.name}?`,
-      body: circle.joinPolicy === 'closed' ? 'It is closed, so to come back you ask to join again.' : 'You can join again at any time.',
+      body: circle.joinPolicy === 'invite_only' ? 'It is by invitation only, so to come back someone who runs it invites you.'
+        : circle.joinPolicy === 'closed' ? 'It is closed, so to come back you ask to join again.' : 'You can join again at any time.',
       confirmLabel: 'Leave',
       tone: 'danger',
     }))) return;
     membership.mutate({ circleId: circle.id, name: circle.name, action });
   };
+
+  // Ben field test: an invite-only circle has nothing to press for someone outside it, only a line saying so.
+  if (action === 'none') {
+    return (
+      <span className="inline-flex min-h-[44px] shrink-0 items-center rounded-lg bg-gray-100 px-3 text-sm font-medium text-gray-600" data-testid={`circle-join-${circle.id}`} data-action="none">
+        {label}
+      </span>
+    );
+  }
 
   return (
     <>

@@ -8,8 +8,8 @@
 // 8-minute rounds, and the title's "Required" sat three screens above the button on a phone.
 //
 // T13 (1 Nov 2026; 30 Oct review 6.5, L20): from a circle (?circleId=, its managers only) the form is for everyone in
-// it: it says so, lists the circle's pods you run first, starts Private (the circle's members and the people invited)
-// and sends the circle. The event still lives in a pod you run; with none, "No pod to schedule in yet" as before.
+// it: it says so, lists only the circle's own pods that you run (Ben field test, 13 Nov 2026), starts Private (the
+// circle's members and the people invited) and sends the circle. With none of its pods, it says how to add one.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -178,7 +178,23 @@ export default function CreateSessionPage() {
         text="Events are scheduled in a pod you direct or host. Create a pod, or ask a pod's director to make you a host."
         action={{ label: 'Go to your pods', onClick: () => navigate('/pods') }}
       />
-    ) : <NewEventForm pods={schedulable} {...formProps} />;
+    ) : formProps.circle ? circleBody(formProps.circle, schedulable) : <NewEventForm pods={schedulable} {...formProps} />;
+  }
+
+  /**
+   * Ben field test (13 Nov 2026): "Show only Pods belonging to the active Circle when creating its events." The circle's
+   * own pods that you run, and nothing else (the server refuses any other pod too). With none, say how to get one.
+   */
+  function circleBody(c: PresetCircle, schedulable: PodRow[]) {
+    const { inCircle } = podsForCircle(schedulable, c.pods.map((p) => p.podId));
+    if (inCircle.length > 0) return <NewEventForm pods={inCircle} {...formProps} />;
+    return (
+      <Notice
+        title={`No pod in ${c.name} to schedule in yet`}
+        text={`A circle's events take place in one of its pods. On the ${c.name} page, add a pod you direct or host to the circle, then schedule the event.`}
+        action={{ label: `Back to ${c.name}`, onClick: () => navigate(back) }}
+      />
+    );
   }
 
   return (
@@ -250,7 +266,6 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
   // T13: a circle's event starts Private, which for it means the circle's members (and the pod's) and the invited.
   const [chosenVisibility, setChosenVisibility] = useState<EventVisibility | null>(null);
   const visibility = chosenVisibility ?? (circle ? 'private' : defaultEventVisibility(pod?.visibility));
-  const { inCircle, others } = podsForCircle(pods, circle?.pods.map((p) => p.podId) ?? []);
 
   /** The filled-in title follows the type and the pod until the member writes their own. */
   function refreshTitle(nextFormat: EventFormat) {
@@ -328,19 +343,9 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
                 aria-invalid={errors.podId ? true : undefined}
                 {...register('podId', { onChange: (e) => followPod(podOf(e.target.value), ev.formatChosen.current) })}
               >
-                <option value="">Select a pod</option>
-                {circle && inCircle.length > 0 ? (
-                  <>
-                    <optgroup label={`In ${circle.name}`}>
-                      {inCircle.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </optgroup>
-                    {others.length > 0 && (
-                      <optgroup label="Your other pods">
-                        {others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                      </optgroup>
-                    )}
-                  </>
-                ) : pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                <option value="">{circle ? `Select a pod in ${circle.name}` : 'Select a pod'}</option>
+                {/* From a circle, `pods` holds only the circle's own pods (circleBody, Ben field test). */}
+                {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
               {errors.podId && <p className="text-xs text-red-500 mt-1">{errors.podId.message}</p>}
             </div>

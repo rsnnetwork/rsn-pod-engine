@@ -27,7 +27,10 @@ export function refreshCircle(qc: QueryClient, circleId: string): Promise<unknow
   ]);
 }
 
-const CALLS: Record<CircleAction, (id: string) => Promise<{ data?: { data?: { status?: string } } }>> = {
+/** 'none' (an invite-only circle the member is outside) has no call: its button is only a line of text. */
+type CircleCall = Exclude<CircleAction, 'none'>;
+
+const CALLS: Record<CircleCall, (id: string) => Promise<{ data?: { data?: { status?: string } } }>> = {
   join: (id) => api.post(`/circles/${id}/join`),
   request: (id) => api.post(`/circles/${id}/request`),
   cancel: (id) => api.delete(`/circles/${id}/request`),
@@ -40,7 +43,7 @@ export function useCircleMembership() {
   const addToast = useToastStore((s) => s.addToast);
   return useMutation({
     networkMode: 'always',
-    mutationFn: async ({ circleId, action }: { circleId: string; name: string; action: CircleAction }) =>
+    mutationFn: async ({ circleId, action }: { circleId: string; name: string; action: CircleCall }) =>
       (await CALLS[action](circleId)).data?.data,
     onSuccess: async (answer, { circleId, name, action }) => {
       await refreshCircle(qc, circleId);

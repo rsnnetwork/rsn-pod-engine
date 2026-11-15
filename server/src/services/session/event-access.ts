@@ -184,7 +184,7 @@ export function outsideClosedCircleSql(sessionAlias: string, userParam: string):
   checked(sessionAlias, userParam);
   const s = sessionAlias;
   const u = userParam;
-  return `(${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles cc_c WHERE cc_c.id = ${s}.circle_id AND cc_c.join_policy = 'closed'
+  return `(${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles cc_c WHERE cc_c.id = ${s}.circle_id AND cc_c.join_policy <> 'open'
             AND NOT EXISTS (SELECT 1 FROM circle_members cc_m WHERE cc_m.circle_id = ${s}.circle_id AND cc_m.user_id = ${u})))`;
 }
 
@@ -308,7 +308,7 @@ export function publicEventsSql(sessionAlias: string): string {
   return `(
     (${s}.visibility IS NULL AND ${s}.pod_id IN (SELECT pe_p.id FROM pods pe_p WHERE pe_p.visibility = 'public'))
     OR ${s}.visibility IN ('public', 'public_with_approval')
-  ) AND NOT (${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles pc_c WHERE pc_c.id = ${s}.circle_id AND pc_c.join_policy = 'closed'))
+  ) AND NOT (${s}.circle_id IS NOT NULL AND EXISTS (SELECT 1 FROM circles pc_c WHERE pc_c.id = ${s}.circle_id AND pc_c.join_policy <> 'open'))
   AND ${s}.archived_at IS NULL AND ${s}.publication = 'published'`;
 }
 

@@ -138,7 +138,7 @@ export async function assertMayInviteToCircle(
   }
   const { id, name, join_policy: joinPolicy } = circle.rows[0];
   if (!isAdmin && !(await mayInviteToCircle(circleId, userId, undefined))) {
-    throw new AppError(403, 'AUTH_FORBIDDEN', joinPolicy === 'closed'
+    throw new AppError(403, 'AUTH_FORBIDDEN', joinPolicy !== 'open'
       ? 'Only the people who run this circle can invite to it.'
       : 'Only circle members can invite to a circle');
   }

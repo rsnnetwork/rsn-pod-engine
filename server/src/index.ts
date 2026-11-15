@@ -71,6 +71,7 @@ import meetingRoutes from './routes/meeting';
 import meetingsRoutes from './routes/meetings';
 import callsRoutes from './routes/calls';
 import circleRoutes from './routes/circles';
+import circleRequestRoutes from './routes/circle-requests';
 import { circleExportRoutes, podExportRoutes } from './routes/space-export';
 import entityRoutes from './routes/entities';
 import reportRoutes from './routes/reports';
@@ -402,6 +403,8 @@ app.use('/api/matches', matchesRoutes);
 app.use('/api/people', peopleRoutes);
 app.use('/api/agents', agentRoutes);
 app.use('/api/circles', circleRoutes);
+// Ben field test (13 Nov 2026): members ask for a new circle; platform admins answer.
+app.use('/api/circle-requests', circleRequestRoutes);
 app.use('/api/circles', circleExportRoutes); // its organisers' export: /:id/export (Shirley pilot S7)
 app.use('/api/entities', entityRoutes);
 app.use('/api/reports', reportRoutes);

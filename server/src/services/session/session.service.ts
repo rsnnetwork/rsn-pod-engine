@@ -196,7 +196,7 @@ export async function createSession(userId: string, input: CreateSessionInput, u
   // T13 (1 Nov 2026, L20): an event for a whole circle. The pod rule above still holds; on top of it, the circle
   // exists, is not archived and is run by this person. With no visibility sent it is private: the circle's members
   // (and the pod's) and the people invited. Production's form sends no circleId: nothing here runs.
-  const circle = input.circleId ? await assertMayScheduleForCircle(input.circleId, userId, userRole) : null;
+  const circle = input.circleId ? await assertMayScheduleForCircle(input.circleId, userId, userRole, input.podId) : null;
   const visibility = input.visibility ?? (circle ? 'private' : null);
 
   const sessionId = uuid();
@@ -370,7 +370,7 @@ export async function updateSession(sessionId: string, userId: string, input: Up
   const circleChanges = input.circleId !== undefined && input.circleId !== previousCircleId;
   let namedCircle: SessionCircle | null = null;
   if (circleChanges) {
-    if (input.circleId) namedCircle = await assertMayScheduleForCircle(input.circleId, userId, userRole);
+    if (input.circleId) namedCircle = await assertMayScheduleForCircle(input.circleId, userId, userRole, session.podId);
     else if (previousCircleId) await assertMayClearCircle(previousCircleId, userId, userRole);
     setClauses.push(`circle_id = $${paramIdx}`);
     values.push(input.circleId ?? null);

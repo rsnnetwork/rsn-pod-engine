@@ -21,21 +21,34 @@ import { isCircleManager } from './circle-managers';
 /** The refusal a person who does not run the circle reads. */
 export const circleEventRefusal = (circleName: string) => `Only the people who run ${circleName} can schedule an event for it.`;
 
+/** The refusal for an event put in a pod that is not one of the circle's (Ben field test, 13 Nov 2026). */
+export const circlePodRefusal = (circleName: string) =>
+  `Choose one of ${circleName}'s pods for this event. To use another pod, add it to ${circleName} first.`;
+
 /**
  * The circle a new or edited event is to be for: it exists and is not archived (404 otherwise), and the person runs
- * it (403 in a sentence otherwise). Returns the circle's id and name.
+ * it (403 in a sentence otherwise). Returns the circle's id and name. Ben field test (13 Nov 2026): the event's pod
+ * (`podId`) must be one of the circle's own pods, so a circle's event never lives in a pod outside it (400 otherwise).
  */
-export async function assertMayScheduleForCircle(circleId: string, userId: string, role: string | undefined): Promise<SessionCircle> {
-  const found = await query<SessionCircle>(
-    `SELECT id, name FROM circles WHERE id = $1 AND archived_at IS NULL`,
-    [circleId],
+export async function assertMayScheduleForCircle(
+  circleId: string,
+  userId: string,
+  role: string | undefined,
+  podId: string,
+): Promise<SessionCircle> {
+  const found = await query<SessionCircle & { pod_in_circle: boolean }>(
+    `SELECT c.id, c.name,
+            EXISTS (SELECT 1 FROM circle_pods cp WHERE cp.circle_id = c.id AND cp.pod_id = $2) AS pod_in_circle
+       FROM circles c WHERE c.id = $1 AND c.archived_at IS NULL`,
+    [circleId, podId],
   );
-  const circle = found.rows[0];
-  if (!circle) throw new NotFoundError('Circle', circleId);
+  const row = found.rows[0];
+  if (!row) throw new NotFoundError('Circle', circleId);
   if (!(await isCircleManager(circleId, userId, role))) {
-    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, circleEventRefusal(circle.name));
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, circleEventRefusal(row.name));
   }
-  return circle;
+  if (!row.pod_in_circle) throw new AppError(400, ErrorCodes.VALIDATION_ERROR, circlePodRefusal(row.name));
+  return { id: row.id, name: row.name };
 }
 
 /**

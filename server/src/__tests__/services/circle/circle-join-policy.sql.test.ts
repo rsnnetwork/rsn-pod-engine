@@ -44,6 +44,9 @@ const TABLES = [
   'event_join_requests', 'matching_templates',
   // T15: a circle's page names the entities linked to it (migration 130).
   'entities', 'circle_entities',
+  // Tables later work reads on these paths: removals (S2), event links (154: aliases, counters), the waiting list (145).
+  'circle_removals', 'event_admission_entries', 'event_admission_codes', 'event_waitlist', 'event_link_aliases', 'event_link_counters',
+  'event_groups', 'event_participant_groups', 'event_matching_questions', 'event_question_answers', 'event_matching_rules',
 ];
 
 const MIGRATION_128 = fs.readFileSync(path.join(__dirname, '../../../db/migrations/128_circle_join_policy.sql'), 'utf8');

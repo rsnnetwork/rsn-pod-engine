@@ -1,5 +1,6 @@
 // ─── Edit a circle's details (Shirley pilot S2, 11 Nov 2026; brief RSN 02, acceptance test 01) ─────────────────────
-// Its name and description, for the people who run it; who can join (Open or Closed), for its owner only (D3), in the
+// Its name and description, for the people who run it; who can join (Open, Closed or, since the Ben field test of 13 Nov
+// 2026, Invitation only), for its owner only (D3), in the
 // same words as the "Who can join" sheet. Only what changed is sent (PATCH /circles/:id); a name another circle here
 // already has is refused by the server and said inline. Saving Open lets everyone still waiting in, and says so first.
 import { useForm } from 'react-hook-form';
@@ -9,9 +10,9 @@ import Sheet from '@/features/reason/ui/Sheet';
 import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import api from '@/lib/api';
-import { cn } from '@/lib/utils';
 import { useToastStore } from '@/stores/toastStore';
-import { POLICY_COPY, POLICY_LABEL, WHO_CAN_JOIN, type CircleDetail } from './circle-logic';
+import type { CircleDetail } from './circle-logic';
+import CirclePolicyField from './CirclePolicyField';
 import { CIRCLE_DESCRIPTION_MAX, CIRCLE_NAME_MAX, CIRCLE_NAME_MIN, EDIT_DETAILS, circleEdits } from './circle-admin';
 import { circleErrorSentence, refreshCircle } from './useCircleActions';
 
@@ -38,7 +39,7 @@ export default function EditCircleSheet({ circle, onClose }: Props) {
   });
   const choice = watch('joinPolicy');
   const waiting = circle.requestCount ?? 0;
-  const opening = mayChoosePolicy && current === 'closed' && choice === 'open' && waiting > 0;
+  const opening = mayChoosePolicy && current !== 'open' && choice === 'open' && waiting > 0;
 
   const submit = handleSubmit((values) => {
     if (save.isPending) return;
@@ -89,31 +90,7 @@ export default function EditCircleSheet({ circle, onClose }: Props) {
           />
           {errors.description && <p role="alert" className="mt-1 text-[13px] text-reason-red">{errors.description.message}</p>}
         </div>
-        {mayChoosePolicy && (
-          <fieldset className="grid gap-2" data-testid="circle-edit-policy">
-            <legend className="mb-1.5 text-sm font-medium text-gray-600">{WHO_CAN_JOIN}</legend>
-            {(['open', 'closed'] as const).map((policy) => (
-              <label
-                key={policy}
-                className={cn(
-                  'flex min-h-[56px] cursor-pointer items-start gap-3 rounded-2xl border p-3.5',
-                  choice === policy ? 'border-reason-red bg-reason-pink' : 'border-reason-line bg-white',
-                )}
-              >
-                <input
-                  type="radio"
-                  value={policy}
-                  data-testid={`circle-edit-policy-${policy}`}
-                  className="mt-0.5 h-5 w-5 shrink-0 accent-reason-red"
-                  {...register('joinPolicy')}
-                />
-                <span className="min-w-0 text-[14px] text-reason-ink">
-                  <b>{POLICY_LABEL[policy]}:</b>{POLICY_COPY[policy].slice(POLICY_LABEL[policy].length + 1)}
-                </span>
-              </label>
-            ))}
-          </fieldset>
-        )}
+        {mayChoosePolicy && <CirclePolicyField field={register('joinPolicy')} choice={choice} testId="circle-edit-policy" />}
         {opening && (
           <p role="status" className="text-[13px] text-reason-muted">
             {waiting === 1 ? 'The person waiting to join will be let in.' : `The ${waiting} people waiting to join will be let in.`}

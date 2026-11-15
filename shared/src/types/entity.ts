@@ -10,6 +10,7 @@
 // client, so index.ts also gives each its own named re-export (Rollup CJS interop; see OPENINGS there).
 
 import type { PublicMember } from './user';
+import type { CircleJoinPolicy } from './circle';
 
 export const ENTITY_KINDS = [
   'company', 'startup', 'fund', 'university', 'community', 'charity', 'project',
@@ -207,7 +208,7 @@ export interface EntityCircle {
   id: string;
   name: string;
   memberCount: number | null;
-  joinPolicy: 'open' | 'closed';
+  joinPolicy: CircleJoinPolicy;
 }
 
 /** An entity on a circle's page (GET /api/circles/:id, `entities`). */

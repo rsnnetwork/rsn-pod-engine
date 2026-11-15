@@ -44,6 +44,8 @@ export const E = {
   // T14: the asks waiting to join a closed circle, for the people who run it
   circleRequests: (circleId: string) => `circle:${circleId}:requests`,
   userCircles: (userId: string) => `user:${userId}:circles`,
+  /** A member's own asks for a new circle and their answers. */
+  userCircleRequests: (userId: string) => `user:${userId}:circle-requests`,
   // Circle wall (S4, 11 Nov 2026): a circle's discussion feed, and one post's thread on it (the pod wall's pair)
   circleWall: (circleId: string) => `circle:${circleId}:wall`,
   circleWallPost: (postId: string) => `circle-wall-post:${postId}`,
@@ -111,6 +113,8 @@ export const E = {
   adminSessions: 'admin:sessions',
   adminUsers: 'admin:users',
   adminJoinRequests: 'admin:join-requests',
+  /** Asks for a new circle (Ben field test, 13 Nov 2026): the admins' review queue. */
+  adminCircleRequests: 'admin:circle-requests',
   adminViolations: 'admin:violations',
   adminSupportTickets: 'admin:support-tickets',
   adminAnalytics: 'admin:analytics',

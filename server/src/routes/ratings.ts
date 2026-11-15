@@ -68,6 +68,18 @@ router.get(
   }
 );
 
+/**
+ * Ben field test (13 Nov 2026): the rating screen now tells members "Your stars are not shown to them", and no screen
+ * shows them, so the API does not either. Someone else's stars on you and their private note reach only a platform
+ * admin; meet again stays, since the recap already shows a one-sided meet again to its person.
+ */
+function withoutOthersScores<T extends { fromUserId: string; qualityScore: number | null; feedback: string | null }>(
+  rows: T[], viewerId: string, role: string,
+): T[] {
+  if (hasRoleAtLeast(role as UserRole, UserRole.ADMIN)) return rows;
+  return rows.map((r) => (r.fromUserId === viewerId ? r : { ...r, qualityScore: null, feedback: null }));
+}
+
 // ─── GET /ratings/match/:matchId — Get ratings for a specific match ─────────
 
 router.get(
@@ -84,7 +96,7 @@ router.get(
       }
 
       const ratings = await ratingService.getRatingsByMatch(req.params.matchId);
-      res.json({ success: true, data: ratings });
+      res.json({ success: true, data: withoutOthersScores(ratings, req.user!.userId, req.user!.role) });
     } catch (err) {
       next(err);
     }
@@ -116,7 +128,7 @@ router.get(
     try {
       const sessionId = req.query.sessionId as string | undefined;
       const ratings = await ratingService.getRatingsReceived(req.user!.userId, sessionId);
-      res.json({ success: true, data: ratings });
+      res.json({ success: true, data: withoutOthersScores(ratings, req.user!.userId, req.user!.role) });
     } catch (err) {
       next(err);
     }

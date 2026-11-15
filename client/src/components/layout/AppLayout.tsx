@@ -106,6 +106,7 @@ export default function AppLayout() {
     { to: '/admin/pods', label: 'Pods' },
     { to: '/admin/sessions', label: 'Events' },
     { to: '/admin/join-requests', label: 'Join Requests' },
+    { to: '/admin/circle-requests', label: 'Circle Requests' },
     { to: '/admin/moderation', label: 'Moderation' },
     { to: '/admin/templates', label: 'Templates' },
     { to: '/admin/email', label: 'Email' },

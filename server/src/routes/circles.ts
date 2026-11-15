@@ -42,14 +42,19 @@ const router = Router();
 
 const isAdminRole = (role?: string) => role === UserRole.ADMIN || role === UserRole.SUPER_ADMIN;
 
+// Ben field test (13 Nov 2026): a third choice, invite only; and a new circle chooses who can join as it is made.
+const JOIN_POLICIES = ['open', 'closed', 'invite_only'] as const;
+const joinPolicySchema = z.enum(JOIN_POLICIES, { errorMap: () => ({ message: 'Choose open, ask to join, or invitation only.' }) });
 const createBodySchema = z.object({
   name: z.string().min(2).max(120),
   description: z.string().max(2000).optional().nullable(),
   parentCircleId: z.string().uuid().optional().nullable(),
+  // Absent: closed (the service's default), never open.
+  joinPolicy: joinPolicySchema.optional(),
 });
 const updateBodySchema = createBodySchema.partial().extend({
   // T14: who can join. Production's client never sends it.
-  joinPolicy: z.enum(['open', 'closed']).optional(),
+  joinPolicy: joinPolicySchema.optional(),
 });
 const attachBodySchema = z.object({ podId: z.string().uuid().transform((s) => s.toLowerCase()) });
 // S2: the roles the owner gives and takes ('owner' moves only through a handover).
@@ -119,7 +124,7 @@ router.patch('/:id', authenticate, circleWriteLimiter, uuidInPath('id', PATH_REF
       // Closing withdraws the invites of people who do not run it (final fix wave S2): the circle's invites and each
       // inviter's and invitee's own list change.
       const policyTags = req.body.joinPolicy === undefined ? []
-        : [E.circleRequests(req.params.id), ...(req.body.joinPolicy === 'closed' ? [E.circleInvites(req.params.id)] : [])];
+        : [E.circleRequests(req.params.id), ...(req.body.joinPolicy !== 'open' ? [E.circleInvites(req.params.id)] : [])];
       void fanoutCircleChange(req.params.id, req.user!.userId, approved, policyTags);
       if (changed?.invitesChangedFor?.length) void fanoutOwnInvites(changed.invitesChangedFor);
       void joinService.ringApproved(req.params.id, req.body.name?.trim() || circle.name, approved);

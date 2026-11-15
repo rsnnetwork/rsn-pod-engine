@@ -4,7 +4,7 @@
 // The server says, per circle, who may do what (CircleAccess: joinPolicy, myStatus, canManage, canInvite,
 // requestCount, locked); this turns it into the button, the setting and the sentences. A server from before T14 sends
 // none of those fields: then a circle reads as open, and the member's place comes from isMember, as before.
-import type { CircleAccess, CircleEntityLink, CircleJoinPolicy, CircleMyStatus } from '@rsn/shared';
+import type { CircleAccess, CircleCreationRequestStatus, CircleEntityLink, CircleJoinPolicy, CircleMyStatus } from '@rsn/shared';
 import { E } from '../../realtime/entities';
 import { memberActions } from './circle-admin';
 
@@ -31,13 +31,38 @@ export interface CircleDetail extends CircleSummary {
   entities?: CircleEntityLink[];
 }
 
-export const POLICY_LABEL: Record<CircleJoinPolicy, string> = { open: 'Open', closed: 'Closed' };
+// Ben field test (13 Nov 2026): a third choice, invitation only. Each sentence starts with its label and a colon: the
+// settings sheet shows the label in bold and the rest after it.
+export const POLICY_LABEL: Record<CircleJoinPolicy, string> = { open: 'Open', closed: 'Closed', invite_only: 'Invitation only' };
 export const POLICY_COPY: Record<CircleJoinPolicy, string> = {
   open: 'Open: anyone on REASON can join.',
   closed: 'Closed: people ask to join and you approve them. People you invite join straight away.',
+  invite_only: 'Invitation only: nobody can ask to join. Only the people you or your moderators invite can join.',
 };
+/** The three choices, in the order every form shows them. */
+export const POLICY_ORDER: readonly CircleJoinPolicy[] = ['open', 'closed', 'invite_only'];
+/** A new circle starts closed unless its maker chooses otherwise (the server's default too). */
+export const NEW_CIRCLE_POLICY: CircleJoinPolicy = 'closed';
 export const WHO_CAN_JOIN = 'Who can join';
 export const LOCKED_COPY = 'This circle is closed. Ask to join to see its wall, members and events.';
+export const INVITE_ONLY_LOCKED_COPY = 'This circle is by invitation only. Its owner or a moderator can invite you.';
+
+/** What someone outside a circle they may not see reads, in the circle's own terms. */
+export function lockedCopy(policy: CircleJoinPolicy | undefined): string {
+  return policy === 'invite_only' ? INVITE_ONLY_LOCKED_COPY : LOCKED_COPY;
+}
+
+/** Whether a circle keeps outsiders out (closed or invitation only). An older server sends no policy: open. */
+export function isRestricted(policy: CircleJoinPolicy | undefined): boolean {
+  return policy === 'closed' || policy === 'invite_only';
+}
+
+/** What the owner is told once a new choice is saved. */
+export function policySavedToast(name: string, policy: CircleJoinPolicy): string {
+  if (policy === 'closed') return `${name} is closed. People now ask to join.`;
+  if (policy === 'invite_only') return `${name} is by invitation only. Only the people you invite can join.`;
+  return `${name} is open. Anyone on REASON can join.`;
+}
 export const NO_REQUESTS = 'Nobody is waiting to join.';
 export const ATTACH_EMPTY = 'You have no other pods to attach. Pods you direct or host are listed here.';
 /** T15 (30 Oct review 7.3): the circle's Organisations. */
@@ -54,16 +79,20 @@ export function placeOf(c: Pick<CircleSummary, 'isMember' | 'myStatus'>): Circle
   return c.isMember ? 'member' : null;
 }
 
-export type CircleAction = 'join' | 'request' | 'cancel' | 'leave';
+/** `none`: an invite-only circle the viewer is outside; there is nothing to press, only a line saying so. */
+export type CircleAction = 'join' | 'request' | 'cancel' | 'leave' | 'none';
 
 /**
  * The circle's one button: Join (open), Ask to join (closed, or turned down before: they may ask again),
  * Requested · Cancel (waiting), or Leave. Someone who runs a closed circle without being in it joins directly.
+ * Invitation only (Ben field test): no button for someone outside it, only "Invitation only"; an ask from before the
+ * circle became invite-only can still be withdrawn.
  */
 export function joinButton(c: Pick<CircleSummary, 'isMember' | 'myStatus' | 'joinPolicy' | 'canManage'>): { action: CircleAction; label: string } {
   const place = placeOf(c);
   if (place === 'member') return { action: 'leave', label: 'Leave' };
   if (place === 'requested') return { action: 'cancel', label: 'Requested · Cancel' };
+  if (c.joinPolicy === 'invite_only' && !c.canManage) return { action: 'none', label: 'Invitation only' };
   if (c.joinPolicy === 'closed' && !c.canManage) return { action: 'request', label: 'Ask to join' };
   return { action: 'join', label: 'Join' };
 }
@@ -116,3 +145,11 @@ export function roleBadge(role: string): string | null {
   if (role === 'moderator') return 'MOD';
   return null;
 }
+
+/** Where a member's ask for a new circle stands, in plain words (Ben field test, 13 Nov 2026). */
+export const REQUEST_STATUS_LABEL: Record<CircleCreationRequestStatus, string> = {
+  pending: 'Waiting for review',
+  approved: 'Approved',
+  declined: 'Not approved',
+  cancelled: 'Withdrawn',
+};
