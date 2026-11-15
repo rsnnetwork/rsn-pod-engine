@@ -9,13 +9,14 @@
 // MeetingStage reads LiveKit (mount it inside the meeting's <LiveKitRoom>);
 // MeetingStageView only draws the tiles it is given.
 
-import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useConnectionState, useLocalParticipant, useRoomContext, useTracks, VideoTrack } from '@livekit/components-react';
 import { isTrackReference, type TrackReferenceOrPlaceholder } from '@livekit/components-core';
 import { ConnectionState, RoomEvent, Track } from 'livekit-client';
 import { Columns2, Loader2, Mic, MicOff, Pin, PinOff, PictureInPicture2, UserPlus, Users, VideoOff } from 'lucide-react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
+import { useBoxSize } from '@/hooks/useBoxSize';
 import { VideoTile } from '../VideoRoom';
 import { planStage, SIDE_BY_SIDE_QUERY, type Box, type PairView, type TileFill } from './liveLayout';
 
@@ -54,30 +55,6 @@ function personName(name: string | undefined, identity: string | undefined): str
 /** A camera that is published and not muted (turning a camera off mutes it; UX2). */
 function hasLivePicture(trackRef?: TrackReferenceOrPlaceholder): boolean {
   return !!trackRef?.publication?.track && !trackRef.publication.isMuted;
-}
-
-/** The size of an element's box, kept up to date as it resizes. */
-function useBoxSize<T extends HTMLElement>(): [RefObject<T>, { w: number; h: number }] {
-  const ref = useRef<T>(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const read = () => {
-      const r = el.getBoundingClientRect();
-      const next = { w: Math.floor(r.width), h: Math.floor(r.height) };
-      setSize((s) => (s.w === next.w && s.h === next.h ? s : next));
-    };
-    read();
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', read);
-      return () => window.removeEventListener('resize', read);
-    }
-    const ro = new ResizeObserver(read);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, size];
 }
 
 function initialOf(name: string): string {

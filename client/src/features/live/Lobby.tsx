@@ -4,13 +4,15 @@ import { useBgEngine } from '@/hooks/useBgEngine';
 import { BackgroundPanel } from './BackgroundPanel';
 import { BgCameraPublisher, turnCameraOn } from './BgCameraPublisher';
 import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, memo, type CSSProperties } from 'react';
 import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 import { useVisibilityPartition } from './useVisibilityPartition';
 import { computeTileWindow } from './tileWindow';
+import { planLobbyGrid, type LobbyGrid } from './lobbyGrid';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
+import { useBoxSize } from '@/hooks/useBoxSize';
 import {
   LiveKitRoom,
   VideoTrack,
@@ -25,6 +27,7 @@ import { isTrackReference } from '@livekit/components-core';
 import '@livekit/components-styles';
 import { Track, ConnectionState, RoomEvent, VideoPresets } from 'livekit-client';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 
 // Bug 10 (April 19) — Meet/Zoom-style reaction badge anchored above
 // the lobby tile name plate. Subscribes only to this user's entry so
@@ -40,13 +43,62 @@ const LobbyTileReaction = memo(function LobbyTileReaction({ userId }: { userId?:
   );
 });
 
+/** How a tile fills its slot in the main room (see tileFrameClass in LobbyMosaic). */
+type TileFrame = 'pinned' | 'thumb' | 'cell' | 'cell-large';
+
+interface TileOptions {
+  isPinned?: boolean;
+  onClick?: () => void;
+  frame?: TileFrame;
+  /** How big a grid cell is: a small one gets a smaller initial, a tiny one only its name and badges. */
+  cellSize?: CellSize;
+  /** false when the viewer's own controls are drawn in the bar under the grid (the tile is too small for them). */
+  controlsInTile?: boolean;
+}
+
+type CellSize = 'regular' | 'small' | 'tiny';
+
+/**
+ * Below SMALL_CELL_H the initial shrinks, so it never runs past a small tile's edges; below TINY_CELL_H (a full room
+ * on a short phone) the tile keeps just the name and the mic badge, since a pin button and an initial would cover
+ * the name (a tap on the tile still pins it).
+ */
+const SMALL_CELL_H = 100;
+const TINY_CELL_H = 56;
+
+function cellSizeOf(tileH: number): CellSize {
+  if (tileH < TINY_CELL_H) return 'tiny';
+  return tileH < SMALL_CELL_H ? 'small' : 'regular';
+}
+
+/**
+ * The smallest tile that holds the viewer's own controls (name, then mic / camera / background, and Mute All for a
+ * host; the labels show from the sm breakpoint). On a smaller tile they would be cut off, so they move to a bar under
+ * the grid instead: a phone's tiles are all the same size now, too small for a host's row of controls.
+ */
+function selfControlsFitTile(w: number, h: number, isHost: boolean, phone: boolean): boolean {
+  const minW = phone ? (isHost ? 215 : 125) : (isHost ? 310 : 215);
+  return w >= minW && h >= 90;
+}
+
+/** The planned grid as CSS: fixed tracks of the planned tile size, so the grid is exactly the size that fits. */
+function lobbyGridStyle(grid: LobbyGrid): CSSProperties {
+  return {
+    gridTemplateColumns: `repeat(${grid.cols}, ${grid.tileW}px)`,
+    gridAutoRows: `${grid.tileH}px`,
+    gap: `${grid.gap}px`,
+  };
+}
+
 function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: string }) {
   const { ask, confirmDialog } = useConfirm();
   const tracks = useTracks(
     [{ source: Track.Source.Camera, withPlaceholder: true }],
     { onlySubscribed: false },
   );
-  const participants = useParticipants();
+  // Subscribed for its re-render on every join and leave (the room count used
+  // to pick the column classes; the grid now sizes itself from the tiles).
+  useParticipants();
   const { localParticipant } = useLocalParticipant();
   // UX2 (June-10 debrief) — a remote tile's mic/cam icon could show the wrong
   // state because the mosaic didn't re-render when a REMOTE participant toggled
@@ -166,30 +218,14 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     return () => clearTimeout(t);
   }, [holdActive]);
 
-  // Responsive grid based on density preference
-  const n = participants.length;
-  // Bug 8 (18 May Stefan) + Bug 49 (19 May Stefan) — three densities must be
-  // VISUALLY distinct on mobile, not just on desktop. Stefan flagged 19 May
-  // that normal and spacious looked "almost the same" on a phone — root
-  // cause: at n=2 (the most common test case) both rendered grid-cols-1 on
-  // mobile, identical layout. Now:
-  //   - compact:  3 cols (smallest tiles, tightest gap, info-dense)
-  //   - normal:   2 cols on mobile when n>=2 (so n=2 is side-by-side, not
-  //               one giant column tile that looks the same as spacious)
-  //   - spacious: 1 col with extra horizontal padding so the tile is
-  //               framed away from the screen edges (max-w-md auto-mx),
-  //               making the difference unmistakable vs normal at every n.
-  const gridCols = lobbyDensity === 'compact'
-    ? (n <= 4 ? 'grid-cols-3 sm:grid-cols-4' : 'grid-cols-3 sm:grid-cols-5 lg:grid-cols-6')
-    : lobbyDensity === 'spacious'
-    ? 'grid-cols-1'
-    : // normal (default) — always at least 2 cols on mobile from n=2 up so
-      // it's distinct from spacious (which stays 1 col with framing).
-      n <= 1 ? 'grid-cols-1'
-      : n <= 4 ? 'grid-cols-2 sm:grid-cols-2'
-      : n <= 9 ? 'grid-cols-2 sm:grid-cols-3'
-      : 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-5';
-  const gapClass = lobbyDensity === 'compact' ? 'gap-1.5' : lobbyDensity === 'spacious' ? 'gap-6' : 'gap-3';
+  // 15 Nov 2026 (tester, 13 Nov: "participants should not need to scroll to
+  // find others") — the grid is laid out from the size of the area it is
+  // actually given (lobbyGrid.planLobbyGrid), not from fixed column classes
+  // with width-only 16:9 tiles, so every tile in the tile window is on screen
+  // and the grid never scrolls. Density only biases the columns (Bug 8 / Bug
+  // 49: compact packs more across, spacious takes the largest tiles, normal
+  // sits two people side by side), and every choice fits.
+  const [gridAreaRef, gridArea] = useBoxSize<HTMLDivElement>();
   // Bug 49 — spacious mode on mobile needs an inner cap + auto-margins so
   // the 1-col tile is visibly framed (not edge-to-edge identical to normal
   // at n=2). max-w-md (~28rem / 448px) is wider than 360-414px mobile
@@ -312,39 +348,34 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     }
   }, [cameraTracksSorted, pinnedSid, visibilityFor]);
 
-  // Issue 12 (21 May Stefan re-test) — "Host tiles must REMAIN LARGER
-  // than other participants, and also sit next to each other." Phase Q's
-  // col-span-2 row-span-2 worked at compact density (4+ cols → two hosts
-  // at col-span-2 each fit side-by-side in row 1) but collapsed at
-  // normal density (2 cols → col-span-2 = full row, so two hosts
-  // stacked). The first attempted fix (cc09a19) dropped multi-host
-  // tiles to `aspect-video` (same size as participants), which Stefan
-  // re-flagged as wrong: hosts must stay visually bigger even when
-  // there are two or three of them.
-  //
-  // Final shape:
-  //   • 1 host in any density        → col-span-2 row-span-2 (hero / Phase Q)
-  //   • 2+ hosts in compact density  → col-span-2 row-span-2 (works there
-  //                                    because the grid is ≥4 cols, so
-  //                                    two col-span-2 tiles share row 1)
-  //   • 2+ hosts in narrow density   → col-span-1 with `aspect-[4/3]`
-  //     (normal + spacious — 2-col)    instead of aspect-video. Same width
-  //                                    as a participant tile but ~1.33×
-  //                                    taller, so hosts remain visibly
-  //                                    bigger AND adjacent in row 1.
-  const actingHostCountInGrid = cameraTracks.reduce((count, t) => {
+  // Issue 12 (21 May Stefan re-test) — "Host tiles must REMAIN LARGER than
+  // other participants, and also sit next to each other." 15 Nov 2026 — but a
+  // host tile fixed at 2 x 2 pushed everyone else below the fold on a phone
+  // (tester, 13 Nov). The acting hosts (director + cohosts + opt-ins, minus
+  // demoted tiles) still lead the grid, side by side, and still wear the red
+  // ring; planLobbyGrid draws them 2 x 2 only on a wide area and only when
+  // everyone else still fits at a fair size. On a phone every tile is the same
+  // size, so the host sees every participant on first load.
+  const isLargeHostTile = (t: any) => {
     const id = t.participant.identity;
-    return id && hostsSet.has(id) && !tileDemotedSet.has(id) ? count + 1 : count;
-  }, 0);
-  const narrowGrid = lobbyDensity === 'normal' || lobbyDensity === 'spacious';
-  const useBigHostTiles = actingHostCountInGrid <= 1 || !narrowGrid;
-  // Multi-host narrow-grid path — taller-than-participant aspect ratio
-  // keeps the visual hierarchy while col-span-1 lets them sit adjacent.
-  const multiHostNarrowTileClass = 'aspect-[4/3] col-span-1 row-span-1 ring-2 ring-rsn-red/30';
-  const soloOrCompactHostTileClass = 'aspect-video col-span-2 row-span-2 ring-2 ring-rsn-red/30';
+    return !!id && hostsSet.has(id) && !tileDemotedSet.has(id);
+  };
+  const hostRingClass = 'ring-2 ring-rsn-red/30';
+  // How a tile fills its slot: the pinned / big-speaker frame fills its box;
+  // a strip thumbnail keeps the camera's 16:9; a grid cell fills the cell the
+  // planner sized (16:9 already), and a larger host cell spans 2 x 2.
+  const tileFrameClass: Record<TileFrame, string> = {
+    pinned: 'h-full w-full',
+    thumb: 'aspect-video',
+    cell: 'h-full w-full',
+    'cell-large': 'h-full w-full col-span-2 row-span-2',
+  };
 
   // Helper to render a single video tile with all overlays
-  const renderTile = (trackRef: any, { isPinned = false, onClick }: { isPinned?: boolean; onClick?: () => void } = {}) => {
+  const renderTile = (
+    trackRef: any,
+    { isPinned = false, onClick, frame = 'thumb', cellSize = 'regular', controlsInTile = true }: TileOptions = {},
+  ) => {
     const name = trackRef.participant.name || trackRef.participant.identity || 'User';
     // UX2 (June-10 debrief) — camera "on" means a published video track that is
     // NOT muted. Turning a camera off MUTES the track (it stays published), so
@@ -373,7 +404,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
         data-self={isLocal ? 'true' : undefined}
         data-host={tileIsHost ? 'true' : undefined}
         data-acting-host={isActingHost ? 'true' : undefined}
-        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isActingHost ? (useBigHostTiles ? soloOrCompactHostTileClass : multiHostNarrowTileClass) : 'aspect-video'} flex items-center justify-center group cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_200px]`}
+        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${tileFrameClass[isPinned ? 'pinned' : frame]} ${isActingHost && !isPinned ? hostRingClass : ''} flex items-center justify-center group cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_200px]`}
         onClick={onClick}
       >
         {hasVideo && isTrackReference(trackRef) ? (
@@ -389,8 +420,9 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
             <VideoTrack trackRef={trackRef} className={`h-full w-full ${isPinned ? 'object-cover' : 'object-contain'}`} />
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-2">
-            <div className={`${isPinned ? 'h-20 w-20' : 'h-14 w-14'} rounded-full bg-[#5f6368] flex items-center justify-center text-white font-semibold text-xl`}>
+          <div className={`flex flex-col items-center gap-2 ${cellSize === 'tiny' ? 'hidden' : ''}`}>
+            {/* A small grid cell (a full room on a phone) gets a smaller initial so it stays inside the tile. */}
+            <div className={`${isPinned ? 'h-20 w-20 text-xl' : cellSize === 'small' ? 'h-9 w-9 text-sm' : 'h-14 w-14 text-xl'} rounded-full bg-[#5f6368] flex items-center justify-center text-white font-semibold`}>
               {name.charAt(0).toUpperCase()}
             </div>
           </div>
@@ -401,7 +433,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
             anyone else in hostsSet shows (Co-Host) in indigo. Mirrors the
             ParticipantList badge styling so the role is obvious wherever
             you look. */}
-        {isLocal ? (
+        {isLocal && controlsInTile ? (
           <div className="absolute bottom-1.5 left-1.5 right-1.5 flex flex-col items-start gap-1" onClick={e => e.stopPropagation()}>
             <div className="bg-black/60 backdrop-blur-sm rounded px-2 py-0.5 text-[11px] text-white truncate max-w-[90%] flex items-center gap-1.5">
               {name}
@@ -414,7 +446,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
             <LobbyMediaControls isHost={isHost} sessionId={sessionId} />
           </div>
         ) : (
-          <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm rounded px-2 py-0.5 text-[11px] text-white truncate max-w-[90%] flex items-center gap-1.5">
+          <div className={`absolute ${cellSize === 'tiny' ? 'bottom-1 left-1 px-1.5 text-[10px]' : 'bottom-2 left-2 px-2 text-[11px]'} bg-black/60 backdrop-blur-sm rounded py-0.5 text-white truncate max-w-[90%] flex items-center gap-1.5`}>
             {name}
             {tileIsHost ? (
               <span className="text-[9px] font-medium text-amber-300 ml-0.5">(Host)</span>
@@ -441,7 +473,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
           title={isPinned ? `Unpin ${name}` : `Pin ${name} as spotlight`}
           aria-label={isPinned ? `Unpin ${name}` : `Pin ${name}`}
           data-testid={isPinned ? 'tile-unpin-button' : 'tile-pin-button'}
-          className={`absolute ${isLocal ? 'top-1.5' : 'top-1.5'} right-1.5 z-10 bg-black/55 hover:bg-black/75 backdrop-blur-sm rounded-full p-1.5 text-white transition-colors ${isPinned ? 'ring-1 ring-amber-300/70 text-amber-200' : ''}`}
+          className={`absolute ${isLocal ? 'top-1.5' : 'top-1.5'} right-1.5 z-10 bg-black/55 hover:bg-black/75 backdrop-blur-sm rounded-full p-1.5 text-white transition-colors ${isPinned ? 'ring-1 ring-amber-300/70 text-amber-200' : ''} ${cellSize === 'tiny' ? 'hidden' : ''}`}
         >
           {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
         </button>
@@ -534,7 +566,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
             remote tiles the top-left icon is still the only mic signal
             so it stays. */}
         {!isMicOn && !isLocal && (
-          <div className="absolute top-2 left-2 bg-red-500/90 rounded-full p-1">
+          <div className={`absolute ${cellSize === 'tiny' ? 'top-1 right-1' : 'top-2 left-2'} bg-red-500/90 rounded-full p-1`}>
             <MicOff className="h-2.5 w-2.5 text-[#1a1a2e]" />
           </div>
         )}
@@ -544,29 +576,43 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     );
   };
 
+  // The viewer's own mic / camera / background (and a host's Mute All) when
+  // their tile is too small to carry them: a bar under the tiles, same controls.
+  const selfControlsBar = (
+    <div data-testid="lobby-self-controls" className="shrink-0 flex justify-center">
+      <div className="rounded-full bg-[#3c4043] px-2 py-1.5">
+        <LobbyMediaControls isHost={isHost} sessionId={sessionId} />
+      </div>
+    </div>
+  );
+
   // S21 — held grid while reconnecting: same layout, placeholder tiles
   // (avatar initial + name) from the last good roster, with the badge.
   // Rendered INSTEAD of live tiles (no stale interactive controls, no
   // dead video elements).
   if (holdActive) {
+    const held = heldRosterRef.current;
+    const heldGrid = planLobbyGrid({ width: gridArea.w, height: gridArea.h, cells: held.length, emphasized: 0, density: lobbyDensity });
     return (
-      <div className={`relative flex flex-col gap-3 w-full ${maxWClass} mx-auto`} data-testid="lobby-reconnect-hold">
-        <div className="flex justify-center">
+      <div className={`relative flex flex-col gap-3 w-full ${maxWClass} mx-auto h-full min-h-0`} data-testid="lobby-reconnect-hold">
+        <div className="flex justify-center shrink-0">
           <span className="inline-flex items-center gap-2 rounded-full bg-amber-500 text-white text-xs font-semibold px-3 py-1.5 shadow">
             <Loader2 className="h-3 w-3 animate-spin" /> Reconnecting…
           </span>
         </div>
-        <div className={`grid ${gridCols} ${gapClass} opacity-80`}>
-          {heldRosterRef.current.map(p => (
-            <div key={p.identity} className="relative aspect-video rounded-xl bg-gray-900 flex items-center justify-center">
-              <div className="flex flex-col items-center gap-1.5">
-                <div className="h-10 w-10 rounded-full bg-gray-700 text-white flex items-center justify-center text-sm font-semibold">
-                  {(p.name || '?').charAt(0).toUpperCase()}
+        <div ref={gridAreaRef} data-testid="lobby-grid-area" className="flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden">
+          <div className="grid opacity-80" style={lobbyGridStyle(heldGrid)}>
+            {held.map(p => (
+              <div key={p.identity} className="relative h-full w-full overflow-hidden rounded-xl bg-gray-900 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-1.5">
+                  <div className="h-10 w-10 rounded-full bg-gray-700 text-white flex items-center justify-center text-sm font-semibold">
+                    {(p.name || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <span className="text-xs text-gray-300 max-w-[90%] truncate">{p.name}</span>
                 </div>
-                <span className="text-xs text-gray-300 max-w-[90%] truncate">{p.name}</span>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     );
@@ -590,16 +636,18 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
       tracks: unpinnedTracks, density: lobbyDensity, isMobile,
       localSid: localParticipant.sid, sidOf: (t: any) => t.participant.sid,
     });
+    const selfInStrip = stripTracks.some(t => t.participant.sid === localParticipant.sid);
     return (
-      <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto h-full`}>
+      <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto h-full min-h-0`}>
         <div className="flex-1 min-h-0">
           {renderTile(pinnedTrack, { isPinned: true, onClick: () => setEffectivePin(null) })}
         </div>
+        {selfInStrip && selfControlsBar}
         {unpinnedTracks.length > 0 && (
           <div className="flex gap-2 h-24 shrink-0 overflow-x-auto">
             {stripTracks.map(t => (
               <div key={t.participant.sid} className="flex-shrink-0 w-32">
-                {renderTile(t, { onClick: () => setEffectivePin(t.participant.sid) })}
+                {renderTile(t, { onClick: () => setEffectivePin(t.participant.sid), controlsInTile: false })}
               </div>
             ))}
             {stripOverflow > 0 && (
@@ -623,17 +671,42 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   //      Pills with name + audio icon; no video tile.
   // Hidden hosts/cohosts are filtered out entirely.
   // VID-2 — cap the main grid by density × viewport; the rest become "+N more".
-  const { visible: gridTracks, overflowCount } = computeTileWindow({
+  const { visible: windowTracks, overflowCount } = computeTileWindow({
     tracks: cameraTracks, density: lobbyDensity, isMobile,
     localSid: localParticipant.sid, sidOf: (t: any) => t.participant.sid,
   });
+  // The acting hosts lead the grid together (a demoted cohost keeps the sort
+  // position of a participant tile here), so the larger host cells sit side by
+  // side in the top rows and the grid fills around them with no holes.
+  const largeTracks = windowTracks.filter(isLargeHostTile);
+  const gridTracks = largeTracks.length > 0
+    ? [...largeTracks, ...windowTracks.filter(t => !isLargeHostTile(t))]
+    : windowTracks;
+  const grid = planLobbyGrid({
+    width: gridArea.w,
+    height: gridArea.h,
+    cells: gridTracks.length + (overflowCount > 0 ? 1 : 0),
+    emphasized: largeTracks.length,
+    density: lobbyDensity,
+  });
+  const cellSize = cellSizeOf(grid.tileH);
+  const smallCells = cellSize !== 'regular';
+  const showGrid = cameraTracks.length > 0;
+  const selfTrack = gridTracks.find(t => t.participant.sid === localParticipant.sid);
+  const selfSpan = selfTrack && grid.span === 2 && isLargeHostTile(selfTrack) ? 2 : 1;
+  const selfControlsInTile = !selfTrack || selfControlsFitTile(
+    selfSpan * grid.tileW + (selfSpan - 1) * grid.gap,
+    selfSpan * grid.tileH + (selfSpan - 1) * grid.gap,
+    isHost,
+    isMobile,
+  );
   return (
-    <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto`}>
+    <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto h-full min-h-0`}>
       {confirmDialog}
       {bigSpeakerTracks.length > 0 && (
         <div
           data-testid="lobby-big-speaker-stage"
-          className={`grid gap-3 ${
+          className={`grid auto-rows-fr gap-3 min-h-0 ${showGrid ? 'basis-[45%] shrink-0' : 'flex-1'} ${
             bigSpeakerTracks.length === 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'
           }`}
         >
@@ -645,33 +718,49 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
           )}
         </div>
       )}
-      <div className={`grid ${gridCols} ${gapClass} w-full`}>
-        {gridTracks.map(trackRef =>
-          renderTile(trackRef, { onClick: () => setEffectivePin(trackRef.participant.sid) })
-        )}
-        {overflowCount > 0 && (
+      {showGrid && (
+        <div ref={gridAreaRef} data-testid="lobby-grid-area" className="flex-1 min-h-0 w-full flex items-center justify-center overflow-hidden">
           <div
-            data-testid="lobby-overflow-tile"
-            className="relative rounded-xl bg-[#3c4043] aspect-video flex flex-col items-center justify-center text-gray-300 [content-visibility:auto]"
+            data-testid="lobby-grid"
+            data-cols={grid.cols}
+            data-rows={grid.rows}
+            className="grid"
+            style={lobbyGridStyle(grid)}
           >
-            <Users className="h-6 w-6 mb-1" />
-            <span className="text-sm font-semibold">+{overflowCount} more</span>
-            <span className="text-[10px] text-gray-500">audio still on</span>
+            {gridTracks.map(trackRef =>
+              renderTile(trackRef, {
+                onClick: () => setEffectivePin(trackRef.participant.sid),
+                frame: grid.span === 2 && isLargeHostTile(trackRef) ? 'cell-large' : 'cell',
+                cellSize,
+                controlsInTile: selfControlsInTile,
+              })
+            )}
+            {overflowCount > 0 && (
+              <div
+                data-testid="lobby-overflow-tile"
+                className="relative h-full w-full overflow-hidden rounded-xl bg-[#3c4043] flex flex-col items-center justify-center text-gray-300 [content-visibility:auto]"
+              >
+                <Users className={`${smallCells ? 'h-4 w-4' : 'h-6 w-6 mb-1'}`} />
+                <span className="text-sm font-semibold">+{overflowCount} more</span>
+                {!smallCells && <span className="text-[10px] text-gray-500">audio still on</span>}
+              </div>
+            )}
           </div>
-        )}
-        {cameraTracks.length === 0 && bigSpeakerTracks.length === 0 && (
-          <div className="col-span-full text-center py-12 text-gray-500 text-sm">
-            <div className="h-16 w-16 rounded-full bg-[#3c4043] flex items-center justify-center mx-auto mb-3">
-              <VideoOff className="h-6 w-6 text-gray-400" />
-            </div>
-            Waiting for participants to enable cameras...
+        </div>
+      )}
+      {cameraTracks.length === 0 && bigSpeakerTracks.length === 0 && (
+        <div className="flex-1 min-h-0 text-center py-12 text-gray-500 text-sm">
+          <div className="h-16 w-16 rounded-full bg-[#3c4043] flex items-center justify-center mx-auto mb-3">
+            <VideoOff className="h-6 w-6 text-gray-400" />
           </div>
-        )}
-      </div>
+          Waiting for participants to enable cameras...
+        </div>
+      )}
+      {!selfControlsInTile && selfControlsBar}
       {producerTracks.length > 0 && (
         <div
           data-testid="lobby-producer-strip"
-          className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-[#1f2024] border border-[#3c4043]"
+          className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-[#1f2024] border border-[#3c4043]"
         >
           <span className="text-[10px] uppercase tracking-wide text-gray-400 mr-1">
             Producers
@@ -1118,7 +1207,9 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
   const isScheduled = sessionStatus === 'scheduled';
 
   return (
-    <div className="text-center space-y-3">
+    // empty:hidden — in the steady state every branch below renders nothing, and
+    // an empty box would still take a gap in the lobby's extras column.
+    <div className="text-center space-y-3 empty:hidden">
       {sessionStatus === 'closing_lobby' ? (
         // Blocking "All rounds complete" overlay removed (April 17 screenshot).
         // Host has controls to start another round / end; participants can
@@ -1282,7 +1373,23 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
     if (hostUserId) s.add(hostUserId);
     return s;
   })();
-  const [expanded, setExpanded] = useState(true);
+  // 15 Nov 2026 (tester, 13 Nov) — starts collapsed: open, its list pushed
+  // the tile grid down on the host's first view. One line with the counts; a
+  // tap opens the list as a dropdown over the room (scrolling inside its own
+  // bounded height), so opening it never resizes or pushes the tiles away.
+  const [expanded, setExpanded] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const collapse = useCallback(() => setExpanded(false), []);
+  useEscapeKey(collapse, expanded);
+  useEffect(() => {
+    if (!expanded) return;
+    // A tap anywhere else closes the dropdown, as a menu does.
+    const onPointerDown = (e: PointerEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) setExpanded(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [expanded]);
 
   const handleKick = useCallback(async (userId: string, displayName: string) => {
     if (!sessionId) return;
@@ -1291,47 +1398,53 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
     socket?.emit('host:remove_participant', { sessionId, userId, reason: 'Removed by host' });
   }, [sessionId, ask]);
 
+  // Phase D3 (10 May) — separate counts so "+ Hosts" reads correctly when cohosts present.
+  // Phase P (Ali's 13 May clarification) — counts now respect
+  // acting_as_host opt-ins/opt-outs via hostsSet.
+  // Bug 7 (13 May live test) — hostsSet is the *registered* roster.
+  // The lobby header is about who is in the room *right now*, so
+  // intersect with the participants array. Pre-fix it read
+  // hostsSet.size which counted a configured cohost even when
+  // they hadn't joined yet (showed "2 Hosts" with only 1 present).
+  const participantCount = participants.filter(p => !hostsSet.has(p.userId)).length;
+  const totalHosts = participants.filter(p => hostsSet.has(p.userId)).length;
+  const hostsLabel = `${totalHosts} ${totalHosts === 1 ? 'Host' : 'Hosts'}`;
+
   return (
-    <div className="w-full max-w-4xl mx-auto bg-gray-50 rounded-xl overflow-hidden">
+    <div ref={panelRef} data-testid="host-participant-panel" className="relative flex-1 min-w-0 max-w-4xl bg-gray-50 rounded-xl">
       {confirmDialog}
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium text-gray-300 hover:bg-white/5 transition-colors"
+        aria-expanded={expanded}
+        data-testid="host-participant-panel-toggle"
+        className="w-full min-h-[44px] flex items-center justify-between gap-1.5 px-2.5 sm:px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-xl transition-colors"
       >
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-gray-400" />
-          {/* Phase D3 (10 May) — separate counts so "+ Hosts" reads correctly when cohosts present.
-              Phase P (Ali's 13 May clarification) — counts now respect
-              acting_as_host opt-ins/opt-outs via hostsSet.
-              Bug 7 (13 May live test) — hostsSet is the *registered* roster.
-              The lobby header is about who is in the room *right now*, so
-              intersect with the participants array. Pre-fix it read
-              hostsSet.size which counted a configured cohost even when
-              they hadn't joined yet (showed "2 Hosts" with only 1 present). */}
-          <span>
-            Participants ({participants.filter(p => !hostsSet.has(p.userId)).length})
-            {(() => {
-              const totalHosts = participants.filter(p => hostsSet.has(p.userId)).length;
-              return ` · ${totalHosts} ${totalHosts === 1 ? 'Host' : 'Hosts'}`;
-            })()}
-          </span>
-        </div>
-        {expanded ? <ChevronUp className="h-4 w-4 text-gray-500" /> : <ChevronDown className="h-4 w-4 text-gray-500" />}
+        <span className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+          <Users className="h-4 w-4 shrink-0 text-gray-500" />
+          {/* A phone has the row beside the density toggle: the icon says who is counted. */}
+          <span className="truncate sm:hidden">{participantCount} · {hostsLabel}</span>
+          <span className="truncate hidden sm:inline">Participants ({participantCount}) · {hostsLabel}</span>
+        </span>
+        {expanded ? <ChevronUp className="h-4 w-4 shrink-0 text-gray-500" /> : <ChevronDown className="h-4 w-4 shrink-0 text-gray-500" />}
       </button>
       {expanded && (
-        <div className="border-t border-white/10 px-4 py-2 max-h-48 overflow-y-auto">
+        <div
+          data-testid="host-participant-list"
+          className="absolute right-0 top-full z-30 mt-1 w-[min(calc(100vw-1rem),28rem)] sm:left-0 sm:w-auto max-h-[50dvh] overflow-y-auto overscroll-contain rounded-xl border border-gray-200 bg-white px-2 py-2 shadow-lg"
+        >
           {participants.length === 0 ? (
             <p className="text-xs text-gray-500 text-center py-3">No participants yet</p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
               {participants.map(p => (
-                <div key={p.userId} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors group/participant relative">
+                <div key={p.userId} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors group/participant relative">
                   <div className="h-8 w-8 rounded-full bg-[#5f6368] flex items-center justify-center text-white text-xs font-semibold shrink-0">
                     {(p.displayName || 'U').charAt(0).toUpperCase()}
                   </div>
-                  <span className="text-sm text-gray-300 truncate">{p.displayName || 'User'}</span>
+                  <span className="text-sm text-gray-700 truncate">{p.displayName || 'User'}</span>
                   {p.userId === hostUserId && (
-                    <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">Host</span>
+                    <span className="text-[9px] text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">Host</span>
                   )}
                   {sessionId && p.userId !== hostUserId && (
                     <button
@@ -1659,15 +1772,25 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
       // dominates the viewport. Stefan: 'banners take more than half the
       // screen before the participant grid shows'. p-3 sm:p-6 gives mobile
       // plenty of space for content; gap-3 sm:gap-6 keeps desktop airy.
-      <div className="flex-1 flex flex-col items-center p-3 sm:p-6 gap-3 sm:gap-4 overflow-auto bg-white">
-        {showRoundDashboard && (
-          <div className="w-full max-w-4xl">
-            <HostRoundDashboard sessionId={sessionId!} />
+      // 15 Nov 2026 (tester, 13 Nov) — this column no longer scrolls: the
+      // extras above the tiles (round dashboard, status, and one row with the
+      // density toggle and the host's participant count) keep their own
+      // height, the round dashboard scrolling inside a bounded box, and the
+      // tile grid takes the rest and fits itself to it (LobbyMosaic), so every
+      // tile stays in view. p-2 / gap-2 on a phone leaves the tiles more room.
+      <div className="flex-1 min-h-0 flex flex-col items-center p-2 sm:p-6 gap-2 sm:gap-4 overflow-hidden bg-white">
+        <div data-testid="lobby-extras" className="w-full max-w-4xl shrink-0 flex flex-col items-center gap-2 sm:gap-3">
+          {showRoundDashboard && (
+            <div className="w-full max-w-4xl max-h-[30dvh] overflow-y-auto overscroll-contain">
+              <HostRoundDashboard sessionId={sessionId!} />
+            </div>
+          )}
+          <LobbyStatusOverlay isHost={isHost} />
+          <div className="w-full flex items-center justify-center gap-2">
+            <DensityToggle />
+            {isHost && <HostParticipantPanel sessionId={sessionId} />}
           </div>
-        )}
-        <LobbyStatusOverlay isHost={isHost} />
-        <DensityToggle />
-        {isHost && <HostParticipantPanel sessionId={sessionId} />}
+        </div>
         <LiveKitRoom
           token={lobbyToken}
           serverUrl={lobbyUrl}
@@ -1685,7 +1808,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           // "can't be heard in main room" was the per-tile remount re-mute
           // (fixed below in LobbyMediaControls — SID-keyed once-only).
           audio={isHost}
-          className="flex-1 w-full max-w-4xl"
+          className="flex-1 min-h-0 w-full max-w-4xl"
           options={{
             // C2/VID-1 (audit 2026-06-12) — subscriber-side diet: each remote
             // video uses the simulcast layer matching its rendered tile size,
@@ -1765,12 +1888,14 @@ function DensityToggle() {
   ];
 
   return (
-    <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5">
+    <div className="shrink-0 flex items-center gap-1 bg-white/10 rounded-full p-0.5">
       {options.map(o => (
         <button
           key={o.value}
+          type="button"
           onClick={() => setLobbyDensity(o.value)}
-          className={`px-3 py-1 text-[11px] font-medium rounded-full transition-colors ${
+          aria-pressed={lobbyDensity === o.value}
+          className={`${TILE_CONTROL_HIT} px-2 sm:px-3 py-1 text-[11px] font-medium rounded-full transition-colors ${
             lobbyDensity === o.value
               ? 'bg-white/20 text-[#1a1a2e]'
               : 'text-gray-500 hover:text-gray-300'

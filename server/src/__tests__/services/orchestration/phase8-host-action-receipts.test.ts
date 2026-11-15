@@ -91,8 +91,10 @@ describe('Phase 8 — host action receipts', () => {
       expect(src).not.toMatch(/Click Match People/);
     });
 
-    it('outer lobby container uses p-3 sm:p-6 + gap-3 sm:gap-4 (was p-6 gap-6)', () => {
-      expect(src).toMatch(/p-3 sm:p-6 gap-3 sm:gap-4/);
+    it('outer lobby container uses p-2 sm:p-6 + gap-2 sm:gap-4 (was p-6 gap-6, then p-3 gap-3)', () => {
+      // 15 Nov 2026 (tester, 13 Nov) — tighter still on a phone: the tile grid
+      // fits the space left, so every pixel of padding is tile height.
+      expect(src).toMatch(/p-2 sm:p-6 gap-2 sm:gap-4/);
     });
 
     it('the participant count moved to the top bar with the compact h-3 icon', () => {

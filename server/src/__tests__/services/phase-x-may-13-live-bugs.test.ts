@@ -433,16 +433,13 @@ describe('Phase X — 13 May live-test bug fixes', () => {
   describe('Bug 8 — host tile elevation works at mobile widths', () => {
     const src = readClientSource('features/live/Lobby.tsx');
 
-    it('isActingHost branch references the big-tile className constant (Issue 12)', () => {
-      // Issue 12 (21 May Stefan re-test) — the actual `col-span-2
-      // row-span-2 aspect-video ring-2 ring-rsn-red/30` literal now
-      // lives in a module-scoped constant `soloOrCompactHostTileClass`
-      // so the className expression in renderTile references the
-      // constant instead of the inline literal. The constant is what
-      // gets pinned by phase-q-host-tile-elevation.test.ts; this test
-      // confirms the renderTile branch routes through it.
-      expect(src).toMatch(/useBigHostTiles\s*\?\s*soloOrCompactHostTileClass/);
-      expect(src).toMatch(/soloOrCompactHostTileClass\s*=\s*['"`]aspect-video\s+col-span-2\s+row-span-2/);
+    it('isActingHost tiles keep the host ring, and the 2 x 2 cell comes from the fitted grid (Issue 12, 15 Nov)', () => {
+      // 15 Nov 2026 (tester, 13 Nov) — a fixed 2 x 2 host tile pushed every
+      // participant below the fold on a phone. The planner
+      // (lobbyGrid.planLobbyGrid) never draws a larger host tile on a
+      // phone-width grid; lobby-grid-fit.test.ts holds that.
+      expect(src).toMatch(/isActingHost && !isPinned \? hostRingClass : ''/);
+      expect(src).toMatch(/'cell-large': 'h-full w-full col-span-2 row-span-2'/);
       // Negative guard: forbid the regression to sm:col-span-2.
       expect(src).not.toMatch(/isActingHost\s*\?\s*['"`]aspect-video\s+sm:col-span-2/);
     });

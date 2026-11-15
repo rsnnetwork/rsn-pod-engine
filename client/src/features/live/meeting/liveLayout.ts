@@ -57,8 +57,11 @@ export function selectMeetingLayout({ visibleCount, wide, focusKey, pairView }: 
   return 'grid';
 }
 
-/** A grid of `cols` x `rows` same-size tiles of the given shape, as large as fits; sizes are whole pixels, rounded down. */
-function fitGrid(width: number, height: number, cols: number, rows: number, gap: number, aspect: number): StageGrid {
+/**
+ * A grid of `cols` x `rows` same-size tiles of the given shape, as large as fits; sizes are whole pixels, rounded down.
+ * The main room's tile grid (../lobbyGrid.ts) lays its candidates out with it too.
+ */
+export function fitGrid(width: number, height: number, cols: number, rows: number, gap: number, aspect: number): StageGrid {
   const maxW = (width - gap * (cols - 1)) / cols;
   const maxH = (height - gap * (rows - 1)) / rows;
   const tileW = Math.max(0, Math.floor(Math.min(maxW, maxH * aspect)));

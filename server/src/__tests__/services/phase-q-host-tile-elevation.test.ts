@@ -82,36 +82,31 @@ describe('Phase Q — host tile elevation in Lobby grid', () => {
       expect(block).toMatch(/isActingHost\s*=[\s\S]{0,150}hostsSet\.has\(trackRef\.participant\.identity\)/);
     });
 
-    it('grid-span size className routes through useBigHostTiles (not isLocalTile)', () => {
+    it('grid-span size className routes through the fitted grid (not isLocalTile)', () => {
       // Issue 12 (21 May Stefan re-test): hosts must REMAIN LARGER than
-      // other participants AND sit adjacent. Implementation:
-      //   • Solo host OR compact density → soloOrCompactHostTileClass
-      //     (col-span-2 row-span-2 aspect-video — original hero shape)
-      //   • Multi-host in narrow density (normal/spacious 2-col grid)
-      //     → multiHostNarrowTileClass (col-span-1 aspect-[4/3] — still
-      //     ringed, 1.33× taller than aspect-video participant tile,
-      //     and col-span-1 lets two hosts share row 1)
-      expect(src).toMatch(/isActingHost\s*\?\s*\(\s*useBigHostTiles\s*\?\s*soloOrCompactHostTileClass\s*:\s*multiHostNarrowTileClass\s*\)/);
-      // The actual classnames must be defined and carry the host ring.
-      expect(src).toMatch(/soloOrCompactHostTileClass\s*=\s*['"`]aspect-video\s+col-span-2\s+row-span-2\s+ring-2\s+ring-rsn-red\/30['"`]/);
-      expect(src).toMatch(/multiHostNarrowTileClass\s*=\s*['"`]aspect-\[4\/3\]\s+col-span-1\s+row-span-1\s+ring-2\s+ring-rsn-red\/30['"`]/);
+      // other participants AND sit adjacent. 15 Nov 2026 (tester, 13 Nov):
+      // a host tile fixed at 2 x 2 pushed everyone else below the fold on a
+      // phone. Now the acting hosts lead the grid together and keep the host
+      // ring, and lobbyGrid.planLobbyGrid draws them 2 x 2 ('cell-large')
+      // only on a wide area where everyone else still fits
+      // (lobby-grid-fit.test.ts holds the geometry).
+      expect(src).toMatch(/isActingHost && !isPinned \? hostRingClass : ''/);
+      expect(src).toMatch(/hostRingClass = 'ring-2 ring-rsn-red\/30'/);
+      expect(src).toMatch(/frame: grid\.span === 2 && isLargeHostTile\(trackRef\) \? 'cell-large' : 'cell'/);
+      expect(src).toMatch(/'cell-large': 'h-full w-full col-span-2 row-span-2'/);
       // Forbid the pre-Phase-Q form that tied size to isLocalTile —
       // anyone re-introducing that regression would silently revert
       // Stefan's spec.
       expect(src).not.toMatch(/isLocalTile\s*\?\s*['"`]aspect-video\s+(?:sm:)?col-span-2/);
-      // Forbid the cc09a19 "same size as participant" regression — host
-      // tile must never drop to a bare `aspect-video ring-2` class with
-      // no col/row span (that's the bug Stefan called out on 21 May).
-      expect(src).not.toMatch(/useBigHostTiles\s*\?[\s\S]{0,200}:\s*['"`]aspect-video\s+ring-2\s+ring-rsn-red\/30['"`]/);
+      // Forbid a fixed 2 x 2 host tile that ignores the space left (13 Nov).
+      expect(src).not.toMatch(/aspect-video col-span-2 row-span-2/);
     });
 
-    it('useBigHostTiles is derived from acting-host count AND grid width (Issue 12)', () => {
-      // 1 host         → big tile (Phase Q director prominence).
-      // 2+ in compact  → big tile (4-col grid fits two col-span-2 side-by-side).
-      // 2+ in narrow   → multiHostNarrowTileClass (aspect-[4/3] col-span-1).
-      expect(src).toMatch(/actingHostCountInGrid\s*=[\s\S]{0,200}hostsSet\.has\([\s\S]{0,80}tileDemotedSet\.has/);
-      expect(src).toMatch(/narrowGrid\s*=\s*lobbyDensity\s*===\s*['"`]normal['"`]\s*\|\|\s*lobbyDensity\s*===\s*['"`]spacious['"`]/);
-      expect(src).toMatch(/useBigHostTiles\s*=\s*actingHostCountInGrid\s*<=\s*1\s*\|\|\s*!narrowGrid/);
+    it('the larger host cells are the acting hosts, demoted tiles excluded, leading the grid (Issue 12)', () => {
+      expect(src).toMatch(/isLargeHostTile = \(t: any\) => \{[\s\S]{0,120}hostsSet\.has\(id\) && !tileDemotedSet\.has\(id\)/);
+      expect(src).toMatch(/const largeTracks = windowTracks\.filter\(isLargeHostTile\);/);
+      expect(src).toMatch(/\[\.\.\.largeTracks, \.\.\.windowTracks\.filter\(t => !isLargeHostTile\(t\)\)\]/);
+      expect(src).toMatch(/emphasized: largeTracks\.length,/);
     });
 
     it('data-acting-host attribute exposed for E2E selectors', () => {
