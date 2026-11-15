@@ -520,15 +520,28 @@ export async function listCircles(userId: string, userRole?: string): Promise<Ci
 }
 
 /** Which circles is this pod attached to (pod page chips, P3b). */
-export async function listCirclesOfPod(podId: string): Promise<Array<{ id: string; name: string }>> {
-  const r = await query<{ id: string; name: string }>(
-    `SELECT c.id, c.name
+/**
+ * The circles a pod is in. Ben field test (13 Nov 2026): each also says who can join it and whether it keeps this viewer
+ * out of the pod (a closed or invite-only circle they are not in; never for a platform admin), so the pod page can say
+ * so instead of offering a Join that the server refuses (pod-circle-gate.ts).
+ */
+export async function listCirclesOfPod(
+  podId: string,
+  viewer?: { userId: string; role?: string },
+): Promise<Array<{ id: string; name: string; joinPolicy: CircleJoinPolicy; keepsYouOut: boolean }>> {
+  const r = await query<{ id: string; name: string; join_policy: string; outside: boolean }>(
+    `SELECT c.id, c.name, c.join_policy,
+            NOT EXISTS (SELECT 1 FROM circle_members m WHERE m.circle_id = c.id AND m.user_id = $2) AS outside
      FROM circle_pods cp JOIN circles c ON c.id = cp.circle_id
      WHERE cp.pod_id = $1 AND c.archived_at IS NULL
      ORDER BY c.name ASC`,
-    [podId],
+    [podId, viewer?.userId ?? null],
   );
-  return r.rows;
+  const admin = isPlatformAdmin(viewer?.role);
+  return r.rows.map((row) => {
+    const joinPolicy = readJoinPolicy(row.join_policy);
+    return { id: row.id, name: row.name, joinPolicy, keepsYouOut: !!viewer && !admin && isRestrictedPolicy(joinPolicy) && row.outside };
+  });
 }
 
 export async function getCircleDetail(circleId: string, userId: string, userRole?: string): Promise<CircleDetail> {

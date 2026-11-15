@@ -59,18 +59,18 @@ export default function CirclesPage() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      <div className="flex items-center justify-between animate-fade-in">
+      <div className="flex flex-wrap items-start justify-between gap-3 animate-fade-in">
         <div>
           <h1 className="text-2xl font-bold text-[#1a1a2e]">Circles</h1>
           <p className="text-gray-500 text-sm mt-1">Communities of people who share your intent</p>
         </div>
         <div className="flex items-center gap-2">
           {admin ? (
-            <Button size="sm" onClick={() => setSheet('new')} className="min-h-[44px]" data-testid="circle-new-open">
+            <Button size="sm" onClick={() => setSheet('new')} className="min-h-[44px] whitespace-nowrap" data-testid="circle-new-open">
               <Plus className="h-4 w-4 mr-1" /> New circle
             </Button>
           ) : (
-            <Button size="sm" variant="outline" onClick={() => setSheet('request')} className="min-h-[44px]" data-testid="circle-request-open">
+            <Button size="sm" variant="outline" onClick={() => setSheet('request')} className="min-h-[44px] whitespace-nowrap" data-testid="circle-request-open">
               <Plus className="h-4 w-4 mr-1" /> Request a circle
             </Button>
           )}

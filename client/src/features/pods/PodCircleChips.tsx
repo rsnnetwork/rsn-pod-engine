@@ -11,6 +11,7 @@ import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useToastStore } from '@/stores/toastStore';
+import type { CircleJoinPolicy } from '@rsn/shared';
 import { circleErrorSentence } from '@/features/circles/useCircleActions';
 
 interface Props { podId?: string; podName: string; canUnlink: boolean }
@@ -19,8 +20,18 @@ interface Props { podId?: string; podName: string; canUnlink: boolean }
  * The circles the pod is in, as the viewer may see them. One query (one cache entry) for the chips and for the pod's
  * Manage menu (Shirley pilot S3), which offers Circles only when there are some.
  */
+/** One circle a pod is in. `keepsYouOut` (Ben field test): a closed or invite-only circle the viewer is not in. */
+export interface PodCircle { id: string; name: string; joinPolicy?: CircleJoinPolicy; keepsYouOut?: boolean }
+
+/** What a pod page says to someone its circle keeps out, in that circle's own terms (Ben field test, 13 Nov 2026). */
+export function podKeptOutLine(c: Pick<PodCircle, 'name' | 'joinPolicy'>): string {
+  return c.joinPolicy === 'invite_only'
+    ? `This pod is part of ${c.name}, which is by invitation only. Its owner or a moderator can invite you.`
+    : `This pod is part of ${c.name}. Ask to join ${c.name} first, then you can join the pod.`;
+}
+
 export function usePodCircles(podId: string | undefined) {
-  return useQuery<Array<{ id: string; name: string }>>({
+  return useQuery<PodCircle[]>({
     queryKey: ['circlesOfPod', podId],
     queryFn: () => api.get(`/circles/of-pod/${podId}`).then(r => r.data.data ?? []),
     enabled: !!podId,

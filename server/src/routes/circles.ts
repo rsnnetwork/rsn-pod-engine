@@ -87,7 +87,7 @@ router.get('/', authenticate, circleReadLimiter, async (req: Request, res: Respo
 router.get('/of-pod/:podId', authenticate, circleReadLimiter, uuidInPath('podId', PATH_REFUSALS.pod), async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!(await canViewPod(req.user!.userId, req.params.podId, req.user!.role))) throw new NotFoundError('Pod', req.params.podId);
-    const data = await circleService.listCirclesOfPod(req.params.podId);
+    const data = await circleService.listCirclesOfPod(req.params.podId, { userId: req.user!.userId, role: req.user!.role });
     res.json({ success: true, data } satisfies ApiResponse);
   } catch (err) { next(err); }
 });

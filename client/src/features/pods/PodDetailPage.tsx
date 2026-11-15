@@ -27,7 +27,7 @@ import PodEventsSection from './PodEventsSection';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
-import PodCircleChips, { usePodCircles } from './PodCircleChips';
+import PodCircleChips, { podKeptOutLine, usePodCircles } from './PodCircleChips';
 import ManageMenu, { scrollToSection, type ManageEntry } from '@/features/manage/ManageMenu';
 import { POD_HINT, SECTION_ID, podManageKeys, type ManageKey } from '@/features/manage/manage-menu';
 import SpaceExportSheet from '@/features/spaces/SpaceExportSheet';
@@ -304,6 +304,8 @@ export default function PodDetailPage() {
   // An admin who is not in the pod still opens its wall to read and moderate; posting waits for isActiveMember.
   const canOpenWall      = isMember || isAdminUser;
   const isPending        = myMembership?.status === 'pending_approval' && !isAdminUser;
+  // The first closed or invite-only circle of this pod that the viewer is outside (never for an admin: the server says).
+  const keptOutBy        = podCircles?.find((c) => c.keepsYouOut);
   const isPodDirector     = myMembership?.role === 'director' || pod.memberRole === 'director';
   const canManage        = isPodDirector || isAdminUser;
   const canManageOrHost = canManage || myMembership?.role === 'host' || pod.memberRole === 'host';
@@ -418,7 +420,17 @@ export default function PodDetailPage() {
       </Card>
 
       {/* Actions */}
-      {!isMember && !isPending && pod.status === 'active' && (
+      {/* Ben field test (13 Nov 2026): a pod in a closed or invite-only circle the viewer is not in takes them only through
+          the circle (the server refuses the join, pod-circle-gate.ts), so the page says so and links the circle. */}
+      {!isMember && !isPending && pod.status === 'active' && keptOutBy && (
+        <div className="flex flex-wrap items-center gap-3 animate-fade-in-up stagger-1" data-testid="pod-kept-out">
+          <p className="text-sm text-gray-600">{podKeptOutLine(keptOutBy)}</p>
+          <Link to={`/circles/${keptOutBy.id}`} className="inline-flex min-h-[44px] items-center rounded-xl border border-gray-300 bg-white px-4 text-sm font-semibold text-[#1a1a2e] hover:bg-gray-50">
+            Go to {keptOutBy.name}
+          </Link>
+        </div>
+      )}
+      {!isMember && !isPending && pod.status === 'active' && !keptOutBy && (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
           {pod.visibility === 'public' || isAdminUser ? (
             <>
