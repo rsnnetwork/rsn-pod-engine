@@ -12,6 +12,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import { personHref } from '@/features/reason/human/profile-text';
 import { writeToPath } from '@/features/messages/compose-intent';
+import { MEET_AGAIN_HELP, STARS_PRIVATE, starLabel } from '@/features/live/rating-words';
 
 interface Connection {
   userId: string;
@@ -146,8 +147,9 @@ function LateRatingForm({
   };
 
   return (
-    <div className="flex items-center gap-4 p-3 rounded-xl bg-[#292a2d]">
-      <div className="flex-1 min-w-0">
+    // Wraps on a phone: the name on its own line, then the stars, then Meet again and Rate.
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 p-3 rounded-xl bg-[#292a2d]">
+      <div className="flex-1 min-w-0 basis-[140px]">
         <p className="text-sm text-white font-medium truncate">{partnerName}</p>
         <p className="text-xs text-gray-500">
           {isManual
@@ -155,22 +157,34 @@ function LateRatingForm({
             : `Round ${roundNumber}${isTrio ? ' (trio)' : ''}`}
         </p>
       </div>
-      <div className="flex gap-1 shrink-0">
+      <div role="group" aria-label={`Your rating for ${partnerName}`} className="flex shrink-0">
         {[1, 2, 3, 4, 5].map(n => (
-          <button key={n} onClick={() => setRating(n)}>
-            <Star className={`h-5 w-5 ${n <= rating ? 'text-amber-400 fill-amber-400' : 'text-gray-600'}`} />
+          <button
+            key={n}
+            type="button"
+            onClick={() => setRating(n)}
+            aria-label={starLabel(n)}
+            aria-pressed={n === rating}
+            className="grid h-11 w-11 place-items-center rounded-lg"
+          >
+            <Star aria-hidden="true" className={`h-5 w-5 ${n <= rating ? 'text-amber-400 fill-amber-400' : 'text-gray-500'}`} />
           </button>
         ))}
       </div>
-      <button
-        onClick={() => setMeetAgain(!meetAgain)}
-        className={`p-2 rounded-lg border shrink-0 ${meetAgain ? 'border-indigo-500 bg-indigo-500/10' : 'border-white/10'}`}
-      >
-        <Handshake className={`h-4 w-4 ${meetAgain ? 'text-indigo-400' : 'text-gray-500'}`} />
-      </button>
-      <Button onClick={submit} isLoading={submitting} disabled={rating === 0} className="shrink-0">
-        Rate
-      </Button>
+      <div className="flex items-center gap-2 shrink-0">
+        <button
+          type="button"
+          onClick={() => setMeetAgain(!meetAgain)}
+          aria-pressed={meetAgain}
+          className={`flex min-h-[44px] items-center gap-1.5 rounded-lg border px-3 text-sm font-medium ${meetAgain ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-white/10 text-gray-300'}`}
+        >
+          <Handshake aria-hidden="true" className={`h-4 w-4 ${meetAgain ? 'text-indigo-400' : 'text-gray-400'}`} />
+          Meet again
+        </button>
+        <Button onClick={submit} isLoading={submitting} disabled={rating === 0} className="min-h-[44px] shrink-0">
+          Rate
+        </Button>
+      </div>
     </div>
   );
 }
@@ -412,6 +426,8 @@ export default function RecapPage() {
             <Star className="h-4 w-4" />
             You have unrated conversations
           </h3>
+          {/* What Meet again does and who sees the stars, said once for every row, on the screen (a phone has no hover). */}
+          <p className="-mt-2 mb-4 text-xs leading-relaxed text-gray-400">{MEET_AGAIN_HELP} {STARS_PRIVATE}</p>
           <div className="space-y-3">
             {unratedData.map((partner: any) => (
               <LateRatingForm

@@ -39,7 +39,8 @@ describe('REASON sheets: typing survives the parent re-rendering', () => {
       expect(src).not.toMatch(/\b(?:formFor|prev\w*) !== person\b/);
     }
     // Closing is not opening: the fields are put back only for an id (the closed sheet is not drawn).
-    expect(flat('MeetSheet')).toContain('if (personId) { setNote(DEFAULT_NOTE); setFormat(DEFAULT_FORMAT); setError(null); }');
+    // The note greets the person the sheet opened for (field test, 13 Nov 2026), so it is made from their name each time.
+    expect(flat('MeetSheet')).toContain('if (person) { setNote(defaultMeetNote(person.displayName)); setFormat(DEFAULT_FORMAT); setError(null); }');
     expect(flat('OutcomeSheet')).toContain('if (personId) { setWorth(null); setPicked([]); setError(null); }');
   });
 

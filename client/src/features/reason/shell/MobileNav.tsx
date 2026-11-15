@@ -7,7 +7,7 @@ import { useEventsBadge } from '@/features/meetings/useMeetings';
 import { eventsLinkName } from '@/features/meetings/meeting-words';
 import Sheet from '../ui/Sheet';
 import { ReasonIcon } from '../ui/icons';
-import { MOBILE_MORE, MOBILE_PRIMARY, NAV_BY_KEY, isAccountPage, onAdmin, onInvites } from './nav';
+import { MOBILE_MORE, MOBILE_PRIMARY, NAV_BY_KEY, isAccountPage, onAdmin, onInvites, onProfileEdit, onProfileView } from './nav';
 import LogoutSheet from './LogoutSheet';
 
 const TAB = 'relative grid min-h-[56px] min-w-0 content-center justify-items-center gap-0.5 rounded-xl px-1 text-[10px] font-bold';
@@ -88,13 +88,14 @@ export default function MobileNav({ unreadCount }: { unreadCount: number }) {
         </div>
         {user && (
           <div className="mt-2 grid gap-1 border-t border-reason-line pb-1 pt-3">
-            <Link to="/profile" onClick={done} aria-current={NAV_BY_KEY.profile.match(pathname) ? 'page' : undefined} className="flex min-h-[48px] items-center gap-2.5 rounded-xl px-1">
+            <Link to="/profile" onClick={done} aria-current={onProfileView(pathname) ? 'page' : undefined} className="flex min-h-[48px] items-center gap-2.5 rounded-xl px-1">
               <Avatar src={user.avatarUrl} name={user.displayName || 'You'} size="sm" />
               <span>
                 <strong className="block text-[13px]">{user.displayName || 'You'}</strong>
                 <small className="text-reason-muted">View profile</small>
               </span>
             </Link>
+            <Link to="/profile/edit" onClick={done} aria-current={onProfileEdit(pathname) ? 'page' : undefined} className={cn(ACCOUNT_LINK, onProfileEdit(pathname) && ACCOUNT_LINK_HERE)}>Edit profile</Link>
             <Link to="/invites" onClick={done} aria-current={onInvites(pathname) ? 'page' : undefined} className={cn(ACCOUNT_LINK, onInvites(pathname) && ACCOUNT_LINK_HERE)}>Invite someone</Link>
             {isAdmin(user.role) && <Link to="/admin" onClick={done} aria-current={onAdmin(pathname) ? 'page' : undefined} className={cn(ACCOUNT_LINK, onAdmin(pathname) && ACCOUNT_LINK_HERE)}>Admin</Link>}
             <button type="button" onClick={() => { done(); setConfirm(true); }} className="flex min-h-[44px] items-center rounded-xl px-1 text-left text-[14px] text-reason-red">Log out</button>

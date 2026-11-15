@@ -1,15 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useId, useRef } from 'react';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
-import { Star, CheckCircle, Loader2, Handshake } from 'lucide-react';
+import { Star, CheckCircle, Check, Loader2, Handshake } from 'lucide-react';
 import api from '@/lib/api';
 import { getSocket } from '@/lib/socket';
+import { DIDNT_WORK_HELP, MEET_AGAIN_HELP, MEET_AGAIN_LABEL, STARS_PRIVATE, starHint, starLabel } from './rating-words';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface Props { sessionId: string; }
 
 type SubmissionState = null | { meetAgain: boolean };
+
+const CONFIRMATION_MS = 1800;
 
 // WS2 (27 May remaining work) — header + subline copy keyed by why the
 // rating window opened. Default (null / 'round_end' / 'early_leave') keeps
@@ -46,6 +49,9 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
   const [rating, setRating] = useState(0);
   const [meetAgain, setMeetAgain] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const hintId = useId();
+  const meetAgainHelpId = useId();
+  const didntWorkHelpId = useId();
 
   const submit = async () => {
     if (rating === 0 || submitting) return;
@@ -119,53 +125,76 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
       {ratingCopy(reason).subline && (
         <p className="text-sm text-gray-400 mb-2">{ratingCopy(reason).subline}</p>
       )}
-      <p className="text-gray-500 mb-2">
+      <p className="text-gray-500 mb-4">
         How was your chat with <span className="text-[#1a1a2e] font-medium">{partnerName}</span>?
       </p>
-      <p className="text-xs text-gray-400 mb-5">Tap the stars to rate</p>
 
-      <div className="flex justify-center gap-3 mb-6">
+      {/* Each star says what it is worth; the line under them says what the chosen one means, or how to choose. */}
+      <div role="group" aria-label="Your rating" className="flex justify-center gap-1 sm:gap-3">
         {[1, 2, 3, 4, 5].map(n => (
           <button
             key={n}
+            type="button"
             onClick={() => setRating(n)}
-            className="transition-transform hover:scale-110 active:scale-95"
+            aria-label={starLabel(n)}
+            aria-pressed={n === rating}
+            className="grid min-h-[44px] min-w-[44px] place-items-center transition-transform hover:scale-110 active:scale-95"
           >
             <Star
+              aria-hidden="true"
               className={`h-12 w-12 ${n <= rating ? 'text-amber-400 fill-amber-400' : 'text-gray-300 hover:text-gray-400'}`}
             />
           </button>
         ))}
       </div>
+      <p id={hintId} aria-live="polite" className={`mt-2 text-sm ${rating ? 'font-medium text-[#1a1a2e]' : 'text-gray-500'}`}>
+        {starHint(rating)}
+      </p>
+      <p className="mt-1 mb-5 text-xs text-gray-500">{STARS_PRIVATE}</p>
 
       <button
+        type="button"
         onClick={() => setMeetAgain(!meetAgain)}
-        className={`flex items-center justify-center gap-2.5 w-full py-3 rounded-xl border-2 transition-all mb-5 text-base font-medium ${
-          meetAgain ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-gray-200 text-gray-500 hover:border-gray-300'
+        aria-pressed={meetAgain}
+        aria-describedby={meetAgainHelpId}
+        className={`flex min-h-[48px] items-center justify-center gap-2.5 w-full py-3 rounded-xl border-2 transition-all text-base font-medium ${
+          meetAgain ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-gray-200 text-gray-600 hover:border-gray-300'
         }`}
       >
-        <Handshake className={`h-5 w-5 ${meetAgain ? 'text-indigo-500' : ''}`} />
-        {meetAgain ? 'Would meet again!' : 'Would you meet again?'}
+        {meetAgain
+          ? <Check aria-hidden="true" className="h-5 w-5 text-indigo-500" />
+          : <Handshake aria-hidden="true" className="h-5 w-5" />}
+        {MEET_AGAIN_LABEL}
       </button>
+      <p id={meetAgainHelpId} className="mt-2 mb-5 text-xs leading-relaxed text-gray-500">{MEET_AGAIN_HELP}</p>
 
-      <Button onClick={submit} isLoading={submitting} disabled={rating === 0 || submitting} className="w-full text-base py-3">
+      <Button
+        onClick={submit}
+        isLoading={submitting}
+        disabled={rating === 0 || submitting}
+        aria-describedby={rating === 0 ? hintId : undefined}
+        className="w-full text-base py-3"
+      >
         Submit Rating
       </Button>
 
       <div className="flex items-center justify-center gap-4 mt-4">
-        <button onClick={onSkip} className="text-sm text-gray-400 hover:text-gray-600 transition-colors min-h-[44px]">
+        <button type="button" onClick={onSkip} className="text-sm text-gray-500 hover:text-gray-700 transition-colors min-h-[44px] px-2">
           Skip
         </button>
-        <span className="text-gray-300">·</span>
+        <span aria-hidden="true" className="text-gray-300">·</span>
         <button
+          type="button"
           onClick={submitDidntWork}
           disabled={submitting}
-          className="text-sm text-gray-400 hover:text-gray-600 transition-colors min-h-[44px]"
-          title="Partner never showed or technical problems — won't affect quality stats"
+          aria-describedby={didntWorkHelpId}
+          className="text-sm text-gray-500 hover:text-gray-700 transition-colors min-h-[44px] px-2"
         >
           This conversation didn&apos;t work
         </button>
       </div>
+      {/* Said on the screen, not in a tooltip: a phone has no hover. */}
+      <p id={didntWorkHelpId} className="text-xs text-gray-500">{DIDNT_WORK_HELP}</p>
     </div>
   );
 }
@@ -176,8 +205,11 @@ function RatingConfirmation({ meetAgain, isLastPartner, isLastRound, onContinue 
   isLastRound: boolean;
   onContinue: () => void;
 }) {
+  // Long enough to read (13 Nov 2026 field test: at 800ms it flashed by). It only moves this form on: the round is
+  // already marked rated at submit, a new match or the end of the rating window takes over whatever is showing, and a
+  // tap continues at once.
   useEffect(() => {
-    const timer = setTimeout(onContinue, 800);
+    const timer = setTimeout(onContinue, CONFIRMATION_MS);
     return () => clearTimeout(timer);
   }, [onContinue]);
 

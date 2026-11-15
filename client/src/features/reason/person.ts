@@ -6,7 +6,7 @@ import type { RelationshipState } from '@rsn/shared';
 export type PokeStatus = 'pending' | 'accepted' | null;
 
 // What the rest of the app already calls a member who has no name to show (Matches, circles, pods, invites).
-const NO_NAME = 'Member';
+export const NO_NAME = 'Member';
 
 /** The text of an optional field, or null when it is empty or only spaces. */
 export function visibleText(text: string | null | undefined): string | null {

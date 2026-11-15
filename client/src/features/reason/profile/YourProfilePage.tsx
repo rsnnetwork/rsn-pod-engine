@@ -5,6 +5,8 @@
 // company, then what only you see, the two ways to edit, and a nudge to add LinkedIn while there is none (or to fix one
 // nobody can open). Shirley pilot S6: the photo itself opens the photo editor, a real preview as others see it, and a
 // card to share your profile (your member link, and an opt-in public link).
+// Field test, 13 Nov 2026: Edit profile sat at the foot of the page, far below the fold on a phone. It is under your
+// name in the hero now, where another member's profile has its actions, and only there.
 // The form that used to live here is at /profile/edit.
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -90,6 +92,11 @@ export default function YourProfilePage() {
         photoLabel="Change your photo"
         who={who}
         kicker="Your profile, as others see it"
+        actions={(
+          <div className="mt-3 flex flex-wrap justify-center gap-2" data-testid="edit-profile-top">
+            <Link to={EDIT_PROFILE_TO} className={PRIMARY}>Edit profile</Link>
+          </div>
+        )}
         note={<NoteBox title="This is what members see" line="Who you want to meet and what you are hoping to find stay private. Only you see them, below." />}
         panel={(
           <DarkPanel kicker="What you can bring" title={bring ? 'Members read what you can bring.' : 'Say what you can bring.'}>
@@ -143,7 +150,6 @@ export default function YourProfilePage() {
       </div>
 
       <div className="flex flex-wrap gap-2.5">
-        <Link to={EDIT_PROFILE_TO} className={PRIMARY}>Edit profile</Link>
         <Link to={EDIT_ANSWERS_TO} className={QUIET}>Edit answers</Link>
         <Link to={PREVIEW_TO} className={QUIET} data-testid="preview-profile">Preview as others see it</Link>
       </div>
