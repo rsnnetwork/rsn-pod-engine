@@ -37,3 +37,9 @@ export const MOBILE_MORE: NavKey[] = ['entities', 'circles', 'pods', 'settings',
 export const onInvites = under('/invites');
 export const onAdmin = under('/admin');
 export const isAccountPage = (path: string) => onInvites(path) || onAdmin(path);
+
+// The account menu and the More sheet link both to your profile and to its form (field test, 13 Nov 2026: the form
+// was hard to find). Profile stays the current section on both; within the menu, only the link for the page you are
+// on is marked: View profile on /profile, Edit profile on the form.
+export const onProfileEdit = under('/profile/edit');
+export const onProfileView = (path: string) => NAV_BY_KEY.profile.match(path) && !onProfileEdit(path);

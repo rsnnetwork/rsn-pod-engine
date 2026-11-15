@@ -29,6 +29,8 @@ describe('REASON shell (milestone 1)', () => {
         NAV_BY_KEY: Record<string, { match: (p: string) => boolean } | undefined>;
         MOBILE_PRIMARY: string[];
         MOBILE_MORE: string[];
+        onProfileView: (p: string) => boolean;
+        onProfileEdit: (p: string) => boolean;
       };
     };
 
@@ -51,8 +53,15 @@ describe('REASON shell (milestone 1)', () => {
       const bar = read('features/reason/shell/MobileNav.tsx');
       const menu = read('features/reason/shell/ProfileMenu.tsx');
       expect(bar).toMatch(/const moreActive = [^;]*NAV_BY_KEY\.profile\.match\(pathname\)[^;]*;/);
-      expect(bar).toMatch(/<Link to="\/profile" onClick=\{done\} aria-current=\{NAV_BY_KEY\.profile\.match\(pathname\) \? 'page' : undefined\}/);
-      expect(menu).toMatch(/<MenuLink to="\/profile" label="View profile" current=\{NAV_BY_KEY\.profile\.match\(pathname\)\}/);
+      // Field test, 13 Nov 2026: both also link to the form. Within them only the page you are on is marked: View
+      // profile on /profile, Edit profile on /profile/edit (Profile, the section, stays current on both).
+      expect(bar).toMatch(/<Link to="\/profile" onClick=\{done\} aria-current=\{onProfileView\(pathname\) \? 'page' : undefined\}/);
+      expect(bar).toMatch(/<Link to="\/profile\/edit" onClick=\{done\} aria-current=\{onProfileEdit\(pathname\) \? 'page' : undefined\}[^>]*>Edit profile<\/Link>/);
+      expect(menu).toMatch(/<MenuLink to="\/profile" label="View profile" current=\{onProfileView\(pathname\)\}/);
+      expect(menu).toMatch(/<MenuLink to="\/profile\/edit" label="Edit profile" current=\{onProfileEdit\(pathname\)\}/);
+      const nav = loadNav();
+      expect(['/profile', '/profile/edit', '/settings'].map((p) => [p, nav.onProfileView(p), nav.onProfileEdit(p)]))
+        .toEqual([['/profile', true, false], ['/profile/edit', false, true], ['/settings', false, false]]);
       for (const src of [bar, menu]) expect(src).not.toMatch(/pathname === '\/profile'/);
     });
     it('every key the phone bar and the More sheet draw has an entry to draw it from (a key with none crashes the phone bar)', () => {

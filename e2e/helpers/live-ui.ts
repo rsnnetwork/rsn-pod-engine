@@ -108,7 +108,7 @@ export async function rateViaForm(page: Page, opts: { stars?: number; meetAgain?
   if (n >= stars) await starBtns.nth(stars - 1).click().catch(() => {});
   if (meetAgain) await page.getByRole('button', { name: /Would you meet again|Would meet again/i }).click().catch(() => {});
   await submit.click().catch(() => {});
-  await wait(1200); // let the confirmation card auto-continue
+  await wait(2100); // let the confirmation card auto-continue (it shows for 1.8s)
   return true;
 }
 

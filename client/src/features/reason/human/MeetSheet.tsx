@@ -6,9 +6,8 @@ import { cn } from '@/lib/utils';
 import { useToastStore } from '@/stores/toastStore';
 import Sheet from '../ui/Sheet';
 import { errorMessage, reasonKeys, sendMeetRequest } from '../api';
+import { defaultMeetNote } from './meet-note';
 
-// The prototype's own default text.
-const DEFAULT_NOTE = 'I think we have a useful reason to speak. I would like to compare notes and see whether there is anything worth continuing.';
 const DEFAULT_FORMAT: MeetingFormat = 'video_20';
 const CANCEL = 'min-h-[44px] rounded-[11px] border border-reason-line px-4 text-[14px] font-bold';
 const SEND = 'min-h-[44px] rounded-[11px] bg-reason-red px-4 text-[14px] font-bold text-white enabled:hover:bg-reason-red-hover disabled:opacity-60';
@@ -24,7 +23,8 @@ export default function MeetSheet({ person, onClose }: Props) {
   const counterId = useId();
   const hintId = useId();
   const errorLine = useRef<HTMLParagraphElement>(null);
-  const [note, setNote] = useState(DEFAULT_NOTE);
+  // The note starts as a greeting to this person by first name; the member can change every word of it.
+  const [note, setNote] = useState(() => defaultMeetNote(person?.displayName));
   const [format, setFormat] = useState<MeetingFormat>(DEFAULT_FORMAT);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,8 +36,8 @@ export default function MeetSheet({ person, onClose }: Props) {
   const [formFor, setFormFor] = useState(personId);
   if (formFor !== personId) {
     setFormFor(personId);
-    if (personId) {
-      setNote(DEFAULT_NOTE);
+    if (person) {
+      setNote(defaultMeetNote(person.displayName));
       setFormat(DEFAULT_FORMAT);
       setError(null);
     }
