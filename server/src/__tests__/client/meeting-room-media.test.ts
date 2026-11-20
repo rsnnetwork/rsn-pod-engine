@@ -203,7 +203,7 @@ describe('one invite-link hook for the host bar and the meeting room', () => {
     const hook = readClient(INVITE);
     expect(hook).toMatch(/queryKey: \['session-pending-invites', sessionId\]/);
     expect(hook).toMatch(/meta: \{ entities: \[E\.sessionInvites\(sessionId\)\] \}/);
-    expect(hook).toMatch(/api\.post\('\/invites', \{ type: 'session', sessionId, maxUses, expiresInHours: 168 \}\)/);
+    expect(hook).toMatch(/api\.post\('\/invites', \{ type: 'session', sessionId, maxUses \}\)/);
     // One open link per opening: made only once the list has settled without one.
     expect(hook).toMatch(/if \(invites\.isLoading \|\| invites\.isError \|\| invites\.data === undefined \|\| openLink \|\| asked\.current\) return;/);
   });

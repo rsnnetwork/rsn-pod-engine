@@ -155,7 +155,7 @@ test('the circle page\'s Invite opens the invite sheet, whose Share a link makes
     `SELECT COUNT(*)::int n FROM invites WHERE inviter_id = $1 AND type = 'circle' AND circle_id = $2`, [member.id, circleId])).rows[0].n as number;
   const before = await countLinks();
   await sheet.getByRole('button', { name: 'Share a link' }).click();
-  await expect(sheet.getByText(/Anyone with this link can join the circle, up to 500 people, for 7 days\./)).toBeVisible();
+  await expect(sheet.getByText(/Anyone with this link can join the circle, up to 500 people\. It keeps working until you withdraw it\./)).toBeVisible();
   const make = sheet.getByRole('button', { name: 'Make a link' });
   const box = await make.boundingBox();
   expect(box!.height, 'tap target').toBeGreaterThanOrEqual(44);

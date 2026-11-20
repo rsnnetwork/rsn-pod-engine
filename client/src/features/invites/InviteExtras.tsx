@@ -52,7 +52,7 @@ export function EmailInvite({ target }: { target: InviteTarget }) {
   );
 }
 
-/** A link anyone can use, up to the real cap, for a week: what it allows is said before it is made. */
+/** A link anyone can use, up to the real cap, with no timer: what it allows is said before it is made. */
 export function ShareLink({ target, cap }: { target: InviteTarget; cap: number }) {
   // The open link with uses left is handed out again rather than a new one made each time (P1 item 30). A circle has no
   // list to look in, and a refused read (someone who may invite but not read the list) only means one is made.

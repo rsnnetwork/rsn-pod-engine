@@ -104,8 +104,8 @@ describe('the invite sheet, for a circle', () => {
     expect(candidateParams(circle, 'connections', ' ana ', null)).toEqual({ source: 'connections', limit: 30, circleId: C, q: 'ana' });
     expect(batchBody(circle, ['u1'])).toEqual({ type: 'circle', circleId: C, inviteeUserIds: ['u1'] });
     expect(emailInviteBody(circle, ' a@b.co ')).toEqual({ type: 'circle', circleId: C, inviteeEmail: 'a@b.co', maxUses: 1, expiresInHours: 168 });
-    expect(linkBody(circle, 500)).toEqual({ type: 'circle', circleId: C, maxUses: 500, expiresInHours: 168 });
-    expect(shareLinkNote(circle, 500)).toBe('Anyone with this link can join the circle, up to 500 people, for 7 days.');
+    expect(linkBody(circle, 500)).toEqual({ type: 'circle', circleId: C, maxUses: 500 });
+    expect(shareLinkNote(circle, 500)).toBe('Anyone with this link can join the circle, up to 500 people. It keeps working until you withdraw it.');
   });
 
   it('follows the circle\'s tags, and says "already in the circle"', () => {

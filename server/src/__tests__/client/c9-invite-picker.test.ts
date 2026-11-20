@@ -95,15 +95,15 @@ describe('the picker: what it asks the server for', () => {
     expect(batchBody(EVENT, [], true)).toEqual({ type: 'session', sessionId: 's1', inviteeUserIds: [], allPodMembers: true });
   });
 
-  it('an email invite is one use and a week long; a link has the real cap (the pod\'s or the event\'s capacity, 500 when unset)', () => {
+  it('an email invite is one use and a week long; a link has the real cap (the pod\'s or the event\'s capacity, 500 when unset) and no timer', () => {
     expect(emailInviteBody(POD, '  Claus@Example.com ')).toEqual({ type: 'pod', podId: 'p1', inviteeEmail: 'Claus@Example.com', maxUses: 1, expiresInHours: 168 });
     expect(emailInviteBody(EVENT, 'a@b.co')).toEqual({ type: 'session', sessionId: 's1', inviteeEmail: 'a@b.co', maxUses: 1, expiresInHours: 168 });
     expect(LINK_CAP_DEFAULT).toBe(500);
     for (const unset of [undefined, null, 0, -3, Number.NaN]) expect(linkCap(unset)).toBe(500);
     expect(linkCap(12)).toBe(12);
     expect(linkCap(12.7)).toBe(12);
-    expect(linkBody(POD, 12)).toEqual({ type: 'pod', podId: 'p1', maxUses: 12, expiresInHours: 168 });
-    expect(linkBody(EVENT, 50)).toEqual({ type: 'session', sessionId: 's1', maxUses: 50, expiresInHours: 168 });
+    expect(linkBody(POD, 12)).toEqual({ type: 'pod', podId: 'p1', maxUses: 12 });
+    expect(linkBody(EVENT, 50)).toEqual({ type: 'session', sessionId: 's1', maxUses: 50 });
   });
 
   it('the email field says what is wrong at the field, in words', () => {
@@ -168,8 +168,8 @@ describe('the picker: rows, chips and the footer', () => {
     expect(pickerTitle(EVENT)).toBe('Invite people');
     expect(SEARCH_PLACEHOLDER).toBe('Search by name, role or company');
     expect([INVITE_BY_EMAIL, SHARE_A_LINK, SHOW_MORE, YOUR_CONNECTIONS]).toEqual(['Invite by email', 'Share a link', 'Show more', 'Your connections']);
-    expect(shareLinkNote(POD, 12)).toBe('Anyone with this link can join the pod, up to 12 people, for 7 days.');
-    expect(shareLinkNote(EVENT, 1)).toBe('Anyone with this link can join the event, up to 1 person, for 7 days.');
+    expect(shareLinkNote(POD, 12)).toBe('Anyone with this link can join the pod, up to 12 people. It keeps working until you withdraw it.');
+    expect(shareLinkNote(EVENT, 1)).toBe('Anyone with this link can join the event, up to 1 person. It works until the event ends.');
     expect(people(1)).toBe('1 person');
     expect(people(2)).toBe('2 people');
   });

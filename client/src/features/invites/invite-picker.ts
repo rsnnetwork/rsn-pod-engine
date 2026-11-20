@@ -35,7 +35,10 @@ export const BATCH_MAX = 50;
 export const CHIPS_SHOWN = 3;
 /** A shareable link whose pod or event sets no capacity lets this many people in. */
 export const LINK_CAP_DEFAULT = 500;
-/** An email invite and a link last a week, as the pod and event pages always made them. */
+/**
+ * An email invite to one person for a pod or a circle lasts a week. A shareable link has no timer (21 Nov 2026, Ben:
+ * "We need something evergreen up until the event starts"): the server decides, see invite-expiry.ts.
+ */
 const INVITE_HOURS = 168;
 
 export const SEARCH_PLACEHOLDER = 'Search by name, role or company';
@@ -126,7 +129,7 @@ export function batchBody(target: InviteTarget, inviteeUserIds: string[], allPod
   return allPodMembers ? { ...body, allPodMembers: true } : body;
 }
 
-/** POST /invites for one address: one use, a week long. */
+/** POST /invites for one address: one use, a week long (an event invite has no timer: the server ends it with the event). */
 export function emailInviteBody(target: InviteTarget, email: string) {
   return { ...typed(target), inviteeEmail: email.trim(), maxUses: 1, expiresInHours: INVITE_HOURS };
 }
@@ -136,14 +139,17 @@ export function linkCap(cap: number | null | undefined): number {
   return typeof cap === 'number' && Number.isFinite(cap) && cap >= 1 ? Math.floor(cap) : LINK_CAP_DEFAULT;
 }
 
-/** POST /invites for a shareable link (no address): the real cap, a week long. */
+/** POST /invites for a shareable link (no address): the real cap, and no timer. */
 export function linkBody(target: InviteTarget, cap: number) {
-  return { ...typed(target), maxUses: cap, expiresInHours: INVITE_HOURS };
+  return { ...typed(target), maxUses: cap };
 }
 
 /** What the link allows, said before it is made and beside it after. */
 export function shareLinkNote(target: InviteTarget, cap: number): string {
-  return `Anyone with this link can join the ${targetNoun(target)}, up to ${people(cap)}, for 7 days.`;
+  const lasts = target.type === 'session'
+    ? 'It works until the event ends.'
+    : 'It keeps working until you withdraw it.';
+  return `Anyone with this link can join the ${targetNoun(target)}, up to ${people(cap)}. ${lasts}`;
 }
 
 /** The email form: each problem at the field, in words (lib/form-resolver.ts). */

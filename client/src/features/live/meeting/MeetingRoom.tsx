@@ -112,7 +112,7 @@ function MeetingInviteDialog({ sessionId, open, onClose, maxUses }: { sessionId:
         <p className={`mt-2 text-xs ${failed ? 'text-red-600' : 'text-gray-500'}`}>
           {failed
             ? 'We could not prepare an invite link. You can invite people from the event page.'
-            : 'Anyone with this link can join the event. It stays valid for 7 days.'}
+            : 'Anyone with this link can join the event. It works until the event ends.'}
         </p>
       </div>
     </Modal>

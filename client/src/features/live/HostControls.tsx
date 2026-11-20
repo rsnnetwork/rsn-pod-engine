@@ -595,7 +595,7 @@ export default function HostControls({ sessionId, canEndEvent, onLeave }: Props)
                   </p>
                 ) : (
                   <p className="text-[11px] text-gray-500 mt-1.5">
-                    Anyone with this link can join the event. It stays valid for 7 days.
+                    Anyone with this link can join the event. It works until the event ends.
                   </p>
                 )}
               </div>

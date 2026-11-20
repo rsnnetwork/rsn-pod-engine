@@ -323,7 +323,7 @@ test('the pod page: browse 30 at a time, find Claus by "Cla", choose people as c
 
   // "Share a link" says the pod's real cap (its 40 places) before any link is made.
   await sheet.getByRole('button', { name: 'Share a link' }).click();
-  await expect(sheet.getByText('Anyone with this link can join the pod, up to 40 people, for 7 days.')).toBeVisible();
+  await expect(sheet.getByText('Anyone with this link can join the pod, up to 40 people. It keeps working until you withdraw it.')).toBeVisible();
   await sheet.getByRole('button', { name: 'Share a link' }).click();
 
   // Search: "Cla" is Claus and Clara, and nobody else.
@@ -441,7 +441,7 @@ test('the event page opens the sheet on ?invite=1 on its pod, invites everyone i
 
   // Share a link: the note says the event's real cap before the link is made, and the link allows exactly that.
   await sheet.getByRole('button', { name: 'Share a link' }).click();
-  await expect(sheet.getByText('Anyone with this link can join the event, up to 50 people, for 7 days.')).toBeVisible();
+  await expect(sheet.getByText('Anyone with this link can join the event, up to 50 people. It works until the event ends.')).toBeVisible();
   await sheet.getByRole('button', { name: 'Make a link' }).click();
   const link = sheet.getByLabel('Invite link');
   await expect(link).toHaveValue(new RegExp(`/invite/[A-Za-z0-9_-]+$`), { timeout: 20_000 });

@@ -17,6 +17,7 @@ import { eventDurationOf, eventPlaceOf } from '../session/event-duration';
 import * as circleService from '../circle/circle.service';
 import { isCircleManager, mayInviteToCircle } from '../circle/circle-managers';
 import { activeMemberSql } from '../users/active-member';
+import { inviteExpiresAt } from './invite-expiry';
 import * as emailService from '../email/email.service';
 import config from '../../config';
 
@@ -551,10 +552,9 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     input = { ...input, inviteeEmail: target.rows[0].email };
   }
 
-  let expiresAt: Date | null = null;
-  if (input.expiresInHours) {
-    expiresAt = new Date(Date.now() + input.expiresInHours * 60 * 60 * 1000);
-  }
+  // 21 Nov 2026: the server decides how long an invite lasts (invite-expiry.ts): event invites and pod or circle
+  // links have no timer.
+  const expiresAt = inviteExpiresAt({ type: input.type, isLink: !input.inviteeEmail, expiresInHours: input.expiresInHours });
 
   const isAdmin = isAdminRole(userRole);
 

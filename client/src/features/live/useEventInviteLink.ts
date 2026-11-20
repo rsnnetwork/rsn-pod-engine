@@ -45,7 +45,7 @@ export function useEventInviteLink(sessionId: string, open: boolean, maxUses: nu
     && (i.useCount ?? 0) < (i.maxUses ?? 1)
     && (!i.expiresAt || new Date(i.expiresAt).getTime() > Date.now()));
   const create = useMutation({
-    mutationFn: () => api.post('/invites', { type: 'session', sessionId, maxUses, expiresInHours: 168 }),
+    mutationFn: () => api.post('/invites', { type: 'session', sessionId, maxUses }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['session-pending-invites', sessionId] }),
   });
   const { mutate: createLink } = create;

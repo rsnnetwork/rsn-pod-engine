@@ -85,7 +85,7 @@ export function useInviteByEmail(target: InviteTarget, handlers: Handlers<string
   });
 }
 
-/** A shareable link for up to `cap` people, a week long. Its answer is the invite code the link is made from. */
+/** A shareable link for up to `cap` people, with no timer. Its answer is the invite code the link is made from. */
 export function useShareLink(target: InviteTarget, cap: number, handlers: Handlers<string, void>) {
   const qc = useQueryClient();
   return useMutation<string, unknown, void>({
