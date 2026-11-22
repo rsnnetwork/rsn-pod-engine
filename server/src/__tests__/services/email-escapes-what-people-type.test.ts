@@ -81,6 +81,31 @@ const inviteData = {
   inviterName: 'Stefan', type: 'session' as const, targetName: 'Founders Evening', inviteUrl: `${APP}/invite/ABC123`, calendarEvent,
 };
 
+const roundup = {
+  recipientName: 'Ana',
+  settingsUrl: `${APP}/settings`,
+  meetingRequests: [{ name: 'Fatima', note: 'Coffee next week?', url: `${APP}/messages` }],
+  acceptances: [{ name: 'Bo', url: `${APP}/messages/c1` }],
+  messages: [{ name: 'Clara', count: 2, snippet: 'See you Thursday', url: `${APP}/messages/c2` }],
+  invites: [{ inviterName: 'Stefan', targetName: 'Founders Evening', what: 'event' as const, url: `${APP}/invite/ABC123` }],
+};
+const weekly = {
+  recipientName: 'Ana',
+  waitingForYou: [{ name: 'Fatima', url: `${APP}/people/u1` }],
+  waitingForYouMore: 2,
+  sentUnanswered: 3,
+  newConnections: [{ name: 'Bo', url: `${APP}/messages/c1` }],
+  unreadMessages: 4,
+  messagesUrl: `${APP}/messages`,
+  upcomingEvents: [{ title: 'Founders Evening', when: 'Thu 5 Nov 2026, 17:00 GMT', url: `${APP}/sessions/s-1` }],
+  newMembers: 7,
+  newCircles: [{ name: 'Nordic Founders', url: `${APP}/circles/c9` }],
+  people: [{ name: 'Clara', line: 'Fundraising for climate startups', url: `${APP}/people/u2` }],
+  suggestions: [{ text: 'Reply to Fatima', url: `${APP}/messages` }],
+  settingsUrl: `${APP}/settings`,
+  unsubscribeUrl: 'https://api.rsn.network/api/email/unsubscribe/weekly?token=abc',
+};
+
 const cases: Case[] = [
   email('sendMagicLinkEmail', 'the sign-in link', ['to', 'magicLinkUrl'],
     ['delivered+ana@resend.dev', `${APP}/auth/verify?token=abc&inviteCode=XYZ`]),
@@ -170,6 +195,13 @@ const cases: Case[] = [
   email('buildWaitlistPromotedEmail', 'a place from the waiting list while live, as built', ['data'], [{
     eventTitle: 'Founders breakfast', when: "It's on now.", link: `${APP}/call/k7m2x9q4ra`, live: true, calendarEvent,
   }]),
+  // 22 Nov 2026: the notification round-up, the next-morning email and the weekly digest, built and sent.
+  email('buildNotificationRoundupEmail', 'a round-up of notifications, as built', ['data'], [{ ...roundup, summary: '2 new messages and 1 meeting request' }]),
+  email('sendNotificationRoundupEmail', 'a round-up of notifications', ['to', 'data'], ['delivered+ana@resend.dev', { ...roundup, summary: '2 new messages and 1 meeting request' }]),
+  email('buildDailyDigestEmail', 'yesterday on REASON, as built', ['data'], [{ ...roundup, summary: '2 new messages', dailyMax: 3 }]),
+  email('sendDailyDigestEmail', 'yesterday on REASON', ['to', 'data'], ['delivered+ana@resend.dev', { ...roundup, summary: '2 new messages', dailyMax: 3 }]),
+  email('buildWeeklyDigestEmail', 'the weekly digest, as built', ['data'], [weekly]),
+  email('sendWeeklyDigestEmail', 'the weekly digest', ['to', 'data'], ['delivered+ana@resend.dev', weekly]),
 ];
 
 /** Exports that build no email: the shared card and the admin switch. Anything new must be put in one list or the other. */

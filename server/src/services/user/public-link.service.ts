@@ -131,6 +131,8 @@ export async function getPublicProfile(token: string, viewerId: string | null): 
   const memberId = r.rows[0]?.id;
   if (!memberId) throw notAvailable();
   if (viewerId && await blockService.areBlocked(viewerId, memberId)) throw notAvailable();
-  const { id: _id, ...card } = toPublicMember(await getUserById(memberId));
+  // Without the id, and without the badge an admin gave them (21 Nov 2026): it marks a member among REASON's members
+  // and means nothing to someone signed out, and the consent line names every field the link shows.
+  const { id: _id, profileBadge: _badge, ...card } = toPublicMember(await getUserById(memberId));
   return { ...card, canBring: canBring(card) };
 }

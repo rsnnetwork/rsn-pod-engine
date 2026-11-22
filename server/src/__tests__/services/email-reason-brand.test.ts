@@ -99,6 +99,30 @@ const meetingConfirmed = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+const roundupSections = {
+  meetingRequests: [{ name: 'Fatima', note: 'Coffee next week?', url: 'https://app.rsn.network/messages' }],
+  acceptances: [],
+  messages: [{ name: 'Bo', count: 3, snippet: 'See you Thursday', url: 'https://app.rsn.network/messages/c1' }],
+  invites: [],
+};
+
+const weeklyDigest = {
+  recipientName: 'Ana',
+  waitingForYou: [{ name: 'Fatima', url: 'https://app.rsn.network/people/u1' }],
+  waitingForYouMore: 0,
+  sentUnanswered: 2,
+  newConnections: [{ name: 'Bo', url: 'https://app.rsn.network/messages/c1' }],
+  unreadMessages: 4,
+  messagesUrl: 'https://app.rsn.network/messages',
+  upcomingEvents: [{ title: 'Founders breakfast', when: 'Tue 24 Nov 2026, 08:00 CET', url: 'https://app.rsn.network/sessions/s1' }],
+  newMembers: 7,
+  newCircles: [{ name: 'Nordic Founders', url: 'https://app.rsn.network/circles/c9' }],
+  people: [{ name: 'Clara', line: 'Fundraising for climate startups', url: 'https://app.rsn.network/people/u2' }],
+  suggestions: [{ text: 'Reply to Fatima', url: 'https://app.rsn.network/messages' }],
+  settingsUrl: 'https://app.rsn.network/settings',
+  unsubscribeUrl: 'https://api.rsn.network/api/email/unsubscribe/weekly?token=abc',
+};
+
 const cases: EmailCase[] = [
   {
     fn: 'sendMagicLinkEmail', label: 'the sign-in link', subject: 'Sign in to REASON',
@@ -331,6 +355,30 @@ const cases: EmailCase[] = [
       "If you didn't ask for this, ignore this email and nothing changes.",
     ],
     run: () => emailService.sendEmailChangeCodeEmail('delivered+ana@resend.dev', { code: '481206' }),
+  },
+  // 22 Nov 2026: the notification email gate's round-up, the next-morning email and the weekly digest.
+  {
+    fn: 'sendNotificationRoundupEmail', label: 'a round-up of notifications', subject: '3 new messages and 1 meeting request on REASON',
+    brandLine: MEET,
+    says: ['You have 3 new messages and 1 meeting request on REASON.'],
+    run: () => emailService.sendNotificationRoundupEmail('delivered+ana@resend.dev', {
+      ...roundupSections, recipientName: 'Ana', summary: '3 new messages and 1 meeting request', settingsUrl: 'https://app.rsn.network/settings',
+    }),
+  },
+  {
+    fn: 'sendDailyDigestEmail', label: 'yesterday on REASON', subject: 'Yesterday on REASON: 3 new messages and 1 meeting request',
+    brandLine: MEET,
+    says: ['Yesterday you reached your limit of 3 emails a day from REASON'],
+    run: () => emailService.sendDailyDigestEmail('delivered+ana@resend.dev', {
+      ...roundupSections, recipientName: 'Ana', summary: '3 new messages and 1 meeting request', dailyMax: 3,
+      settingsUrl: 'https://app.rsn.network/settings',
+    }),
+  },
+  {
+    fn: 'sendWeeklyDigestEmail', label: 'the weekly digest', subject: 'Your week on REASON',
+    brandLine: MEET,
+    says: ['here is your week on REASON'],
+    run: () => emailService.sendWeeklyDigestEmail('delivered+ana@resend.dev', weeklyDigest),
   },
   {
     fn: 'sendEmailChangedNoticeEmail', label: 'the email changed notice', subject: 'Your REASON sign-in email was changed',

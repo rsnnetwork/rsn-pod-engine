@@ -16,6 +16,8 @@ import MeetSheet from '../human/MeetSheet';
 import { statusOf } from '../human/profile-text';
 import ForYouRail from './ForYouRail';
 import ForYouEmpty from './ForYouEmpty';
+import ForYouWaiting from './ForYouWaiting';
+import { askedSinceFetch, meetRequestUserId } from './for-you-view';
 import { errorMessage, fetchForYou, personName, reasonKeys, setPersonResponse, stateFromPoke, type ForYouMatch } from '../api';
 import { CONNECTION_LOST } from '../errors';
 import { visibleText } from '../person';
@@ -23,9 +25,13 @@ import { visibleText } from '../person';
 const SHORTLIST = 5;
 // Every Save carries this key, so the page can ask which people have a Save in flight.
 const SAVE_KEY = ['reason', 'save-person'] as const;
+// Onboarding's first question, where the member says who they want to meet (the empty state links there too).
+const EDIT_WANTS_TO = '/onboarding?edit=q1';
 
-function toCard(m: ForYouMatch, youAreLookingFor: string | null): HumanCardPerson {
+/** `asked`: the member sent them a request since this list was fetched, so the card says so until the list moves them. */
+function toCard(m: ForYouMatch, youAreLookingFor: string | null, asked: boolean): HumanCardPerson {
   const industry = visibleText(m.industry);
+  const state = stateFromPoke(m.pokeStatus, m.pokeSentByOwner);
   return {
     userId: m.userId,
     displayName: personName(m.displayName),
@@ -36,8 +42,9 @@ function toCard(m: ForYouMatch, youAreLookingFor: string | null): HumanCardPerso
     reason: m.reason,
     theyCanBring: m.theyCanBring,
     youAreLookingFor,
-    state: stateFromPoke(m.pokeStatus, m.pokeSentByOwner),
+    state: asked && state === 'none' ? 'requested' : state,
     saved: m.saved,
+    profileBadge: m.profileBadge ?? null,
   };
 }
 
@@ -55,7 +62,7 @@ export default function ForYouPage() {
 
   // "Still loading" is isPending: a fetch that is paused (the member is offline) is not loading and has
   // no data either, and must not read as "no one to suggest".
-  const { data, isPending, isError, fetchStatus, refetch } = useQuery({
+  const { data, dataUpdatedAt, isPending, isError, fetchStatus, refetch } = useQuery({
     queryKey: reasonKeys.forYou,
     queryFn: fetchForYou,
     enabled: !!userId,
@@ -117,7 +124,16 @@ export default function ForYouPage() {
     select: (m) => (m.state.variables as HumanCardPerson).userId,
   });
 
-  const cards = (data?.matches ?? []).slice(0, SHORTLIST).map((m) => toCard(m, data?.youAreLookingFor ?? null));
+  // 22 Nov 2026: someone the member has asked leaves the suggestions for "Waiting for their answer" once the list is
+  // fetched again. Between the Meet sheet's answer and that fetch, their card says "Request sent" instead of Meet. The
+  // Meet sheet's requests are told apart by what they carry (meetRequestUserId).
+  const asked = useMutationState({
+    filters: { status: 'success', predicate: (m) => meetRequestUserId(m.state.variables) !== null },
+    select: (m) => ({ userId: meetRequestUserId(m.state.variables), submittedAt: m.state.submittedAt }),
+  });
+  const askedNow = askedSinceFetch(asked, dataUpdatedAt);
+  const cards = (data?.matches ?? []).slice(0, SHORTLIST).map((m) => toCard(m, data?.youAreLookingFor ?? null, askedNow.has(m.userId)));
+  const someWaiting = (data?.waitingCount ?? data?.waiting?.length ?? 0) > 0;
 
   return (
     <>
@@ -139,37 +155,51 @@ export default function ForYouPage() {
               <h2 id="foryou-title" className="sr-only">Loading your people</h2>
               {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[150px]" />)}
             </div>
-          ) : cards.length === 0 ? (
-            <ForYouEmpty profileIncomplete={!!data?.profileIncomplete} />
           ) : (
             <>
-              <div className="mb-3 flex items-center justify-between gap-2 min-[721px]:mb-3.5">
-                <div className="flex min-w-0 items-center gap-2 min-[721px]:gap-2.5">
-                  <ReasonSheep pose="match" className="h-9 w-9 shrink-0 min-[721px]:h-[42px] min-[721px]:w-[42px]" />
-                  <h2 id="foryou-title" tabIndex={-1} className="min-w-0 text-[18px] font-bold leading-[1.12] tracking-[-0.025em] outline-none min-[721px]:text-[22px]">
-                    {cards.length === 1 ? '1 person you have a reason to meet' : `${cards.length} people you have a reason to meet`}
-                  </h2>
+              {cards.length === 0 ? (
+                <ForYouEmpty profileIncomplete={!!data?.profileIncomplete} someWaiting={someWaiting} />
+              ) : (
+                <>
+                  <div className="mb-3 flex items-center justify-between gap-2 min-[721px]:mb-3.5">
+                    <div className="flex min-w-0 items-center gap-2 min-[721px]:gap-2.5">
+                      <ReasonSheep pose="match" className="h-9 w-9 shrink-0 min-[721px]:h-[42px] min-[721px]:w-[42px]" />
+                      <h2 id="foryou-title" tabIndex={-1} className="min-w-0 text-[18px] font-bold leading-[1.12] tracking-[-0.025em] outline-none min-[721px]:text-[22px]">
+                        {cards.length === 1 ? '1 person you have a reason to meet' : `${cards.length} people you have a reason to meet`}
+                      </h2>
+                    </div>
+                    <Link to="/matches" aria-label="View all people" className="flex min-h-[44px] shrink-0 items-center px-1 text-[12px] text-[#575f6f] hover:text-reason-red">View all</Link>
+                  </div>
+                  {/* Two to a row from 1280px, where the list beside the rail has room for two cards with the photo beside
+                      the name and View profile beside Meet; one list below (at 1024px, an iPad on its side, a half would be
+                      too narrow for either). */}
+                  <div className="grid gap-3.5 min-[1280px]:grid-cols-2">
+                    {cards.map((p) => (
+                      <HumanCard
+                        key={p.userId}
+                        person={p}
+                        source="For You"
+                        busy={saving.includes(p.userId)}
+                        onMeet={setMeeting}
+                        onToggleSave={toggleSave}
+                      />
+                    ))}
+                  </div>
+                  <p className="mt-3.5 text-[12px] leading-[1.45] text-reason-muted min-[721px]:text-[13px]">
+                    When someone wants to meet you too, it becomes a match and you can book a time together.
+                  </p>
+                </>
+              )}
+              {/* 22 Nov 2026: a member who asks for many kinds of people gets suggestions as wide as the ask. */}
+              {data?.wantsBroad && !data.profileIncomplete && (
+                <div data-testid="foryou-narrow" className="mt-3.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-[11px] bg-reason-soft px-3 py-1.5">
+                  <p className="min-w-0 text-[12px] leading-[1.45] text-[#4d5562] min-[721px]:text-[13px]">
+                    You are looking for many kinds of people, so these suggestions are broad. Narrow who you want to meet for closer ones.
+                  </p>
+                  <Link to={EDIT_WANTS_TO} className="flex min-h-[44px] shrink-0 items-center text-[12px] font-bold text-reason-red hover:text-reason-red-hover min-[721px]:text-[13px]">Edit who I want to meet</Link>
                 </div>
-                <Link to="/matches" aria-label="View all people" className="flex min-h-[44px] shrink-0 items-center px-1 text-[12px] text-[#575f6f] hover:text-reason-red">View all</Link>
-              </div>
-              {/* Two to a row from 1280px, where the list beside the rail has room for two cards with the photo beside
-                  the name and View profile beside Meet; one list below (at 1024px, an iPad on its side, a half would be
-                  too narrow for either). */}
-              <div className="grid gap-3.5 min-[1280px]:grid-cols-2">
-                {cards.map((p) => (
-                  <HumanCard
-                    key={p.userId}
-                    person={p}
-                    source="For You"
-                    busy={saving.includes(p.userId)}
-                    onMeet={setMeeting}
-                    onToggleSave={toggleSave}
-                  />
-                ))}
-              </div>
-              <p className="mt-3.5 text-[12px] leading-[1.45] text-reason-muted min-[721px]:text-[13px]">
-                When someone wants to meet you too, it becomes a match and you can book a time together.
-              </p>
+              )}
+              <ForYouWaiting waiting={data?.waiting} waitingCount={data?.waitingCount} />
             </>
           )}
         </section>

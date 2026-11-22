@@ -6,6 +6,7 @@ import { useId } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { primaryActionFor, type EveryoneMember } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
+import ProfileBadge from '@/components/ui/ProfileBadge';
 import { cn } from '@/lib/utils';
 import { personName, visibleText } from '../person';
 import { PRIMARY_LABEL } from '../human/labels';
@@ -44,6 +45,8 @@ export default function EveryoneCard({ person, onMeet }: Props) {
         <div className="min-w-0">
           <h3 id={headingId} className="text-[16px] font-bold leading-tight [overflow-wrap:anywhere]">
             <Link to={profileUrl} className="hover:underline">{name}</Link>
+            {/* The badge an admin gave them (21 Nov 2026), display only; nothing for a member without one. */}
+            <ProfileBadge badge={person.profileBadge} className="ml-1.5" />
           </h3>
           {person.alreadyMet && <p className="mt-0.5 text-[12px] font-bold text-[#555d69]">You marked as met</p>}
           {roleLine && <p className="mt-0.5 text-[12px] text-[#677080] [overflow-wrap:anywhere] min-[721px]:text-[13px]">{roleLine}</p>}

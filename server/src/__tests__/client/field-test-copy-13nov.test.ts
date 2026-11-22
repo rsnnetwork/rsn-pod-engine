@@ -58,6 +58,8 @@ describe('the Meet sheet\'s default note', () => {
         (open ? createElement('div', { 'data-sheet': title }, children, footer) : null),
     },
     '../api': { errorMessage: () => '', reasonKeys: { all: ['reason'] }, sendMeetRequest: () => Promise.resolve() },
+    // A member who saved no standard message (21 Nov 2026): the sheet opens on REASON's own.
+    './useMeetDefaults': { useMeetDefaults: () => ({ data: { note: null, format: null } }) },
   }).default as (props: Record<string, unknown>) => JSX.Element;
   const draw = (person: { userId: string; displayName: string } | null) =>
     renderToStaticMarkup(createElement(sheet(), { person, onClose: () => undefined }));

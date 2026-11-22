@@ -15,6 +15,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Search as SearchIcon } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Avatar from '@/components/ui/Avatar';
+import ProfileBadge from '@/components/ui/ProfileBadge';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
 import { useAuthStore } from '@/stores/authStore';
@@ -32,6 +33,8 @@ interface Result {
   jobTitle: string | null;
   company: string | null;
   location: string | null;
+  /** The badge an admin gave them (21 Nov 2026, display only), beside the name; null for none. */
+  profileBadge?: string | null;
   /** Where a meeting request between the two stands (10 Nov 2026), from the server, so it survives a reload. */
   pokeStatus?: 'pending' | 'accepted' | null;
   /** True when the member searching sent it; false when this person did. */
@@ -153,12 +156,12 @@ export default function SearchPage() {
             <div className="flex items-start gap-3">
               <Avatar src={r.avatarUrl} name={r.displayName || 'Member'} size="md" className="shrink-0" />
               <div className="min-w-0 flex-1">
-                <Link
-                  to={`/people/${r.userId}?from=People`}
-                  className="block text-sm font-semibold text-[#1a1a2e] [overflow-wrap:anywhere] hover:underline"
-                >
-                  {r.displayName || 'A member'}
-                </Link>
+                <p className="text-sm font-semibold text-[#1a1a2e] [overflow-wrap:anywhere]">
+                  <Link to={`/people/${r.userId}?from=People`} className="hover:underline">
+                    {r.displayName || 'A member'}
+                  </Link>
+                  <ProfileBadge badge={r.profileBadge} className="ml-1.5" />
+                </p>
                 {(r.jobTitle || r.company) && (
                   <p className="text-xs text-gray-500 [overflow-wrap:anywhere]">
                     {[r.jobTitle, r.company].filter(Boolean).join(' · ')}

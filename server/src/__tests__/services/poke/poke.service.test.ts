@@ -75,14 +75,21 @@ jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
 // poke.service's wiring (recipient/name/link) and gating; the actual
 // subject-line rendering is pinned separately against the real
 // email.service.ts source (see "F2 email templates" describe block).
-const mockSendPokeReceivedEmail = jest.fn().mockResolvedValue(undefined);
-const mockSendPokeAcceptedEmail = jest.fn().mockResolvedValue(undefined);
+//
+// 22 Nov 2026: both emails are handed to the notification email gate (services/notification-email), which decides
+// when and whether they go (notification-email.service.test.ts). Here the gate is stood in: mockQueueRequestEmail
+// receives what a meeting request queues, mockQueueAcceptedEmail what an accept queues.
+const mockQueueRequestEmail = jest.fn().mockResolvedValue(undefined);
+const mockQueueAcceptedEmail = jest.fn().mockResolvedValue(undefined);
 const mockIsEmailTypeEnabled = jest.fn().mockResolvedValue(true);
 
 jest.mock('../../../services/email/email.service', () => ({
-  sendPokeReceivedEmail: (...args: unknown[]) => mockSendPokeReceivedEmail(...args),
-  sendPokeAcceptedEmail: (...args: unknown[]) => mockSendPokeAcceptedEmail(...args),
   isEmailTypeEnabled: (...args: unknown[]) => mockIsEmailTypeEnabled(...args),
+  __esModule: true,
+}));
+jest.mock('../../../services/notification-email/notification-email.service', () => ({
+  queueNotificationEmail: (request: { kind: string }) => (request.kind === 'meeting_request'
+    ? mockQueueRequestEmail(request) : mockQueueAcceptedEmail(request)),
   __esModule: true,
 }));
 
@@ -102,14 +109,12 @@ jest.mock('../../../services/notification-prefs/notification-prefs.service', () 
 
 import * as pokeService from '../../../services/poke/poke.service';
 import { REQUEST_MESSAGE_MAX } from '../../../services/poke/request-message';
-import config from '../../../config';
 
 const SENDER = 'u-send';
 const RECIPIENT = 'u-recv';
 const ACCEPTER_NAME = 'Jamie Accepter';
 const RESPONDED_AT = new Date('2026-07-23T12:00:00Z');
 const NOTIF_CREATED_AT = new Date('2026-07-23T12:00:01Z');
-const MESSAGES_URL = `${config.clientUrl}/messages`;
 
 // Both email notifications are deliberately fire-and-forget (`void`, never
 // awaited by sendPoke/acceptPoke) so a slow Resend call can never delay the
@@ -269,8 +274,8 @@ beforeEach(() => {
   mockTo.mockClear();
   mockEmitEntities.mockReset().mockResolvedValue(undefined);
   mockBroadcastDm.mockReset().mockResolvedValue(undefined);
-  mockSendPokeReceivedEmail.mockClear();
-  mockSendPokeAcceptedEmail.mockClear();
+  mockQueueRequestEmail.mockClear();
+  mockQueueAcceptedEmail.mockClear();
   mockIsEmailTypeEnabled.mockReset().mockResolvedValue(true);
   mockShouldSendEmail.mockReset().mockResolvedValue(true);
   mockShouldSendBell.mockReset().mockResolvedValue(true);
@@ -385,14 +390,15 @@ describe('acceptPoke — F2 email notification to the sender', () => {
     await pokeService.acceptPoke('poke-1', RECIPIENT);
     await flushPromises();
 
-    expect(mockSendPokeAcceptedEmail).toHaveBeenCalledWith(
-      SENDER_EMAIL,
-      SENDER_DISPLAY_NAME,
-      expect.objectContaining({
-        accepterName: ACCEPTER_NAME,
-        messagesUrl: MESSAGES_URL,
-      }),
-    );
+    // The sender, the request, who accepted, and the conversation that opened: the gate builds the email from these.
+    expect(mockQueueAcceptedEmail).toHaveBeenCalledWith({
+      userId: SENDER,
+      kind: 'meeting_accepted',
+      sourceId: 'poke-1',
+      actorId: RECIPIENT,
+      bellLink: '/messages/conv-9',
+      payload: { accepterName: ACCEPTER_NAME, conversationId: 'conv-9' },
+    });
   });
 
   it('suppresses the email when the sender has notify_email = false', async () => {
@@ -401,7 +407,7 @@ describe('acceptPoke — F2 email notification to the sender', () => {
     await pokeService.acceptPoke('poke-1', RECIPIENT);
     await flushPromises();
 
-    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
+    expect(mockQueueAcceptedEmail).not.toHaveBeenCalled();
   });
 
   it('suppresses the email when the sender has no email on file', async () => {
@@ -410,7 +416,7 @@ describe('acceptPoke — F2 email notification to the sender', () => {
     await pokeService.acceptPoke('poke-1', RECIPIENT);
     await flushPromises();
 
-    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
+    expect(mockQueueAcceptedEmail).not.toHaveBeenCalled();
   });
 
   it('suppresses the email when the email_config kill-switch is off for poke_accepted', async () => {
@@ -421,12 +427,12 @@ describe('acceptPoke — F2 email notification to the sender', () => {
     await flushPromises();
 
     expect(mockIsEmailTypeEnabled).toHaveBeenCalledWith('poke_accepted');
-    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
+    expect(mockQueueAcceptedEmail).not.toHaveBeenCalled();
   });
 
   it('never fails acceptPoke when the email send rejects (non-blocking, fire-and-forget)', async () => {
     armAccept('Hello there');
-    mockSendPokeAcceptedEmail.mockRejectedValueOnce(new Error('resend down'));
+    mockQueueAcceptedEmail.mockRejectedValueOnce(new Error('resend down'));
 
     const result = await pokeService.acceptPoke('poke-1', RECIPIENT);
     await flushPromises();
@@ -440,7 +446,7 @@ describe('acceptPoke — F2 email notification to the sender', () => {
     await expect(pokeService.acceptPoke('poke-1', RECIPIENT)).rejects.toThrow('db down mid-tx');
     await flushPromises();
 
-    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
+    expect(mockQueueAcceptedEmail).not.toHaveBeenCalled();
   });
 });
 
@@ -499,8 +505,8 @@ describe('declinePoke — still notifies nobody', () => {
     expect(mockQuery.mock.calls.some(c => /INSERT INTO notifications/.test(c[0] as string))).toBe(false);
     expect(mockTo).not.toHaveBeenCalled();
     expect(mockEmit).not.toHaveBeenCalled();
-    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
-    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    expect(mockQueueAcceptedEmail).not.toHaveBeenCalled();
+    expect(mockQueueRequestEmail).not.toHaveBeenCalled();
     // The recipient's own bell row may be marked read, and their own screens told;
     // nothing anywhere names the sender.
     for (const [, users, tags] of mockEmitEntities.mock.calls as Array<[unknown, string[], string[]]>) {
@@ -517,16 +523,15 @@ describe('sendPoke — F2 email notification to the recipient', () => {
     await pokeService.sendPoke(SENDER, RECIPIENT, 'Would love to connect and swap notes.');
     await flushPromises();
 
-    expect(mockSendPokeReceivedEmail).toHaveBeenCalledWith(
-      RECIPIENT_EMAIL,
-      RECIPIENT_DISPLAY_NAME,
-      expect.objectContaining({
-        senderName: SENDER_NAME,
-        note: 'Would love to connect and swap notes.',
-        reasonLine: null,
-        messagesUrl: MESSAGES_URL,
-      }),
-    );
+    // The recipient, the request, and what the email says; the bell row it answers to drops the email once read.
+    expect(mockQueueRequestEmail).toHaveBeenCalledWith(expect.objectContaining({
+      userId: RECIPIENT,
+      kind: 'meeting_request',
+      actorId: SENDER,
+      payload: { senderName: SENDER_NAME, note: 'Would love to connect and swap notes.', reasonLine: null },
+    }));
+    const queued = mockQueueRequestEmail.mock.calls[0][0] as { sourceId: string; bellLink: string };
+    expect(queued.bellLink).toBe(`/messages?poke=${queued.sourceId}`);
   });
 
   it('passes note: null and reasonLine: null for a message-less poke', async () => {
@@ -535,11 +540,9 @@ describe('sendPoke — F2 email notification to the recipient', () => {
     await pokeService.sendPoke(SENDER, RECIPIENT);
     await flushPromises();
 
-    expect(mockSendPokeReceivedEmail).toHaveBeenCalledWith(
-      RECIPIENT_EMAIL,
-      RECIPIENT_DISPLAY_NAME,
-      expect.objectContaining({ note: null, reasonLine: null }),
-    );
+    expect(mockQueueRequestEmail).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({ note: null, reasonLine: null }),
+    }));
   });
 
   it('suppresses the email when the recipient has notify_email = false', async () => {
@@ -548,7 +551,7 @@ describe('sendPoke — F2 email notification to the recipient', () => {
     await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
     await flushPromises();
 
-    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    expect(mockQueueRequestEmail).not.toHaveBeenCalled();
   });
 
   it('suppresses the email when the recipient has no email on file', async () => {
@@ -557,7 +560,7 @@ describe('sendPoke — F2 email notification to the recipient', () => {
     await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
     await flushPromises();
 
-    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    expect(mockQueueRequestEmail).not.toHaveBeenCalled();
   });
 
   it('suppresses the email when the email_config kill-switch is off for poke_request', async () => {
@@ -568,12 +571,12 @@ describe('sendPoke — F2 email notification to the recipient', () => {
     await flushPromises();
 
     expect(mockIsEmailTypeEnabled).toHaveBeenCalledWith('poke_request');
-    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    expect(mockQueueRequestEmail).not.toHaveBeenCalled();
   });
 
   it('never fails sendPoke when the email send rejects (non-blocking, fire-and-forget)', async () => {
     armSend('hi');
-    mockSendPokeReceivedEmail.mockRejectedValueOnce(new Error('resend down'));
+    mockQueueRequestEmail.mockRejectedValueOnce(new Error('resend down'));
 
     const result = await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
     await flushPromises();
@@ -590,7 +593,7 @@ describe('sendPoke — F2 email notification to the recipient', () => {
     // sendPoke still succeeds — the bell notification (and its email
     // sibling) are best-effort, exactly like the pre-existing notifErr catch.
     expect(result.status).toBe('pending');
-    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    expect(mockQueueRequestEmail).not.toHaveBeenCalled();
   });
 });
 
@@ -611,7 +614,7 @@ describe('sendPoke — pokes-prefs bell gating (Settings "Pokes" bell toggle)', 
     const tags = mockEmitEntities.mock.calls.flatMap(c => c[2] as string[]);
     expect(tags).not.toContain(`user:${RECIPIENT}:notifications`);
     expect(result.status).toBe('pending');
-    expect(mockSendPokeReceivedEmail).toHaveBeenCalled();
+    expect(mockQueueRequestEmail).toHaveBeenCalled();
   });
 
   it('poke_bell absent/true (default) still inserts the notification and pushes the socket event (unchanged behaviour)', async () => {
@@ -634,7 +637,7 @@ describe('sendPoke — pokes-prefs email gating (Settings "Pokes" email toggle)'
     await flushPromises();
 
     expect(mockShouldSendEmail).toHaveBeenCalledWith(RECIPIENT, 'poke');
-    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    expect(mockQueueRequestEmail).not.toHaveBeenCalled();
   });
 
   it('global notify_email = false still suppresses the email even when poke_email = true (global switch > category switch)', async () => {
@@ -644,7 +647,7 @@ describe('sendPoke — pokes-prefs email gating (Settings "Pokes" email toggle)'
     await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
     await flushPromises();
 
-    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    expect(mockQueueRequestEmail).not.toHaveBeenCalled();
   });
 
   it('poke_email absent/true (default) sends the email (unchanged behaviour)', async () => {
@@ -653,7 +656,7 @@ describe('sendPoke — pokes-prefs email gating (Settings "Pokes" email toggle)'
     await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
     await flushPromises();
 
-    expect(mockSendPokeReceivedEmail).toHaveBeenCalled();
+    expect(mockQueueRequestEmail).toHaveBeenCalled();
   });
 });
 
@@ -666,7 +669,7 @@ describe('acceptPoke — pokes-prefs email gating (Settings "Pokes" email toggle
     await flushPromises();
 
     expect(mockShouldSendEmail).toHaveBeenCalledWith(SENDER, 'poke');
-    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
+    expect(mockQueueAcceptedEmail).not.toHaveBeenCalled();
   });
 
   it('global notify_email = false still suppresses the email even when poke_email = true (global switch > category switch)', async () => {
@@ -676,7 +679,7 @@ describe('acceptPoke — pokes-prefs email gating (Settings "Pokes" email toggle
     await pokeService.acceptPoke('poke-1', RECIPIENT);
     await flushPromises();
 
-    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
+    expect(mockQueueAcceptedEmail).not.toHaveBeenCalled();
   });
 
   it('poke_email absent/true (default) sends the email (unchanged behaviour)', async () => {
@@ -685,7 +688,7 @@ describe('acceptPoke — pokes-prefs email gating (Settings "Pokes" email toggle
     await pokeService.acceptPoke('poke-1', RECIPIENT);
     await flushPromises();
 
-    expect(mockSendPokeAcceptedEmail).toHaveBeenCalled();
+    expect(mockQueueAcceptedEmail).toHaveBeenCalled();
   });
 });
 
@@ -1178,7 +1181,7 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
     expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(1);
     expect(mockEmit).toHaveBeenCalledTimes(1);
     expect(broadcastCards()).toHaveLength(1);
-    expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
+    expect(mockQueueAcceptedEmail).toHaveBeenCalledTimes(1);
   });
 
   it('acceptPoke after decline throws ConflictError code MEETING_REQUEST_ALREADY_ANSWERED with details.status declined', async () => {
@@ -1261,7 +1264,7 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
     const again = await pokeService.acceptPoke('poke-2', SENDER);
     expect(again.conversationId).toBe(conversationId);
     expect(statements(/INSERT INTO dm_conversations/)).toHaveLength(1);
-    expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
+    expect(mockQueueAcceptedEmail).toHaveBeenCalledTimes(1);
   });
 
   it('sendPoke when the recipient already asked me returns { status: accepted, conversationId } (mutual = match)', async () => {
@@ -1278,11 +1281,11 @@ describe('acceptPoke and declinePoke are claims: one answer per request', () => 
     expect(world.requests).toHaveLength(1);
     expect(world.requests[0].status).toBe('accepted');
     expect(statements(/INSERT INTO user_pokes/)).toHaveLength(0);
-    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+    expect(mockQueueRequestEmail).not.toHaveBeenCalled();
     // They hear that their request was accepted, once; my bell entry for their request reads answered.
     expect(world.bells.filter(b => b.type === 'poke_accepted')).toEqual([expect.objectContaining({ user_id: RECIPIENT })]);
     expect(world.bells.filter(b => b.type === 'poke')).toEqual([expect.objectContaining({ user_id: SENDER, is_read: true })]);
-    expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
+    expect(mockQueueAcceptedEmail).toHaveBeenCalledTimes(1);
     expect(broadcastCards()).toHaveLength(1);
     // Both people's screens and bells refresh.
     const tagsFor = (u: string) => (mockEmitEntities.mock.calls as Array<[unknown, string[], string[]]>)
@@ -1459,7 +1462,7 @@ describe('a pair\'s requests are answered one transaction at a time', () => {
     expect(introCards()).toHaveLength(1);
     expect(world.bells.filter(b => b.type === 'poke_accepted')).toHaveLength(1);
     expect(world.bells.filter(b => b.type === 'poke').every(b => b.is_read)).toBe(true);
-    expect(mockSendPokeAcceptedEmail).toHaveBeenCalledTimes(1);
+    expect(mockQueueAcceptedEmail).toHaveBeenCalledTimes(1);
   });
 
   /**

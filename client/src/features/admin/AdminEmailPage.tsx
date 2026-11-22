@@ -31,7 +31,38 @@ const EMAIL_TYPE_LABELS: Record<string, { label: string; description: string }> 
   // Seeded by migration 145 (Part 3 Task 3): the first person on a full event's waiting list is given a place that opened.
   event_waitlist_promoted: { label: 'Waiting List Place', description: 'Sent when a place opens in a full event and goes to the next person on its waiting list' },
   circle_request_answered: { label: 'Circle Request Answer', description: 'Sent to a member when an admin approves or declines the circle they asked for' },
+  // Seeded by migration 160 (22 Nov 2026): the next-morning email and the Monday digest.
+  daily_digest:           { label: 'Yesterday on REASON', description: 'Sent the next morning to a member who reached their most emails a day, with what is still unread' },
+  weekly_digest:          { label: 'Weekly Digest', description: 'Sent on Monday mornings: the member\'s week, what is coming up on REASON, and people worth meeting. Send yourself a sample before switching it on' },
 };
+
+/** Send one sample of the daily or weekly email to the signed-in admin's own address (22 Nov 2026). */
+function DigestSampleCard() {
+  const { addToast } = useToastStore();
+  const sample = useMutation({
+    mutationFn: (kind: 'weekly' | 'daily') =>
+      api.post('/admin/notification-email/sample', { kind }).then(r => r.data.data as { sentTo: string; example: boolean }),
+    onSuccess: (data) => addToast(
+      data.example ? `Sample sent to ${data.sentTo}, with example content (nothing of your own to show yet)` : `Sample sent to ${data.sentTo}`,
+      'success',
+    ),
+    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'The sample could not be sent. Please try again.', 'error'),
+  });
+  return (
+    <Card className="!p-5">
+      <p className="text-sm font-semibold text-gray-800">Send yourself a sample</p>
+      <p className="text-xs text-gray-500 mt-0.5">One email to your own address, built from your own account, whether or not the switch is on.</p>
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        <Button variant="secondary" className="min-h-[44px]" isLoading={sample.isPending && sample.variables === 'weekly'} disabled={sample.isPending} onClick={() => sample.mutate('weekly')}>
+          Sample weekly digest
+        </Button>
+        <Button variant="secondary" className="min-h-[44px]" isLoading={sample.isPending && sample.variables === 'daily'} disabled={sample.isPending} onClick={() => sample.mutate('daily')}>
+          Sample "Yesterday on REASON"
+        </Button>
+      </div>
+    </Card>
+  );
+}
 
 export default function AdminEmailPage() {
   const { user } = useAuthStore();
@@ -114,6 +145,8 @@ export default function AdminEmailPage() {
           )}
         </div>
       )}
+
+      <DigestSampleCard />
 
       <Card className="!p-4 bg-gray-50 border-gray-200">
         <p className="text-xs text-gray-500">

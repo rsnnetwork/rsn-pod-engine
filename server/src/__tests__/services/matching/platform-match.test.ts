@@ -101,8 +101,9 @@ describe('scoreFit — Stefan\'s one-way rule', () => {
   });
 
   it('a multi-role array renders as a readable role, never "[object" or a pg literal', () => {
+    // 22 Nov 2026: with something besides the role (fundraising), so the fit is strong.
     const wantsAdvisors = profile({
-      id: 'u-w', displayName: 'Waqas', whoIWantToMeet: 'mentors and advisors',
+      id: 'u-w', displayName: 'Waqas', whoIWantToMeet: 'mentors and advisors for fundraising',
     });
     const multi = profile({
       id: 'u-m', displayName: 'Mona',
@@ -125,10 +126,11 @@ describe('scoreFit — Stefan\'s one-way rule', () => {
 describe('getPlatformMatches', () => {
   beforeEach(() => mockQuery.mockReset());
 
-  function armQueries(opts: { me?: any; candidates?: any[]; nextEvent?: any[] }) {
+  function armQueries(opts: { me?: any; candidates?: any[]; nextEvent?: any[]; waiting?: any[] }) {
     mockQuery.mockImplementation((sql: string) => {
       if (/FROM sessions/.test(sql)) return Promise.resolve({ rows: opts.nextEvent ?? [] });
       if (/WHERE u\.id = \$1/.test(sql)) return Promise.resolve({ rows: opts.me ? [opts.me] : [] });
+      if (/FROM user_pokes wp/.test(sql)) return Promise.resolve({ rows: opts.waiting ?? [] });
       return Promise.resolve({ rows: opts.candidates ?? [] });
     });
   }
@@ -273,7 +275,8 @@ describe('getPlatformMatches', () => {
       candidates: [
         { ...INVESTOR, id: 'u-help', whatICanHelpWith: 'Seed cheques and intros', expertiseText: 'early stage SaaS investing' },
         { ...INVESTOR, id: 'u-blank', whatICanHelpWith: '   ', expertiseText: 'early stage SaaS investing' },
-        { ...INVESTOR, id: 'u-none', whatICanHelpWith: null, expertiseText: null },
+        // A company that says SaaS keeps them a strong fit with no offer at all (22 Nov 2026: a role alone is a close one).
+        { ...INVESTOR, id: 'u-none', whatICanHelpWith: null, expertiseText: null, company: 'SaaS Angels' },
         { ...INVESTOR, id: 'u-long', whatICanHelpWith: longOffer },
       ],
     });

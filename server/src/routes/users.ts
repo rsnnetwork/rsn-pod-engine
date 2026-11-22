@@ -32,8 +32,8 @@ import {
 import { NotFoundError, ValidationError } from '../middleware/errors';
 import { query } from '../db';
 import {
-  ApiResponse, UserRole, canonicalTimeZone, hasRoleAtLeast, LINKEDIN_PROFILE_HELP, linkedinProfileUrl, PROFILE_LINK_HELP,
-  PROFILE_LINK_MAX, parseProfileUrl, type ProfileLinkKind,
+  ApiResponse, UserRole, canonicalTimeZone, hasRoleAtLeast, LINKEDIN_PROFILE_HELP, linkedinProfileUrl, MEET_NOTE_MAX,
+  MEETING_FORMATS, PROFILE_LINK_HELP, PROFILE_LINK_MAX, parseProfileUrl, type MeetingFormat, type ProfileLinkKind,
 } from '@rsn/shared';
 import * as bannerService from '../services/user/banner.service';
 import { getPictureSource, savePicture } from '../services/user/picture.service';
@@ -95,6 +95,20 @@ function refuseUnknownMemberZone(req: Request, _res: Response, next: NextFunctio
   next(new ValidationError(MEMBER_ZONE_REFUSAL, { timezone: [MEMBER_ZONE_REFUSAL] }));
 }
 
+// The member's standard meeting request (Stefan, 21 Nov 2026): the note their requests start with, counted as the Meet
+// sheet and the request route count it (trimmed, at most MEET_NOTE_MAX characters), and the format they propose. A
+// blank note (or null) clears it, so the sheet goes back to REASON's own note. {first} is kept as typed: the sheet turns
+// it into the person's first name. The words are the sentences the form shows under each field.
+export const MEET_NOTE_DEFAULT_TOO_LONG = `Keep the message to ${MEET_NOTE_MAX} characters or fewer.`;
+export const MEET_FORMAT_DEFAULT_REFUSAL = 'Choose one of the offered formats.';
+const MEET_FORMAT_KEYS = MEETING_FORMATS.map((f) => f.key) as [MeetingFormat, ...MeetingFormat[]];
+// The first cap only bounds the work on a runaway body (spaces round the note are trimmed before it is counted).
+const meetNoteDefault = z.string({ invalid_type_error: 'Write the message as text.' }).max(MEET_NOTE_MAX * 4, MEET_NOTE_DEFAULT_TOO_LONG).nullable().optional()
+  .transform((value) => (value === undefined || value === null ? value : value.trim() || null))
+  .refine((value) => !value || !value.includes(String.fromCharCode(0)), 'The message cannot hold that character.')
+  .refine((value) => !value || value.length <= MEET_NOTE_MAX, MEET_NOTE_DEFAULT_TOO_LONG);
+const meetFormatDefault = z.enum(MEET_FORMAT_KEYS, { message: MEET_FORMAT_DEFAULT_REFUSAL }).nullable().optional();
+
 const updateUserSchema = z.object({
   displayName: z.string().max(100).optional(),
   firstName: z.string().max(100).optional(),
@@ -133,6 +147,8 @@ const updateUserSchema = z.object({
   profileVisible: z.boolean().optional(),
   inviteOptOutPublicEvents: z.boolean().optional(),
   showCommunities: z.boolean().optional(),
+  meetNoteDefault,
+  meetFormatDefault,
 });
 
 // The member banner (21 Oct 2026) and photo (30 Oct review, T3a): `{ image?, crop? }` (picture-body.ts, shared with an

@@ -10,7 +10,7 @@
 // Left out: the member themself, anyone blocked in either direction, and every account that is not active.
 
 import { query } from '../../db';
-import type { ConnectionList, PersonConnection } from '@rsn/shared';
+import type { ConnectionList, PersonConnection, ProfileBadgeKind } from '@rsn/shared';
 
 // How many people one moment can hold when more than a page share it (see pageBySince). Only a bulk
 // write could put that many on one millisecond; the number keeps the question bounded even then.
@@ -22,6 +22,7 @@ interface Row {
   avatar_url: string | null;
   job_title: string | null;
   company: string | null;
+  profile_badge: ProfileBadgeKind | null;
   met: boolean;
   since: Date;
 }
@@ -60,7 +61,7 @@ export const CONNECTION_SIGNALS_SQL = `signals AS (
 // $1 the member, $2 the cursor (people strictly before it) or null, $3 how many, $4 one moment only, or null.
 const CONNECTIONS_SQL = `
   WITH ${CONNECTION_SIGNALS_SQL}
-  SELECT u.id AS user_id, u.display_name, u.avatar_url, u.job_title, u.company, pe.met, pe.since
+  SELECT u.id AS user_id, u.display_name, u.avatar_url, u.job_title, u.company, u.profile_badge, pe.met, pe.since
     FROM people pe
     JOIN users u ON u.id = pe.person_id
    WHERE u.id <> $1
@@ -79,6 +80,8 @@ const toItem = (r: Row): PersonConnection => ({
   avatarUrl: r.avatar_url,
   jobTitle: r.job_title,
   company: r.company,
+  // The badge an admin gave them (21 Nov 2026, display only), beside their name; a value this build does not know is none.
+  profileBadge: r.profile_badge === 'premium' ? r.profile_badge : null,
   how: r.met ? 'met' : 'connected',
   since: r.since.toISOString(),
 });

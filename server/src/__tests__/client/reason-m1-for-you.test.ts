@@ -328,7 +328,9 @@ describe('For You: links, words and the buttons the end-to-end spec presses', ()
   it('an empty list with the profile complete is the onboarding brief\'s screen 8, word for word: Explore people, and Edit who I want to meet (onboarding\'s first question)', () => {
     expect(empty()).toContain('const NO_MATCHES_TITLE = "Your people aren\'t here yet.";');
     expect(empty()).toContain('const NO_MATCHES_TEXT = "We\'re still finding people who match what you\'re looking for. Check back soon.";');
-    expect(empty()).toMatch(/<h2 id="foryou-title" tabIndex=\{-1\} [^>]*>\{NO_MATCHES_TITLE\}<\/h2>/);
+    // 22 Nov 2026: a member whose requests are all waiting reads that instead (people already asked are not suggested).
+    expect(empty()).toMatch(/<h2 id="foryou-title" tabIndex=\{-1\} [^>]*>\{someWaiting \? ALL_ASKED_TITLE : NO_MATCHES_TITLE\}<\/h2>/);
+    expect(empty()).toContain("const ALL_ASKED_TITLE = 'You have asked everyone who fits for now.';");
     expect(empty()).toMatch(/<Link to="\/search" className=\{`\$\{ACTION\} [^`]*`\}>Explore people<\/Link>/);
     expect(empty()).toMatch(/<Link to="\/onboarding\?edit=q1" className=\{`\$\{ACTION\} [^`]*`\}>Edit who I want to meet<\/Link>/);
     // The events, invites and wider-circle links the old empty state offered are gone.
@@ -339,7 +341,7 @@ describe('For You: links, words and the buttons the end-to-end spec presses', ()
     expect(action).toContain('[overflow-wrap:anywhere]');
     // A profile that is not finished keeps its own state.
     expect(empty()).toContain('Finish my profile');
-    expect(page()).toContain('<ForYouEmpty profileIncomplete={!!data?.profileIncomplete} />');
+    expect(page()).toContain('<ForYouEmpty profileIncomplete={!!data?.profileIncomplete} someWaiting={someWaiting} />');
   });
 });
 

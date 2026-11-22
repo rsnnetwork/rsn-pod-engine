@@ -515,7 +515,9 @@ async function sendEmailsSlowly(
       lastStart = pace.now();
       try {
         // In the bulk lane (H2b item 7): a member's single email elsewhere goes ahead of this burst at the provider's gate.
-        await asBulkEmail(() => invites.emailInvite(context, { code: m.code, inviteeEmail: m.email, inviteeUserId: m.userId }));
+        // Through the notification email gate (22 Nov 2026): everyone a batch names is a member, so each is emailed
+        // only while away, within their daily maximum (invite.service.ts, emailOrQueueInvite).
+        await asBulkEmail(() => invites.emailOrQueueInvite(context, { code: m.code, inviteeEmail: m.email, inviteeUserId: m.userId, inviteId: m.inviteId }));
       } catch (err) {
         logger.warn({ err, inviteeId: m.userId, inviteId: m.inviteId }, 'Batch invite email failed (the invite exists and the bell was sent)');
       }

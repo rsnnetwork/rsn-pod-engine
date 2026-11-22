@@ -163,6 +163,8 @@ async function sendEmail(opts: {
    *  is what makes Gmail/Outlook/Apple render an inline Accept/Decline invite
    *  instead of a bare .ics download (Stefan, 9 Sep 2026). */
   attachments?: { filename: string; content: string; contentType?: string }[];
+  /** Extra headers (22 Nov 2026: List-Unsubscribe on the weekly digest). They never replace X-Entity-Ref-ID. */
+  headers?: Record<string, string>;
 }): Promise<SendEmailResult> {
   if (!config.resendApiKey) {
     logger.warn({ to: opts.to, subject: opts.subject }, 'No email provider — email skipped');
@@ -187,6 +189,7 @@ async function sendEmail(opts: {
     text: opts.text,
     replyTo: opts.replyTo || fromRaw.replace(/.*<|>.*/g, ''),
     headers: {
+      ...(opts.headers ?? {}),
       'X-Entity-Ref-ID': uuid(), // unique per email — prevents Gmail grouping into one thread
     },
   };
@@ -408,7 +411,7 @@ export async function sendDmNotificationEmail(
   to: string,
   recipientDisplayName: string,
   data: DmNotificationEmailData,
-): Promise<void> {
+): Promise<SendEmailResult> {
   const subject = `${data.senderName} sent you a message on REASON`;
   const html = `
     <!DOCTYPE html><html><head><meta charset="utf-8"></head>
@@ -436,11 +439,11 @@ export async function sendDmNotificationEmail(
 
   if (config.resendApiKey) {
     const text = `Hey ${recipientDisplayName},\n\n${data.senderName} sent you a message on REASON:\n\n"${data.snippet}"\n\nView the conversation: ${data.threadUrl}\n\nREASON — Meet people you have a reason to know.`;
-    await sendEmail({ to, subject, html, text });
-    return;
+    return sendEmail({ to, subject, html, text });
   }
 
   logger.warn({ to, senderName: data.senderName }, 'No email provider — DM notification email skipped');
+  return { sent: false };
 }
 
 // ─── Host Event Recap Email ─────────────────────────────────────────────────
@@ -1227,7 +1230,7 @@ export async function sendPokeReceivedEmail(
   to: string,
   recipientDisplayName: string,
   data: PokeReceivedEmailData,
-): Promise<void> {
+): Promise<SendEmailResult> {
   const subject = `${data.senderName} wants to meet you on REASON`;
   // 30 Oct 2026 (Stefan: "It looks like the sender wrote it"): the quote holds only what the
   // member wrote, and REASON's line is its own plain paragraph under its own heading, outside
@@ -1268,11 +1271,11 @@ export async function sendPokeReceivedEmail(
 
   if (config.resendApiKey) {
     const text = `Hey ${recipientDisplayName},\n\n${data.senderName} wants to meet you on REASON.${data.note ? `\n\n"${data.note}"` : ''}${data.reasonLine ? `\n\nWhy REASON suggested this\n${data.reasonLine}` : ''}\n\nView it: ${data.messagesUrl}\n\nREASON — Meet people you have a reason to know.`;
-    await sendEmail({ to, subject, html, text });
-    return;
+    return sendEmail({ to, subject, html, text });
   }
 
   logger.warn({ to, senderName: data.senderName }, 'No email provider — poke received email skipped');
+  return { sent: false };
 }
 
 // ─── Poke Accepted Email (Task F2, 23 Jul 2026) ─────────────────────────────
@@ -1288,7 +1291,7 @@ export async function sendPokeAcceptedEmail(
   to: string,
   recipientDisplayName: string,
   data: PokeAcceptedEmailData,
-): Promise<void> {
+): Promise<SendEmailResult> {
   const subject = `${data.accepterName} accepted your meeting request`;
   const html = `
     <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
@@ -1313,11 +1316,268 @@ export async function sendPokeAcceptedEmail(
 
   if (config.resendApiKey) {
     const text = `Hey ${recipientDisplayName},\n\n${data.accepterName} accepted your meeting request on REASON. You're connected — start the conversation.\n\nOpen conversation: ${data.messagesUrl}\n\nREASON — Meet people you have a reason to know.`;
-    await sendEmail({ to, subject, html, text });
-    return;
+    return sendEmail({ to, subject, html, text });
   }
 
   logger.warn({ to, accepterName: data.accepterName }, 'No email provider — poke accepted email skipped');
+  return { sent: false };
+}
+
+// ─── Notification round-ups and digests (22 Nov 2026, Stefan) ────────────────────────────────────────────────
+// "Only get notifications if I am not online", "max X notifications a day, and if more than X, then send a mail the
+// next day on what happened on REASON", and "a weekly digest email on what has happened on your account, what is
+// happening in REASON, and ideas to how they can engage in more human connections". services/notification-email decides
+// who gets which and when; these build what they read. Every value a person typed is escaped, every address the server
+// built is written through escapeAttr, and each carries the email settings link.
+
+/** The things a round-up (several notifications in one email) or the next-day email lists, grouped. */
+export interface NotificationRoundupSections {
+  /** Who asked to meet the member, with their note when they wrote one. */
+  meetingRequests: Array<{ name: string; note: string | null; url: string }>;
+  /** Who accepted the member's request. */
+  acceptances: Array<{ name: string; url: string }>;
+  /** One line per conversation: who wrote, how many messages, the latest one's first words. */
+  messages: Array<{ name: string; count: number; snippet: string; url: string }>;
+  /** Invites to a pod, an event or a circle. */
+  invites: Array<{ inviterName: string; targetName: string; what: 'pod' | 'event' | 'circle'; url: string }>;
+}
+
+export interface NotificationRoundupEmailData extends NotificationRoundupSections {
+  recipientName: string;
+  /** "3 new messages and 1 meeting request": the subject and the opening line say it. */
+  summary: string;
+  settingsUrl: string;
+}
+
+export interface DailyDigestEmailData extends NotificationRoundupSections {
+  recipientName: string;
+  summary: string;
+  /** The member's "Most emails a day", named in the explanation. */
+  dailyMax: number;
+  settingsUrl: string;
+}
+
+export interface WeeklyDigestEmailData {
+  recipientName: string;
+  /** Meeting requests waiting for the member's answer (the first few, named). */
+  waitingForYou: Array<{ name: string; url: string }>;
+  /** How many more are waiting beyond the ones named. */
+  waitingForYouMore: number;
+  /** The member's own requests nobody has answered yet. */
+  sentUnanswered: number;
+  /** People the member connected with this week. */
+  newConnections: Array<{ name: string; url: string }>;
+  unreadMessages: number;
+  messagesUrl: string;
+  /** Events coming up that the member may see, with their time on the event's own clock. */
+  upcomingEvents: Array<{ title: string; when: string; url: string }>;
+  newMembers: number;
+  newCircles: Array<{ name: string; url: string }>;
+  /** Up to three people REASON suggests, each with a line on what they can bring. */
+  people: Array<{ name: string; line: string | null; url: string }>;
+  /** One or two concrete next steps ("Reply to Anna", "Join Founders breakfast"). */
+  suggestions: Array<{ text: string; url: string }>;
+  settingsUrl: string;
+  unsubscribeUrl: string;
+}
+
+const DIGEST_BUTTON = 'display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;';
+// 44px tall with its border (20 + 2 x 11 + 2), the tap target every REASON screen keeps.
+const DIGEST_SMALL_BUTTON = 'display:inline-block;background:#ffffff;color:#DE322E;border:1px solid #DE322E;font-size:14px;line-height:20px;font-weight:600;text-decoration:none;padding:11px 18px;border-radius:8px;white-space:nowrap;';
+const DIGEST_FOOTER_LINK = 'display:inline-block;color:#6b7280;text-decoration:underline;padding:12px 6px;line-height:20px;';
+
+function digestPage(title: string, body: string, footer: string): string {
+  return `
+    <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${escapeHtml(title)}</title></head>
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:520px;margin:0 auto;padding:32px 16px;">
+        ${emailCardOpen()}
+${body}
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">${footer}</p>
+      </div>
+    </body></html>`;
+}
+
+function digestHeading(text: string): string {
+  return `<p style="color:#1a1a2e;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin:28px 0 10px 0;">${escapeHtml(text)}</p>`;
+}
+
+/** One row: what happened on the left, its button on the right (it wraps under the words on a narrow screen). */
+function digestRow(mainHtml: string, url: string, label: string): string {
+  return `<div style="border:1px solid #eef0f4;border-radius:10px;padding:12px 14px;margin:0 0 10px 0;">
+            <div style="color:#1a1a2e;font-size:15px;line-height:1.5;margin:0 0 10px 0;overflow-wrap:anywhere;">${mainHtml}</div>
+            <a href="${escapeAttr(url)}" style="${DIGEST_SMALL_BUTTON}">${escapeHtml(label)}</a>
+          </div>`;
+}
+
+function quoteLine(text: string): string {
+  return `<div style="color:#4b5563;font-size:14px;line-height:1.5;margin:6px 0 0 0;border-left:3px solid #DE322E;padding-left:10px;">${escapeHtml(text).replace(/\r?\n/g, '<br>')}</div>`;
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const whatLabel = (what: 'pod' | 'event' | 'circle') => (what === 'event' ? 'event' : what);
+
+/** The four groups as HTML, each only when it has something in it. */
+function roundupSectionsHtml(s: NotificationRoundupSections): string {
+  const parts: string[] = [];
+  if (s.meetingRequests.length > 0) {
+    parts.push(digestHeading(s.meetingRequests.length === 1 ? 'Wants to meet you' : 'Want to meet you'));
+    for (const r of s.meetingRequests) {
+      parts.push(digestRow(`<strong>${escapeHtml(r.name)}</strong> wants to meet you.${r.note ? quoteLine(r.note) : ''}`, r.url, 'View request'));
+    }
+  }
+  if (s.acceptances.length > 0) {
+    parts.push(digestHeading('Accepted your request'));
+    for (const a of s.acceptances) {
+      parts.push(digestRow(`<strong>${escapeHtml(a.name)}</strong> accepted your meeting request. You can message each other now.`, a.url, 'Say hello'));
+    }
+  }
+  if (s.messages.length > 0) {
+    parts.push(digestHeading('Messages'));
+    for (const m of s.messages) {
+      const what = m.count === 1 ? 'sent you a message' : `sent you ${m.count} messages`;
+      parts.push(digestRow(`<strong>${escapeHtml(m.name)}</strong> ${what}.${m.snippet ? quoteLine(m.snippet) : ''}`, m.url, 'Reply'));
+    }
+  }
+  if (s.invites.length > 0) {
+    parts.push(digestHeading('Invites'));
+    for (const i of s.invites) {
+      parts.push(digestRow(`<strong>${escapeHtml(i.inviterName)}</strong> invited you to the ${escapeHtml(whatLabel(i.what))} <strong>${escapeHtml(i.targetName)}</strong>.`, i.url, 'View invite'));
+    }
+  }
+  return parts.join('\n');
+}
+
+function roundupSectionsText(s: NotificationRoundupSections): string {
+  const lines: string[] = [];
+  for (const r of s.meetingRequests) lines.push(`${r.name} wants to meet you.${r.note ? ` "${r.note}"` : ''}\n${r.url}`);
+  for (const a of s.acceptances) lines.push(`${a.name} accepted your meeting request.\n${a.url}`);
+  for (const m of s.messages) lines.push(`${m.name} ${m.count === 1 ? 'sent you a message' : `sent you ${m.count} messages`}.${m.snippet ? ` "${m.snippet}"` : ''}\n${m.url}`);
+  for (const i of s.invites) lines.push(`${i.inviterName} invited you to the ${whatLabel(i.what)} ${i.targetName}.\n${i.url}`);
+  return lines.join('\n\n');
+}
+
+function settingsFooter(reason: string, settingsUrl: string): string {
+  return `${escapeHtml(reason)}<br><a href="${escapeAttr(settingsUrl)}" style="${DIGEST_FOOTER_LINK}">Choose how often REASON emails you</a>`;
+}
+
+/** Several notifications that came while the member was away, in one email. */
+export function buildNotificationRoundupEmail(data: NotificationRoundupEmailData): { subject: string; html: string; text: string } {
+  const subject = `${data.summary} on REASON`;
+  const body = `
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">While you were away</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${escapeHtml(data.recipientName)},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0;">You have ${escapeHtml(data.summary)} on REASON.</p>
+          ${roundupSectionsHtml(data)}`;
+  const html = digestPage(subject, body, settingsFooter("You're receiving this because these happened while you were away from REASON.", data.settingsUrl));
+  const text = `Hey ${data.recipientName},\n\nYou have ${data.summary} on REASON.\n\n${roundupSectionsText(data)}\n\nChoose how often REASON emails you: ${data.settingsUrl}\n\nREASON — Meet people you have a reason to know.`;
+  return { subject, html, text };
+}
+
+export async function sendNotificationRoundupEmail(to: string, data: NotificationRoundupEmailData): Promise<SendEmailResult> {
+  const { subject, html, text } = buildNotificationRoundupEmail(data);
+  return sendEmail({ to, subject, html, text });
+}
+
+/** The next morning's email: what came after the member's daily maximum, still unread. */
+export function buildDailyDigestEmail(data: DailyDigestEmailData): { subject: string; html: string; text: string } {
+  const subject = `Yesterday on REASON: ${data.summary}`;
+  const cap = plural(data.dailyMax, 'email', 'emails');
+  const body = `
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Yesterday on REASON</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Good morning ${escapeHtml(data.recipientName)},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0;">Yesterday you reached your limit of ${cap} a day from REASON, so here is what else happened: ${escapeHtml(data.summary)}.</p>
+          ${roundupSectionsHtml(data)}`;
+  const html = digestPage(subject, body, settingsFooter(`You're receiving this because you get at most ${cap} a day from REASON.`, data.settingsUrl));
+  const text = `Good morning ${data.recipientName},\n\nYesterday you reached your limit of ${cap} a day from REASON, so here is what else happened: ${data.summary}.\n\n${roundupSectionsText(data)}\n\nChoose how often REASON emails you: ${data.settingsUrl}\n\nREASON — Meet people you have a reason to know.`;
+  return { subject, html, text };
+}
+
+export async function sendDailyDigestEmail(to: string, data: DailyDigestEmailData): Promise<SendEmailResult> {
+  const { subject, html, text } = buildDailyDigestEmail(data);
+  return sendEmail({ to, subject, html, text });
+}
+
+function weeklyAccountHtml(d: WeeklyDigestEmailData): string {
+  const rows: string[] = [];
+  if (d.waitingForYou.length > 0) {
+    const more = d.waitingForYouMore > 0 ? ` and ${plural(d.waitingForYouMore, 'other', 'others')}` : '';
+    rows.push(`<p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 10px 0;">Waiting for your answer: ${d.waitingForYou.map((w) => `<a href="${escapeAttr(w.url)}" style="color:#DE322E;font-weight:600;text-decoration:none;">${escapeHtml(w.name)}</a>`).join(', ')}${more} asked to meet you.</p>`);
+  }
+  if (d.sentUnanswered > 0) {
+    rows.push(`<p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 10px 0;">${plural(d.sentUnanswered, 'request you sent is', 'requests you sent are')} still waiting for an answer. People often reply after an event or a nudge, so keep reaching out.</p>`);
+  }
+  if (d.newConnections.length > 0) {
+    rows.push(`<p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 10px 0;">New connections this week: ${d.newConnections.map((c) => `<a href="${escapeAttr(c.url)}" style="color:#DE322E;font-weight:600;text-decoration:none;">${escapeHtml(c.name)}</a>`).join(', ')}.</p>`);
+  }
+  if (d.unreadMessages > 0) {
+    rows.push(`<p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 10px 0;">You have <a href="${escapeAttr(d.messagesUrl)}" style="color:#DE322E;font-weight:600;text-decoration:none;">${plural(d.unreadMessages, 'unread message', 'unread messages')}</a>.</p>`);
+  }
+  return rows.length > 0 ? `${digestHeading('Your account')}\n${rows.join('\n')}` : '';
+}
+
+function weeklyHappeningHtml(d: WeeklyDigestEmailData): string {
+  const parts: string[] = [];
+  for (const e of d.upcomingEvents) {
+    parts.push(digestRow(`<strong>${escapeHtml(e.title)}</strong><br><span style="color:#6b7280;font-size:14px;">${escapeHtml(e.when)}</span>`, e.url, 'See event'));
+  }
+  const notes: string[] = [];
+  if (d.newMembers > 0) notes.push(`${plural(d.newMembers, 'new member', 'new members')} joined REASON this week.`);
+  if (d.newCircles.length > 0) {
+    notes.push(`New ${d.newCircles.length === 1 ? 'circle' : 'circles'}: ${d.newCircles.map((c) => `<a href="${escapeAttr(c.url)}" style="color:#DE322E;font-weight:600;text-decoration:none;">${escapeHtml(c.name)}</a>`).join(', ')}.`);
+  }
+  for (const n of notes) parts.push(`<p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 10px 0;">${n}</p>`);
+  return parts.length > 0 ? `${digestHeading("What's happening on REASON")}\n${parts.join('\n')}` : '';
+}
+
+function weeklyIdeasHtml(d: WeeklyDigestEmailData): string {
+  const parts: string[] = [];
+  for (const p of d.people) {
+    parts.push(digestRow(`<strong>${escapeHtml(p.name)}</strong>${p.line ? `<br><span style="color:#4b5563;font-size:14px;">${escapeHtml(p.line)}</span>` : ''}`, p.url, 'Meet them'));
+  }
+  for (const s of d.suggestions) {
+    parts.push(`<div style="text-align:center;margin:18px 0 4px 0;"><a href="${escapeAttr(s.url)}" style="${DIGEST_BUTTON}">${escapeHtml(s.text)}</a></div>`);
+  }
+  return parts.length > 0 ? `${digestHeading('Ideas for this week')}\n${parts.join('\n')}` : '';
+}
+
+function weeklyText(d: WeeklyDigestEmailData): string {
+  const lines: string[] = [];
+  if (d.waitingForYou.length > 0) lines.push(`Waiting for your answer: ${d.waitingForYou.map((w) => w.name).join(', ')}${d.waitingForYouMore > 0 ? ` and ${plural(d.waitingForYouMore, 'other', 'others')}` : ''} asked to meet you.`);
+  if (d.sentUnanswered > 0) lines.push(`${plural(d.sentUnanswered, 'request you sent is', 'requests you sent are')} still waiting for an answer. Keep reaching out.`);
+  if (d.newConnections.length > 0) lines.push(`New connections this week: ${d.newConnections.map((c) => c.name).join(', ')}.`);
+  if (d.unreadMessages > 0) lines.push(`You have ${plural(d.unreadMessages, 'unread message', 'unread messages')}: ${d.messagesUrl}`);
+  for (const e of d.upcomingEvents) lines.push(`${e.title}, ${e.when}: ${e.url}`);
+  if (d.newMembers > 0) lines.push(`${plural(d.newMembers, 'new member', 'new members')} joined REASON this week.`);
+  if (d.newCircles.length > 0) lines.push(`New circles: ${d.newCircles.map((c) => c.name).join(', ')}.`);
+  for (const p of d.people) lines.push(`Meet ${p.name}${p.line ? ` (${p.line})` : ''}: ${p.url}`);
+  for (const s of d.suggestions) lines.push(`${s.text}: ${s.url}`);
+  return lines.join('\n\n');
+}
+
+/** Monday morning: the member's week, what is happening, and a few ideas. */
+export function buildWeeklyDigestEmail(data: WeeklyDigestEmailData): { subject: string; html: string; text: string } {
+  const subject = 'Your week on REASON';
+  const body = `
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Your week on REASON</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0;">Good morning ${escapeHtml(data.recipientName)}, here is your week on REASON and a few ideas for meeting people this week.</p>
+          ${weeklyAccountHtml(data)}
+          ${weeklyHappeningHtml(data)}
+          ${weeklyIdeasHtml(data)}`;
+  const footer = `${settingsFooter("You're receiving this weekly summary because you're a member of REASON.", data.settingsUrl)}<br><a href="${escapeAttr(data.unsubscribeUrl)}" style="${DIGEST_FOOTER_LINK}">Stop the weekly email</a>`;
+  const html = digestPage(subject, body, footer);
+  const text = `Good morning ${data.recipientName}, here is your week on REASON and a few ideas for meeting people this week.\n\n${weeklyText(data)}\n\nChoose how often REASON emails you: ${data.settingsUrl}\nStop the weekly email: ${data.unsubscribeUrl}\n\nREASON — Meet people you have a reason to know.`;
+  return { subject, html, text };
+}
+
+/** With List-Unsubscribe (and the one-click POST of RFC 8058), so a mail app can offer its own Unsubscribe. */
+export async function sendWeeklyDigestEmail(to: string, data: WeeklyDigestEmailData): Promise<SendEmailResult> {
+  const { subject, html, text } = buildWeeklyDigestEmail(data);
+  return sendEmail({
+    to, subject, html, text,
+    headers: { 'List-Unsubscribe': `<${data.unsubscribeUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' },
+  });
 }
 
 // ─── Email Admin Kill-Switch (Task F2, 23 Jul 2026) ─────────────────────────

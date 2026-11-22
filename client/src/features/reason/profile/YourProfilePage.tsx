@@ -91,6 +91,7 @@ export default function YourProfilePage() {
         onPhotoClick={photo.busy ? undefined : photo.edit}
         photoLabel="Change your photo"
         who={who}
+        profileBadge={card.data.profileBadge}
         kicker="Your profile, as others see it"
         actions={(
           <div className="mt-3 flex flex-wrap justify-center gap-2" data-testid="edit-profile-top">

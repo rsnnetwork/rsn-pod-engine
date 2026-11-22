@@ -25,6 +25,19 @@ export interface ForYouMatch {
   strength: MatchStrength;
   pokeStatus: PokeStatus;
   pokeSentByOwner: boolean | null;
+  /** The badge an admin gave them (display only), or null. Optional: an older server does not send it. */
+  profileBadge?: string | null;
+}
+
+/** Someone the member asked to meet who has not answered yet (22 Nov 2026): For You lists them apart from the suggestions. */
+export interface WaitingRequest {
+  userId: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  professionalRole: string | null;
+  company: string | null;
+  profileBadge?: string | null;
+  sentAt: string;
 }
 
 export interface ForYouPayload {
@@ -32,6 +45,12 @@ export interface ForYouPayload {
   profileIncomplete: boolean;
   youAreLookingFor: string | null;
   nextEvent: { id: string; title: string; scheduledAt: string } | null;
+  /** The member's own requests still waiting, newest first (at most 100). Optional: an older server does not send them. */
+  waiting?: WaitingRequest[];
+  /** How many are waiting in all. */
+  waitingCount?: number;
+  /** True when the member asks for so many kinds of people that For You suggests narrowing it. */
+  wantsBroad?: boolean;
 }
 
 export const reasonKeys = {

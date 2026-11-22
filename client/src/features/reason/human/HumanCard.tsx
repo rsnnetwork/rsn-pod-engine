@@ -12,6 +12,7 @@ import { useId, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { primaryActionFor, type RelationshipState } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
+import ProfileBadge from '@/components/ui/ProfileBadge';
 import WithdrawRequestButton from '@/features/messages/WithdrawRequestButton';
 import { cn } from '@/lib/utils';
 import { personName, visibleText } from '../person';
@@ -32,6 +33,8 @@ export interface HumanCardPerson {
   youAreLookingFor: string | null;
   state: RelationshipState;
   saved: boolean;
+  /** The badge an admin gave them (21 Nov 2026, display only), beside the name. Optional: a list that does not send it shows none. */
+  profileBadge?: string | null;
 }
 
 interface Props {
@@ -100,6 +103,7 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
         <div className="min-w-0">
           <h3 id={headingId} className="text-[16px] font-bold leading-tight [overflow-wrap:anywhere] min-[721px]:text-[17px]">
             <Link to={profileUrl} className="hover:underline">{name}</Link>
+            <ProfileBadge badge={person.profileBadge} className="ml-1.5" />
           </h3>
           {role && <p className="mt-0.5 text-[12px] text-[#677080] [overflow-wrap:anywhere] min-[721px]:text-[13px]">{role}</p>}
           {company && <p className="mt-1.5 text-[12px] font-bold [overflow-wrap:anywhere] min-[721px]:text-[13px]">{company}</p>}

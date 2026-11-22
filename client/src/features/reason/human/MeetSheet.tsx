@@ -6,7 +6,8 @@ import { cn } from '@/lib/utils';
 import { useToastStore } from '@/stores/toastStore';
 import Sheet from '../ui/Sheet';
 import { errorMessage, reasonKeys, sendMeetRequest } from '../api';
-import { defaultMeetNote } from './meet-note';
+import { fillFirstName, startingMeetNote } from './meet-note';
+import { useMeetDefaults } from './useMeetDefaults';
 
 const DEFAULT_FORMAT: MeetingFormat = 'video_20';
 const CANCEL = 'min-h-[44px] rounded-[11px] border border-reason-line px-4 text-[14px] font-bold';
@@ -23,10 +24,16 @@ export default function MeetSheet({ person, onClose }: Props) {
   const counterId = useId();
   const hintId = useId();
   const errorLine = useRef<HTMLParagraphElement>(null);
-  // The note starts as a greeting to this person by first name; the member can change every word of it.
-  const [note, setNote] = useState(() => defaultMeetNote(person?.displayName));
-  const [format, setFormat] = useState<MeetingFormat>(DEFAULT_FORMAT);
+  // The note starts as the member's own standard message made out to this person (saved on Edit profile, 21 Nov 2026),
+  // or REASON's greeting by first name when they saved none; the format starts as their saved one. They can change
+  // every word and the format for each request. Each field holds the member's edit, or null while they have not
+  // touched it, so it shows the saved one as it arrives (and follows a save made on another device).
+  const saved = useMeetDefaults().data;
+  const [noteDraft, setNoteDraft] = useState<string | null>(null);
+  const [formatDraft, setFormatDraft] = useState<MeetingFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const note = noteDraft ?? startingMeetNote(saved?.note, person?.displayName);
+  const format = formatDraft ?? saved?.format ?? DEFAULT_FORMAT;
 
   // A fresh form each time the sheet opens for someone. It follows the person's id and not the `person`
   // object: the Human Profile hands over a new object on every render, and every refetch there would
@@ -37,8 +44,8 @@ export default function MeetSheet({ person, onClose }: Props) {
   if (formFor !== personId) {
     setFormFor(personId);
     if (person) {
-      setNote(defaultMeetNote(person.displayName));
-      setFormat(DEFAULT_FORMAT);
+      setNoteDraft(null);
+      setFormatDraft(null);
       setError(null);
     }
   }
@@ -78,8 +85,10 @@ export default function MeetSheet({ person, onClose }: Props) {
   // Only this person's request keeps the button waiting: another person's sheet is not held up by it.
   const pending = send.isPending && send.variables?.userId === personId;
 
-  // What the route counts: the length of the trimmed note.
-  const length = note.trim().length;
+  // What is sent, and what the route counts: the trimmed note, with any {first} the member typed made out to the person
+  // (a request never reaches anyone reading "{first}").
+  const sent = fillFirstName(note, person?.displayName).trim();
+  const length = sent.length;
   const over = length > MEET_NOTE_MAX;
   const invalid = length === 0 || over;
   // Why Send is off, said where a screen reader that lands on the dimmed button will hear it: the hint under the counter
@@ -92,7 +101,7 @@ export default function MeetSheet({ person, onClose }: Props) {
     if (!person || inFlight.current.has(person.userId) || invalid) return;
     inFlight.current.add(person.userId);
     setError(null);
-    send.mutate({ userId: person.userId, displayName: person.displayName, note: note.trim(), format });
+    send.mutate({ userId: person.userId, displayName: person.displayName, note: sent, format });
   };
 
   return (
@@ -114,7 +123,7 @@ export default function MeetSheet({ person, onClose }: Props) {
         Why now?
         <textarea
           value={note}
-          onChange={(e) => { setNote(e.target.value); setError(null); }}
+          onChange={(e) => { setNoteDraft(e.target.value); setError(null); }}
           aria-describedby={counterId}
           rows={4}
           className="min-h-[90px] resize-y rounded-[11px] border border-reason-line p-3 text-[16px] font-normal md:text-[14px]"
@@ -126,7 +135,7 @@ export default function MeetSheet({ person, onClose }: Props) {
         Preferred format
         <select
           value={format}
-          onChange={(e) => { setFormat(e.target.value as MeetingFormat); setError(null); }}
+          onChange={(e) => { setFormatDraft(e.target.value as MeetingFormat); setError(null); }}
           className="min-h-[44px] rounded-[11px] border border-reason-line bg-white px-3 text-[16px] font-normal md:text-[14px]"
         >
           {MEETING_FORMATS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}

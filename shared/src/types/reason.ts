@@ -3,7 +3,7 @@
 // Human Profile). The VALUES here are rendered by the client, so index.ts also
 // gives each its own named re-export (Rollup CJS interop; see OPENINGS there).
 
-import type { PublicMember } from './user';
+import type { ProfileBadgeKind, PublicMember } from './user';
 import type { PersonEntity } from './entity';
 
 // What a member can do with a person (Save = maybe later, Pass = not relevant).
@@ -195,6 +195,8 @@ export interface PersonConnection {
   avatarUrl: string | null;
   jobTitle: string | null;
   company: string | null;
+  /** The badge an admin gave them (21 Nov 2026, display only), shown beside their name; null for none. */
+  profileBadge: ProfileBadgeKind | null;
   how: ConnectionHow;
   /** The latest date of anything between the two (a request accepted, a conversation started, a meeting), ISO. */
   since: string;

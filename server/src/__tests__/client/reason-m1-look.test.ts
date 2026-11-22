@@ -985,6 +985,8 @@ describe('The hero links to the member\'s LinkedIn, on the Human Profile and on 
   const frameOf = () => loadModule('src/features/reason/human/ProfileHero.tsx', {
     'lucide-react': new Proxy({}, { get: (_t, name) => (name === '__esModule' ? true : () => null) }),
     '@/components/ui/Avatar': { __esModule: true, default: () => null },
+    // The badge an admin gave the member (21 Nov 2026); none is given here.
+    '@/components/ui/ProfileBadge': { __esModule: true, default: () => null },
     '@/features/calls/ProfileCallButton': { __esModule: true, default: () => null },
     '@/lib/utils': joinClasses,
     '../brand/ReasonSheep': { __esModule: true, default: () => null },

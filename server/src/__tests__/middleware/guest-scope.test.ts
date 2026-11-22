@@ -97,6 +97,8 @@ import entityRoutes from '../../routes/entities';
 import reportRoutes from '../../routes/reports';
 import groupRoutes from '../../routes/groups';
 import notificationPrefsRoutes from '../../routes/notification-prefs';
+import emailUnsubscribeRoutes from '../../routes/email-unsubscribe';
+import notificationEmailAdminRoutes from '../../routes/notification-email-admin';
 import postEventMessageRoutes from '../../routes/post-event-message';
 import eventChatRoutes from '../../routes/event-chat';
 import eventAuditRoutes from '../../routes/event-audit';
@@ -166,6 +168,9 @@ const MOUNTS: Array<[string, express.Router]> = [
   ['/api/reports', reportRoutes],
   ['/api/groups', groupRoutes],
   ['/api/notification-prefs', notificationPrefsRoutes],
+  // 22 Nov 2026: the weekly email's unsubscribe (signed out, the token is the proof) and the admin's digest sample.
+  ['/api/email', emailUnsubscribeRoutes],
+  ['/api/admin/notification-email', notificationEmailAdminRoutes],
 ];
 
 const app = express();

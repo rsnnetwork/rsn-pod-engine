@@ -32,6 +32,8 @@ export const E = {
   userEntities: (userId: string) => `user:${userId}:entities`,
   /** Shirley pilot S8 (12 Nov 2026): the member's own connected calendars (connect, disconnect, needs reconnecting). */
   userCalendars: (userId: string) => `user:${userId}:calendars`,
+  /** 22 Nov 2026: the member's own notification settings (the switches, away-only, most emails a day, weekly digest). */
+  userNotificationPrefs: (userId: string) => `user:${userId}:notification-prefs`,
 
   // Entity: an organisation members create (a company, a fund…), not this file's realtime "entities"
   entity: (entityId: string) => `entity:${entityId}`,

@@ -82,13 +82,13 @@ describe('listConnections: the answer', () => {
 
   it('carries each person\'s card and how the two know each other, newest first as the database sorted them', async () => {
     mockQuery.mockResolvedValue({ rows: [
-      { user_id: id(1), display_name: 'Sarah Chen', avatar_url: 'https://a/s.png', job_title: 'Founder', company: 'Harbor', met: true, since: at('2026-10-20T08:00:00.123Z') },
-      { user_id: id(2), display_name: 'Omar Haq', avatar_url: null, job_title: null, company: null, met: false, since: at('2026-10-19T08:00:00.000Z') },
+      { user_id: id(1), display_name: 'Sarah Chen', avatar_url: 'https://a/s.png', job_title: 'Founder', company: 'Harbor', profile_badge: 'premium', met: true, since: at('2026-10-20T08:00:00.123Z') },
+      { user_id: id(2), display_name: 'Omar Haq', avatar_url: null, job_title: null, company: null, profile_badge: null, met: false, since: at('2026-10-19T08:00:00.000Z') },
     ] });
     expect(await listConnections(VIEWER, { limit: 30, before: null })).toEqual({
       items: [
-        { userId: id(1), displayName: 'Sarah Chen', avatarUrl: 'https://a/s.png', jobTitle: 'Founder', company: 'Harbor', how: 'met', since: '2026-10-20T08:00:00.123Z' },
-        { userId: id(2), displayName: 'Omar Haq', avatarUrl: null, jobTitle: null, company: null, how: 'connected', since: '2026-10-19T08:00:00.000Z' },
+        { userId: id(1), displayName: 'Sarah Chen', avatarUrl: 'https://a/s.png', jobTitle: 'Founder', company: 'Harbor', profileBadge: 'premium', how: 'met', since: '2026-10-20T08:00:00.123Z' },
+        { userId: id(2), displayName: 'Omar Haq', avatarUrl: null, jobTitle: null, company: null, profileBadge: null, how: 'connected', since: '2026-10-19T08:00:00.000Z' },
       ],
       nextBefore: null,
     });

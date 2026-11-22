@@ -82,7 +82,7 @@ describe('the links row', () => {
   const person = (over: Record<string, unknown> = {}) => ({
     id: '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', displayName: 'Nora None', firstName: 'Nora', lastName: 'None', avatarUrl: null, bannerUrl: null,
     bio: 'Backs founders.', company: 'Northwind', jobTitle: 'Partner', industry: null, location: null, linkedinUrl: null,
-    websiteUrl: null, instagramUrl: null, xUrl: null, facebookUrl: null, languages: [], professionalRole: [], expertiseText: null, whatICanHelpWith: null, ...over,
+    websiteUrl: null, instagramUrl: null, xUrl: null, facebookUrl: null, languages: [], professionalRole: [], expertiseText: null, whatICanHelpWith: null, profileBadge: null, ...over,
   });
 
   it('lists LinkedIn, Website, Instagram, X and Facebook in that order, only those supplied', () => {
@@ -106,6 +106,8 @@ describe('the links row', () => {
     const stand: Record<string, unknown> = {
       'lucide-react': icons,
       '@/components/ui/Avatar': { __esModule: true, default: () => null },
+      // The badge an admin gave the member (21 Nov 2026): drawn as its word when there is one, as the real one is.
+      '@/components/ui/ProfileBadge': { __esModule: true, default: ({ badge }: { badge?: string | null }) => (badge ? createElement('span', { 'data-testid': 'profile-badge' }, 'Premium') : null) },
       '@/features/calls/ProfileCallButton': { __esModule: true, default: () => null },
       '@/lib/utils': { cn: (...p: unknown[]) => p.filter(Boolean).join(' ') },
       '../brand/ReasonSheep': { __esModule: true, default: () => null },
@@ -133,6 +135,14 @@ describe('the links row', () => {
     expect(html.indexOf('Partner · Northwind')).toBeLessThan(html.indexOf('<a '));
     expect(html.indexOf('<a ')).toBeLessThan(html.indexOf('Backs founders.'));
     expect(html).not.toContain('Instagram');
+    // No badge given: none drawn. Given one, it sits right under the name, before the role line (21 Nov 2026).
+    expect(html).not.toContain('data-testid="profile-badge"');
+    const badged = renderToStaticMarkup(createElement(Frame as never, {
+      photo: null, kicker: 'The human', note: null, panel: null, profileBadge: 'premium',
+      who: text.personFacts(person({})),
+    }));
+    expect(badged.indexOf('</h1>')).toBeLessThan(badged.indexOf('data-testid="profile-badge"'));
+    expect(badged.indexOf('data-testid="profile-badge"')).toBeLessThan(badged.indexOf('Partner · Northwind'));
   });
 });
 

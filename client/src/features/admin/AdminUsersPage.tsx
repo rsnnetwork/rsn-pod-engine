@@ -24,6 +24,7 @@ import UsersBulkBar from './users/UsersBulkBar';
 import EntitlementsModal from './users/EntitlementsModal';
 import { ROLE_LABEL, STATUS_TABS, actionCopy, failureText, type AccountStatus } from './users/user-status';
 import { nameOf, useStatusAction, type AdminUserRowData } from './users/useStatusAction';
+import { useProfileBadge } from './users/useProfileBadge';
 
 const ROLE_FILTERS = ['super_admin', 'admin', 'host', 'founding_member', 'pro', 'member', 'free'];
 
@@ -43,6 +44,8 @@ export default function AdminUsersPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [limitsFor, setLimitsFor] = useState<AdminUserRowData | null>(null);
   const status = useStatusAction();
+  // The Premium badge on one row (21 Nov 2026); the bulk bar has its own for the selection.
+  const badge = useProfileBadge();
 
   const list = useQuery({
     queryKey: ['admin-users', page, debouncedSearch, roleFilter, tab],
@@ -172,6 +175,8 @@ export default function AdminUsersPage() {
               onAction={(action) => status.ask(u, action)}
               onRole={(role) => roleMutation.mutate({ target: u, role })}
               onLimits={() => setLimitsFor(u)}
+              badgeBusy={badge.busyFor(u.id)}
+              onBadge={(next) => badge.change({ userIds: [u.id], badge: next, name: nameOf(u) })}
             />
           ))}
           {users.length === 0 && (

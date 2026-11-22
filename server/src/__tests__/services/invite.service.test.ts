@@ -135,6 +135,8 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ displayName: 'Host User' }], rowCount: 1 });
       // 11. Pod name lookup (for email)
       mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Test Pod' }], rowCount: 1 });
+      // 11b. not an active member, so the email goes now (the notification email gate is for members)
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // 12. Notification: look up invitee user id
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
@@ -175,6 +177,7 @@ describe('Invite Service', () => {
       // 10-12. email + notification lookups
       mockQuery.mockResolvedValueOnce({ rows: [{ displayName: 'Host User' }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Test Pod' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // not an active member, so the email goes now (the notification email gate is for members)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
       const invite = await inviteService.createInvite('user-host', {
@@ -648,6 +651,8 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: insertedRows, rowCount: insertedRows.length }); // INSERT
       mockQuery.mockResolvedValueOnce({ rows: [{ displayName: 'Host User' }], rowCount: 1 });  // inviter name
       mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Test Pod' }], rowCount: 1 });         // pod name
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // not an active member, so the email goes now (the notification email gate is for members)
+
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                             // invitee is not a member
     };
 
@@ -684,6 +689,8 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ ...mockInvite, type: InviteType.SESSION }], rowCount: 1 }); // INSERT
       mockQuery.mockResolvedValueOnce({ rows: [{ displayName: 'Host User' }], rowCount: 1 });                // inviter name
       mockQuery.mockResolvedValueOnce({ rows: [{ title: 'Test Session', scheduled_at: null, host_user_id: 'user-host', config: {}, event_format: 'speed_networking' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // not an active member, so the email goes now (the notification email gate is for members)
+
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                                            // invitee is not a member
 
       await inviteService.createInvite('user-host', { type: InviteType.SESSION, sessionId: 'session-123', inviteeEmail: 'guest@example.com' });
@@ -798,6 +805,8 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [sessionInvite], rowCount: 1 });                                 // INSERT
       mockQuery.mockResolvedValueOnce({ rows: [{ displayName: 'Co Host' }], rowCount: 1 });                    // inviter name
       mockQuery.mockResolvedValueOnce({ rows: [{ title: 'Test Session', scheduled_at: null, host_user_id: 'user-host', config: {}, event_format: 'speed_networking' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // not an active member, so the email goes now (the notification email gate is for members)
+
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                                              // invitee is not a member
       return sessionInvite;
     };
@@ -1201,6 +1210,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [mockInvite], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [{ displayName: 'Host User' }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Test Pod' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // not an active member, so the email goes now (the notification email gate is for members)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       await expect(inviteService.createInvite('user-host', POD_INVITE)).resolves.toEqual(mockInvite);
     });

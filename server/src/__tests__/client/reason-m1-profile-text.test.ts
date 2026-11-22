@@ -19,7 +19,7 @@ type Relationship = PersonBrief['relationship'];
 const person = (over: Partial<Person> = {}): Person => ({
   id: '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', displayName: 'Nora None', firstName: 'Nora', lastName: 'None', avatarUrl: null, bannerUrl: null, bio: null,
   company: null, jobTitle: null, industry: null, location: null, linkedinUrl: null, websiteUrl: null, instagramUrl: null, xUrl: null, facebookUrl: null, languages: [], professionalRole: [],
-  expertiseText: null, whatICanHelpWith: null, ...over,
+  expertiseText: null, whatICanHelpWith: null, profileBadge: null, ...over,
 });
 const relationship = (over: Partial<Relationship> = {}): Relationship => ({
   state: 'none', pokeId: null, timesMet: 0, lastMetAt: null, saved: false, passed: false, alreadyMet: false, outcomes: [], ...over,
@@ -120,7 +120,9 @@ describe('every ?from= the app writes is one the profile accepts', () => {
   const SURFACES = {
     // T14: the circle's member rows moved into their own section.
     'features/circles/CircleMembersSection.tsx': ["personHref(m.userId, 'Circles')"],
-    'features/pods/PodDetailPage.tsx': ["personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')"],
+    // The pending requests, the declined and the no-response rows; the member rows moved into PodMemberRow (21 Nov 2026).
+    'features/pods/PodDetailPage.tsx': ["personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')"],
+    'features/pods/PodMemberRow.tsx': ["personHref(m.userId || m.id, 'Pods')"],
     'features/sessions/RecapPage.tsx': ["personHref(c.userId, 'Events')", "personHref(c.userId, 'Events')"],
     'features/sessions/SessionDetailPage.tsx': ["personHref(hostRow.userId, 'Events')", "personHref(p.userId || p.id, 'Events')"],
   } as const;

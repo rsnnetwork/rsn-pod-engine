@@ -12,6 +12,12 @@
 // lifted (final review, 21 Oct). So a card's score is its band: 1 for a strong match, 0.5 for a
 // close one, never the fit itself. Someone who passed on the member is never lifted. These tests
 // pin all of it.
+//
+// 22 Nov 2026 (Stefan: "Why are these 5 people suggested to me?"): a designation alone is a close
+// match on a profile-level fit, both ways, so the people here who fit by role carry a second signal
+// on their card (a company, an expertise, the member's industry), and equal fits are ordered by
+// compareEqualFits (what the two share, the card, recent activity, the day's rotation), no longer
+// by id. Where a test needs two equal fits in a known order, one of them shares a pod with the member.
 
 const mockQuery = jest.fn();
 const mockTransaction = jest.fn();
@@ -40,38 +46,45 @@ const profile = (over: Partial<IntentProfile>): IntentProfile => ({
   ...over,
 });
 
-// The member looking: a founder in Berlin raising a seed round.
+// The member looking: a SaaS founder in Berlin raising a seed round. Her industry is what the
+// people below who want "SaaS founders" find on her card besides her role.
 const FATIMA = profile({
-  id: 'u-fatima', displayName: 'Fatima', professionalRole: ['Founder'], location: 'Berlin, Germany',
+  id: 'u-fatima', displayName: 'Fatima', professionalRole: ['Founder'], location: 'Berlin, Germany', industry: 'SaaS',
   whoIWantToMeet: 'investors and angels for my seed round', myIntent: 'raise funding for my SaaS startup',
 });
 
 // Nobody below has curiosity fields (what they care about, their interests). Those are the one
 // place where a person's own wants touch the score they are chosen by, so without them a want
 // can change the order and nothing else, which is what the last tests compare.
+// One way, for Fatima: Iqbal 1 (an investor, and SaaS), Mira 0.95 (a general partner, and seed),
+// Nadia 0.583 and Omar 0.56 (five and four of her words, no role she asked for), all strong.
+const WANTS_HER = 'SaaS founders';
 const ANGEL = profile({ id: 'u-angel', displayName: 'Iqbal', professionalRole: ['Angel Investor'], expertiseText: 'early stage SaaS investing' });
-const GP = profile({ id: 'u-gp', displayName: 'Nadia', professionalRole: ['General Partner'] });
-const MIRA = profile({ id: 'u-mira', displayName: 'Mira', professionalRole: ['Investor'], whoIWantToMeet: 'founders' });
+const GP = profile({ id: 'u-gp', displayName: 'Nadia', professionalRole: ['Fund Partner'], expertiseText: 'seed rounds, funding for SaaS startups' });
+const MIRA = profile({ id: 'u-mira', displayName: 'Mira', professionalRole: ['General Partner'], company: 'Seed Ventures', whoIWantToMeet: WANTS_HER });
 // Gita is Nadia with a want.
-const GITA = profile({ id: 'u-gita', displayName: 'Gita', professionalRole: ['General Partner'], whoIWantToMeet: 'founders building SaaS' });
+const GITA = { ...GP, id: 'u-gita', displayName: 'Gita', whoIWantToMeet: WANTS_HER };
 const OMAR = profile({
-  id: 'u-omar', displayName: 'Omar', professionalRole: ['Startup Advisor'], expertiseText: 'seed funding rounds', whoIWantToMeet: 'founders',
+  id: 'u-omar', displayName: 'Omar', professionalRole: ['Startup Advisor'], expertiseText: 'seed funding rounds', whoIWantToMeet: WANTS_HER,
 });
-// Two loose fits, equally loose. Maya would want to meet Fatima; Maryam would not.
+// Two loose fits, equally loose. Maya would want to meet Fatima; Maryam would not. Maryam shares a
+// pod with Fatima, so of the two equal fits she comes first.
 const MARYAM = profile({ id: 'u-maryam', displayName: 'Maryam', professionalRole: 'Marketing Consultant', expertiseText: 'growth and funding narratives' });
-const MAYA = { ...MARYAM, id: 'u-maya', displayName: 'Maya', whoIWantToMeet: 'founders' };
+const MAYA = { ...MARYAM, id: 'u-maya', displayName: 'Maya', whoIWantToMeet: WANTS_HER };
+const MARYAM_ROW = { ...MARYAM, sharedContext: 1 };
 // Fits nothing Fatima wants, and would very much want to meet her.
 const BILAL = profile({
-  id: 'u-bilal', displayName: 'Bilal', professionalRole: ['Pastry Chef'], expertiseText: 'sourdough croissants', whoIWantToMeet: 'founders',
+  id: 'u-bilal', displayName: 'Bilal', professionalRole: ['Pastry Chef'], expertiseText: 'sourdough croissants', whoIWantToMeet: WANTS_HER,
 });
 
-/** A row as the candidates query returns it. passedOnMember: they passed on the member. */
-type Candidate = IntentProfile & { passedOnMember?: boolean | null };
+/** A row as the candidates query returns it. passedOnMember: they passed on the member; sharedContext: pods, circles and events in common. */
+type Candidate = IntentProfile & { passedOnMember?: boolean | null; sharedContext?: number };
 
 function arm(viewer: IntentProfile, candidates: Candidate[]) {
   mockQuery.mockImplementation((sql: string) => {
     if (/FROM sessions/.test(sql)) return Promise.resolve({ rows: [] });
     if (/WHERE u\.id = \$1/.test(sql)) return Promise.resolve({ rows: [{ ...viewer, onboardingCompleted: true }] });
+    if (/FROM user_pokes wp/.test(sql)) return Promise.resolve({ rows: [] }); // the member's waiting requests
     return Promise.resolve({ rows: candidates });
   });
 }
@@ -132,10 +145,10 @@ describe('For You and Matches: people who would also want to meet you come first
     expect(await orderFor(FATIMA, [OMAR, GP, MIRA, ANGEL])).toEqual(['u-mira', 'u-omar', 'u-angel', 'u-gp']);
   });
 
-  it('equal scores keep the order they were loaded in (by id, see below), on both sides', async () => {
-    const MIRA_2 = { ...MIRA, id: 'u-mira-2' };
-    const ANGEL_2 = { ...ANGEL, id: 'u-angel-2' };
-    expect(await orderFor(FATIMA, [ANGEL_2, MIRA_2, ANGEL, MIRA])).toEqual(['u-mira-2', 'u-mira', 'u-angel-2', 'u-angel']);
+  it('equal scores are ordered by compareEqualFits on both sides (here: what they share with the member), not by load order or id', async () => {
+    const MIRA_2 = { ...MIRA, id: 'u-mira-2', sharedContext: 2 };
+    const ANGEL_2 = { ...ANGEL, id: 'u-angel-2', sharedContext: 1 };
+    expect(await orderFor(FATIMA, [ANGEL, MIRA, ANGEL_2, MIRA_2])).toEqual(['u-mira-2', 'u-mira', 'u-angel-2', 'u-angel']);
   });
 
   it('with nobody who would want to meet you back, the order is today\'s: best one-way score first', async () => {
@@ -149,7 +162,7 @@ describe('For You and Matches: people who would also want to meet you come first
 
 describe('a card\'s score is its band, so it cannot show who was lifted', () => {
   it('every strong card shows 1, whatever its own fit, and a lifted one looks like the rest', async () => {
-    // Today, by fit: Iqbal 1, Mira 0.95, Nadia 0.6, Omar 0.56, all strong. Mira and Omar are lifted.
+    // Today, by fit: Iqbal 1, Mira 0.95, Nadia 0.583, Omar 0.56, all strong. Mira and Omar are lifted.
     expect(scoreFit(FATIMA, MIRA).score).not.toBe(scoreFit(FATIMA, OMAR).score); // the premise: four different fits
     const matches = await matchesFor(FATIMA, [OMAR, GP, MIRA, ANGEL]);
     expect(matches.map(m => [m.userId, m.strength, m.score])).toEqual([
@@ -158,17 +171,17 @@ describe('a card\'s score is its band, so it cannot show who was lifted', () => 
   });
 
   it('every close card shows 0.5, below every strong one', async () => {
-    const matches = await matchesFor(FATIMA, [ANGEL, MARYAM, MAYA, GITA]);
+    const matches = await matchesFor(FATIMA, [ANGEL, MAYA, MARYAM_ROW, GITA]);
     expect(matches.map(m => [m.userId, m.strength, m.score])).toEqual([
       ['u-gita', 'strong', 1], ['u-angel', 'strong', 1], ['u-maryam', 'close', 0.5], ['u-maya', 'close', 0.5],
     ]);
   });
 
   it('equal numbers say nothing about equal fits, so a card out of id order cannot be read as lifted', async () => {
-    // The leak the band closes: equal fits keep the id order, so a card out of that order among
+    // The leak the band closes: equal fits keep a known order, so a card out of that order among
     // equal numbers was lifted. Now a better fit (Iqbal) shows the same number as the equal ones.
     const zed = { ...GITA, id: 'u-zed' };
-    const plain = [{ ...GP, id: 'u-a' }, { ...GP, id: 'u-b' }];
+    const plain = [{ ...GP, id: 'u-a', sharedContext: 1 }, { ...GP, id: 'u-b' }];
     expect(scoreFit(FATIMA, zed).score).toBe(scoreFit(FATIMA, plain[0]).score); // the premise: one fit for these three
     expect(scoreFit(FATIMA, ANGEL).score).toBeGreaterThan(scoreFit(FATIMA, plain[0]).score); // ...and a better one
     const matches = await matchesFor(FATIMA, [ANGEL, ...plain, zed]);
@@ -186,9 +199,9 @@ describe('a card\'s score is its band, so it cannot show who was lifted', () => 
   it.each([
     ['one lifted above one', [ANGEL, GITA], false],
     ['two lifted, loaded shuffled', [OMAR, GP, MIRA, ANGEL], false],
-    ['a Close fallback', [ANGEL, MARYAM, MAYA, GITA], false],
-    ['browse', [MARYAM, ANGEL, GITA, OMAR, GP], true],
-    ['nobody lifted', [GP, ANGEL, MARYAM], false],
+    ['a Close fallback', [ANGEL, MARYAM_ROW, MAYA, GITA], false],
+    ['browse', [MARYAM_ROW, ANGEL, GITA, OMAR, GP], true],
+    ['nobody lifted', [GP, ANGEL, MARYAM_ROW], false],
   ] as Array<[string, Candidate[], boolean]>)('%s: no score is higher than the one above it', async (_label, pool, browse) => {
     const matches = await matchesFor(FATIMA, pool, { browse });
     expect(matches.length).toBeGreaterThan(1); // the premise: there is a list to read
@@ -203,7 +216,7 @@ describe('someone who passed on you is not lifted, and not pushed down either', 
   });
 
   it('she keeps her place among the others: not lifted above them, not dropped below them', async () => {
-    // Today: Iqbal 1, Mira 0.95, Nadia 0.6, Omar 0.56. Omar is lifted; Mira passed on Fatima, so she is not.
+    // Today: Iqbal 1, Mira 0.95, Nadia 0.583, Omar 0.56. Omar is lifted; Mira passed on Fatima, so she is not.
     expect(await orderFor(FATIMA, [OMAR, GP, { ...MIRA, passedOnMember: true }, ANGEL]))
       .toEqual(['u-omar', 'u-angel', 'u-mira', 'u-gp']);
   });
@@ -223,19 +236,31 @@ describe('someone who passed on you is not lifted, and not pushed down either', 
 });
 
 describe('the same order on every load', () => {
-  it('the candidates come back ordered by id, so people with equal scores never swap places', async () => {
+  it('the candidates come back in a fixed order (by id), so the same rows always score in the same order', async () => {
     arm(FATIMA, []);
     await getPlatformMatches('u-fatima');
     const candidatesSql = String(mockQuery.mock.calls.find(c => /u\.id <> \$1/.test(String(c[0])))![0]);
     expect(candidatesSql).toMatch(/ORDER BY u\.id\s*$/);
+  });
+
+  it('equal fits with nothing else between them are in the day\'s rotation: the same all day, whatever order they load in', async () => {
+    const twins = ['u-t1', 'u-t2', 'u-t3', 'u-t4'].map(id => ({ ...ANGEL, id }));
+    const day = new Date('2026-11-22T08:00:00Z');
+    const later = new Date('2026-11-22T21:00:00Z');
+    arm(FATIMA, twins);
+    const morning = (await getPlatformMatches('u-fatima', { now: day })).matches.map(m => m.userId);
+    arm(FATIMA, [...twins].reverse());
+    const evening = (await getPlatformMatches('u-fatima', { now: later })).matches.map(m => m.userId);
+    expect(evening).toEqual(morning);
+    expect([...morning].sort()).toEqual(twins.map(t => t.id));
   });
 });
 
 describe('a Close match stays below every strong one', () => {
   it('a loose fit is not lifted by wanting to meet you, and keeps its label', async () => {
     // Two strong fits, so the closest people are added, labelled. Maryam and Maya fit Fatima
-    // equally loosely, so they stay in the order they were loaded in, whatever Maya wants.
-    const matches = await matchesFor(FATIMA, [ANGEL, MARYAM, MAYA, GITA]);
+    // equally loosely; Maryam shares a pod with Fatima, so she is first, whatever Maya wants.
+    const matches = await matchesFor(FATIMA, [ANGEL, MAYA, MARYAM_ROW, GITA]);
     expect(matches.map(m => [m.userId, m.strength])).toEqual([
       ['u-gita', 'strong'], ['u-angel', 'strong'], ['u-maryam', 'close'], ['u-maya', 'close'],
     ]);
@@ -252,7 +277,7 @@ describe('wanting to meet you never adds anyone', () => {
   it('a place you named stays strict: someone elsewhere who would want to meet you is not shown', async () => {
     const wantsGermany = { ...FATIMA, whoIWantToMeet: 'investors and angels in Germany for my seed round' };
     const BEN = profile({ id: 'u-ben', displayName: 'Ben', professionalRole: ['Investor'], location: 'Munich, Germany' });
-    const PAUL = profile({ id: 'u-paul', displayName: 'Paul', professionalRole: ['Investor'], location: 'Paris, France', whoIWantToMeet: 'founders' });
+    const PAUL = profile({ id: 'u-paul', displayName: 'Paul', professionalRole: ['Investor'], location: 'Paris, France', whoIWantToMeet: WANTS_HER });
     expect(scoreFit(PAUL, wantsGermany).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD); // the premise
     expect(await orderFor(wantsGermany, [PAUL, BEN])).toEqual(['u-ben']);
     expect(await orderFor(wantsGermany, [PAUL, BEN], { browse: true })).toEqual(['u-ben']);
@@ -260,7 +285,7 @@ describe('wanting to meet you never adds anyone', () => {
 
   it('years you asked for stay strict: someone with fewer who would want to meet you is not shown', async () => {
     const wantsTenYears = { ...FATIMA, whoIWantToMeet: 'investors with 10 years experience' };
-    const FAY = profile({ id: 'u-fay', displayName: 'Fay', professionalRole: ['Investor'], bio: '5 years investing in startups', whoIWantToMeet: 'founders' });
+    const FAY = profile({ id: 'u-fay', displayName: 'Fay', professionalRole: ['Investor'], bio: '5 years investing in startups', whoIWantToMeet: WANTS_HER });
     const TOM = profile({ id: 'u-tom', displayName: 'Tom', professionalRole: ['Investor'], bio: '20 years investing in startups' });
     expect(scoreFit(FAY, wantsTenYears).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD); // the premise
     expect(await orderFor(wantsTenYears, [FAY, TOM])).toEqual(['u-tom']);
@@ -270,8 +295,9 @@ describe('wanting to meet you never adds anyone', () => {
 
 describe('not wanting to meet you never removes anyone', () => {
   it('someone whose want names a place you are not in is still shown, where they are today', async () => {
-    const JUN = profile({ id: 'u-jun', displayName: 'Jun', professionalRole: ['Investor'], whoIWantToMeet: 'founders in Japan' });
-    const BEN = profile({ id: 'u-ben', displayName: 'Ben', professionalRole: ['Investor'], whoIWantToMeet: 'founders in Germany' });
+    // Both invest at seed, so they are strong fits for Fatima (a role and a second signal).
+    const JUN = profile({ id: 'u-jun', displayName: 'Jun', professionalRole: ['Investor'], expertiseText: 'seed funding', whoIWantToMeet: 'founders in Japan' });
+    const BEN = profile({ id: 'u-ben', displayName: 'Ben', professionalRole: ['Investor'], expertiseText: 'seed funding', whoIWantToMeet: 'founders in Germany' });
     // The premise: Fatima is in Berlin, so only Ben's place holds for her.
     expect(scoreFit(JUN, FATIMA).score).toBe(0);
     expect(scoreFit(BEN, FATIMA).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
@@ -282,27 +308,32 @@ describe('not wanting to meet you never removes anyone', () => {
 
   it('someone who asks for more years than you state is still shown', async () => {
     const fiveYears = { ...FATIMA, bio: 'I have 5 years of experience building startups' };
-    const YARA = profile({ id: 'u-yara', displayName: 'Yara', professionalRole: ['Investor'], whoIWantToMeet: 'founders with 10 years experience' });
+    const YARA = profile({ id: 'u-yara', displayName: 'Yara', professionalRole: ['Investor'], expertiseText: 'seed funding', whoIWantToMeet: 'founders with 10 years experience' });
     expect(scoreFit(YARA, fiveYears).score).toBe(0); // the premise
     expect(scoreFit(fiveYears, YARA).score).toBeGreaterThan(scoreFit(fiveYears, GITA).score);
     expect(await orderFor(fiveYears, [GITA, YARA])).toEqual(['u-gita', 'u-yara']);
   });
 });
 
+// 22 Nov 2026: three places (limit 3) rather than ten. Twelve near-identical people make every word they share
+// generic (genericOfferTerms), which leaves the angels a role and nothing else: close matches, below the Gitas.
+// Five candidates stay under that sample size, so the scenario is the same one: places full of better one-way fits.
 describe('the same people, as many as before', () => {
-  const angels = Array.from({ length: 10 }, (_, i) => ({ ...ANGEL, id: `u-angel-${i + 1}`, displayName: `Angel ${i + 1}` }));
-  const gitas = [{ ...GITA, id: 'u-gita-1' }, { ...GITA, id: 'u-gita-2' }];
+  // Equal fits in a known order: the earlier angel shares more with Fatima.
+  const angels = Array.from({ length: 3 }, (_, i) => ({ ...ANGEL, id: `u-angel-${i + 1}`, displayName: `Angel ${i + 1}`, sharedContext: 3 - i }));
+  const gitas = [{ ...GITA, id: 'u-gita-1', sharedContext: 1 }, { ...GITA, id: 'u-gita-2' }];
+  const three = (pool: Candidate[]) => { arm(FATIMA, pool); return getPlatformMatches(FATIMA.id, { limit: 3 }); };
 
-  it('ten places: a mutual fit who was not among today\'s ten is not pulled in', async () => {
-    const matches = await matchesFor(FATIMA, [...gitas, ...angels]);
+  it('three places: a mutual fit who was not among today\'s three is not pulled in', async () => {
+    const { matches } = await three([...gitas, ...angels]);
     expect(matches.map(m => m.userId)).toEqual(angels.map(a => a.id));
   });
 
-  it('a mutual fit among today\'s ten moves to the top, and the ten stay the same ten', async () => {
-    const nine = angels.slice(0, 9);
-    // Today's ten: the nine angels, then Gita 1 (Gita 2 scores the same and was loaded after her).
-    const matches = await matchesFor(FATIMA, [...nine, ...gitas]);
-    expect(matches.map(m => m.userId)).toEqual(['u-gita-1', ...nine.map(a => a.id)]);
+  it('a mutual fit among today\'s three moves to the top, and the three stay the same three', async () => {
+    const two = angels.slice(0, 2);
+    // Today's three: the two angels, then Gita 1 (Gita 2 scores the same and shares less with Fatima).
+    const { matches } = await three([...gitas, ...two]);
+    expect(matches.map(m => m.userId)).toEqual(['u-gita-1', ...two.map(a => a.id)]);
   });
 });
 
@@ -314,8 +345,8 @@ describe('the cards are today\'s cards, word for word', () => {
   const byId = (ms: PlatformMatch[]) => Object.fromEntries(ms.map(m => [m.userId, m]));
 
   it.each([
-    ['a Close fallback, strict', [ANGEL, MARYAM, MAYA, GITA, BILAL], false, ['u-gita', 'u-angel', 'u-maryam', 'u-maya'], [1, 1, 0.5, 0.5]],
-    ['a Close fallback, browse', [ANGEL, MARYAM, MAYA, GITA, BILAL], true, ['u-gita', 'u-angel', 'u-maryam', 'u-maya'], [1, 1, 0.5, 0.5]],
+    ['a Close fallback, strict', [ANGEL, MARYAM_ROW, MAYA, GITA, BILAL], false, ['u-gita', 'u-angel', 'u-maryam', 'u-maya'], [1, 1, 0.5, 0.5]],
+    ['a Close fallback, browse', [ANGEL, MARYAM_ROW, MAYA, GITA, BILAL], true, ['u-gita', 'u-angel', 'u-maryam', 'u-maya'], [1, 1, 0.5, 0.5]],
     ['strong fits only', [OMAR, GP, MIRA, ANGEL, BILAL], false, ['u-mira', 'u-omar', 'u-angel', 'u-gp'], [1, 1, 1, 1]],
   ] as Array<[string, Candidate[], boolean, string[], number[]]>)(
     '%s: the same people with the same cards; only the order moves',
@@ -331,12 +362,14 @@ describe('the cards are today\'s cards, word for word', () => {
   );
 });
 
+// No field says who is a mutual fit. The fields are every card's (22 Nov 2026 added profileBadge to the card, and the
+// waiting requests and the broad-wants flag to the payload; none of them is about the other direction).
 describe('no new field', () => {
   const MATCH_KEYS = [
     'avatarUrl', 'company', 'displayName', 'industry', 'pokeSentByOwner', 'pokeStatus', 'professionalRole',
-    'reason', 'saved', 'score', 'strength', 'theyCanBring', 'userId',
+    'profileBadge', 'reason', 'saved', 'score', 'strength', 'theyCanBring', 'userId',
   ];
-  const PAYLOAD_KEYS = ['matches', 'nextEvent', 'profileIncomplete', 'youAreLookingFor'];
+  const PAYLOAD_KEYS = ['matches', 'nextEvent', 'profileIncomplete', 'waiting', 'waitingCount', 'wantsBroad', 'youAreLookingFor'];
 
   it.each([false, true])('browse %s: a mutual fit\'s card has the fields every card has, and the payload has today\'s', async (browse) => {
     arm(FATIMA, [ANGEL, GITA, MARYAM, { ...MIRA, passedOnMember: true }]);
@@ -350,8 +383,8 @@ describe('no new field', () => {
 
   it('nothing of a mutual fit\'s wants reaches the response', async () => {
     const SANA = profile({
-      id: 'u-sana', displayName: 'Sana', professionalRole: ['General Partner'],
-      whoIWantToMeet: 'founders zzsecretwho', whyIWantToMeet: 'zzsecretwhy', myIntent: 'zzsecretintent', goals: ['zzsecretgoal'],
+      id: 'u-sana', displayName: 'Sana', professionalRole: ['General Partner'], company: 'Seed Ventures',
+      whoIWantToMeet: 'SaaS founders zzsecretwho', whyIWantToMeet: 'zzsecretwhy', myIntent: 'zzsecretintent', goals: ['zzsecretgoal'],
     });
     arm(FATIMA, [ANGEL, SANA]);
     const res = await getPlatformMatches('u-fatima');
@@ -368,12 +401,13 @@ describe('no extra query: the other direction reads the rows already loaded', ()
     return mockQuery.mock.calls.map(c => String(c[0]));
   }
 
-  it('three queries whatever the pool: the member, the next event and the candidates', async () => {
+  it('four queries whatever the pool: the member, the member\'s waiting requests (22 Nov 2026), the next event and the candidates', async () => {
     const angels = Array.from({ length: 10 }, (_, i) => ({ ...ANGEL, id: `u-angel-${i + 1}` }));
     const none = await queriesFor([]);
     const two = await queriesFor([ANGEL, GITA]);
     const many = await queriesFor([...angels, MIRA, GITA, OMAR, MAYA, BILAL]);
-    expect(none).toHaveLength(3);
+    expect(none).toHaveLength(4);
+    expect(none.filter(s => /FROM user_pokes wp/.test(s))).toHaveLength(1);
     expect(two).toEqual(none);
     expect(many).toEqual(none);
     expect(mockTransaction).not.toHaveBeenCalled();

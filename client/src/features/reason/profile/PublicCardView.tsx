@@ -9,8 +9,8 @@ import { personFacts } from '../human/profile-text';
 import { visibleText } from '../person';
 
 export default function PublicCardView({ card }: { card: PublicProfileCard }) {
-  // personFacts reads a member's card; this one has no id, and needs none.
-  const who = personFacts({ ...card, id: '' });
+  // personFacts reads a member's card; this one has no id, and needs none, and no badge (the link leaves it out).
+  const who = personFacts({ ...card, id: '', profileBadge: null });
   const bring = visibleText(card.canBring);
   return (
     <div className="grid gap-[11px] md:gap-[18px]" data-testid="public-card">

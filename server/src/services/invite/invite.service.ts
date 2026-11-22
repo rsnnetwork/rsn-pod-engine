@@ -329,6 +329,8 @@ export interface InviteContext {
   sessionId: string | null;
   /** The circle, for a circle invite; the bell tells that circle's invites list. */
   circleId?: string | null;
+  /** Who made the invite (22 Nov 2026): the notification email gate builds the email again from it when it goes. */
+  inviterId?: string;
   inviterName: string;
   targetName?: string;
   calendarEvent?: InviteCalendarEvent;
@@ -405,7 +407,7 @@ export async function buildInviteContext(
   return {
     type, podId: target.podId ?? null, sessionId: target.sessionId ?? null,
     circleId: type === InviteType.CIRCLE ? target.circleId ?? null : null,
-    inviterName, targetName, calendarEvent, scheduledAt, timezone,
+    inviterId, inviterName, targetName, calendarEvent, scheduledAt, timezone,
   };
 }
 
@@ -414,6 +416,8 @@ interface InviteDelivery {
   code: string;
   inviteeEmail: string;
   inviteeUserId?: string;
+  /** The invite's own id: the notification email gate keeps one email per invite by it. */
+  inviteId?: string;
 }
 
 /**
@@ -431,6 +435,49 @@ export async function emailInvite(ctx: InviteContext, invite: InviteDelivery): P
     inviteUrl: `${config.clientUrl}/invite/${invite.code}`,
     calendarEvent: ctx.calendarEvent,
   });
+}
+
+/**
+ * The invitation email for an invite as it is made (22 Nov 2026, Stefan: "only get notifications if I am not online",
+ * "max X a day"). Someone who already has an account as an active member is told through the notification email gate
+ * (services/notification-email): only while away, folded with whatever else is waiting, within their daily maximum, and
+ * not at all once they have opened the invite from their bell; an event invite told on its own keeps its calendar
+ * entry, because the gate sends it with emailInvite. An address with no member account behind it (someone new, a guest)
+ * has no bell and nobody to be online, so its email goes now, as before. A reminder an organiser presses is not this:
+ * it goes now (emailInvite), counted against their own allowance. Answers like emailInvite: `sent` is true for an email
+ * handed to the gate.
+ */
+export async function emailOrQueueInvite(ctx: InviteContext, invite: InviteDelivery): Promise<{ sent: boolean }> {
+  const inviterId = ctx.inviterId;
+  if (!inviterId || !ctx.type || ctx.type === InviteType.PLATFORM) return emailInvite(ctx, invite);
+  const member = await query<{ id: string; invite_id: string | null }>(
+    `SELECT u.id, (SELECT i.id FROM invites i WHERE i.code = $2) AS invite_id
+       FROM users u
+      WHERE ${invite.inviteeUserId ? 'u.id = $1' : 'u.email = lower($1)'} AND u.status = 'active' AND u.account_kind = 'member'`,
+    [invite.inviteeUserId ?? invite.inviteeEmail, invite.code],
+  );
+  const row = member.rows[0];
+  const inviteId = invite.inviteId ?? row?.invite_id ?? null;
+  if (!row || !inviteId) return emailInvite(ctx, invite);
+  const { queueNotificationEmail } = await import('../notification-email/notification-email.service');
+  await queueNotificationEmail({
+    userId: row.id,
+    kind: 'invite',
+    sourceId: inviteId,
+    actorId: inviterId,
+    bellLink: `/invite/${invite.code}`,
+    payload: {
+      inviterId,
+      inviterName: ctx.inviterName,
+      inviteType: ctx.type as 'pod' | 'session' | 'circle',
+      targetName: ctx.targetName ?? null,
+      code: invite.code,
+      podId: ctx.podId,
+      sessionId: ctx.sessionId,
+      circleId: ctx.circleId ?? null,
+    },
+  });
+  return { sent: true };
 }
 
 /**
@@ -459,7 +506,7 @@ export async function deliverInvite(ctx: InviteContext, invite: InviteDelivery):
   // Await email send — if it fails, the invite still exists in DB but we log the failure.
   // Previously fire-and-forget caused silent delivery failures.
   try {
-    await emailInvite(ctx, invite);
+    await emailOrQueueInvite(ctx, invite);
   } catch (err) {
     // Don't fail the invite creation — email is best-effort but now properly logged
     logger.warn({ err, inviteeEmail: invite.inviteeEmail }, 'Failed to send invite email (invite still created)');
@@ -701,7 +748,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
   // Send invite email if a recipient address was provided
   if (input.inviteeEmail) {
     const context = await buildInviteContext(userId, input.type, input);
-    await deliverInvite(context, { code, inviteeEmail: input.inviteeEmail });
+    await deliverInvite(context, { code, inviteeEmail: input.inviteeEmail, inviteId: inserted.invite.id });
   }
 
   return inserted.invite;

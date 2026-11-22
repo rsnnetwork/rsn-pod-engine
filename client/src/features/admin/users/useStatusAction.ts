@@ -16,6 +16,8 @@ export interface AdminUserRowData {
   avatarUrl: string | null;
   role: string;
   status: string;
+  /** The badge an admin gave them (21 Nov 2026, display only), or null. Optional: an older server does not send it. */
+  profileBadge?: string | null;
 }
 
 export const nameOf = (u: Pick<AdminUserRowData, 'displayName' | 'email'>) => u.displayName?.trim() || u.email;

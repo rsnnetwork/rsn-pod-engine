@@ -1,12 +1,13 @@
 // client/src/features/admin/users/AdminUserRow.tsx
 // One account on the admin Users page: who they are, their role and status in words, and what can be done to them
-// from the tab they are in. Nothing is offered on the admin's own row.
+// from the tab they are in. Nothing is offered on the admin's own row but the badge (display only, 21 Nov 2026).
 import { Link } from 'react-router-dom';
-import { Ban, RotateCcw, Settings, Trash2, UserMinus, UserX, Loader2 } from 'lucide-react';
+import { Ban, RotateCcw, Settings, Sparkles, Trash2, UserMinus, UserX, Loader2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
+import ProfileBadge, { profileBadgeLabel } from '@/components/ui/ProfileBadge';
 import { cn } from '@/lib/utils';
 import {
   ACTION_LABEL, ROLE_LABEL, STATUS_LABEL, actionsFor, roleChoices, roleIsEditable,
@@ -44,11 +45,17 @@ interface Props {
   onAction: (action: StatusAction) => void;
   onRole: (role: string) => void;
   onLimits: () => void;
+  /** A badge change for this member is on its way. */
+  badgeBusy: boolean;
+  /** Give the Premium badge ('premium') or take it away (null). */
+  onBadge: (badge: 'premium' | null) => void;
 }
 
 export default function AdminUserRow({
-  user: u, tab, isSelf, isSuperAdmin, selected, busy, roleBusy, onToggleSelect, onAction, onRole, onLimits,
+  user: u, tab, isSelf, isSuperAdmin, selected, busy, roleBusy, onToggleSelect, onAction, onRole, onLimits, badgeBusy, onBadge,
 }: Props) {
+  const hasBadge = !!profileBadgeLabel(u.profileBadge);
+  const who = u.displayName || u.email;
   const roleLabel = ROLE_LABEL[u.role] ?? u.role;
   const choices = roleChoices(isSuperAdmin);
   const status = (u.status in STATUS_LABEL ? u.status : 'active') as AccountStatus;
@@ -70,7 +77,10 @@ export default function AdminUserRow({
           <Link to={`/admin/users/${u.id}`} className="flex min-w-0 items-center gap-3 hover:opacity-80">
             <Avatar src={u.avatarUrl ?? undefined} name={u.displayName || u.email} size="sm" className="shrink-0" />
             <div className="min-w-0 [overflow-wrap:anywhere]">
-              <p className="text-sm font-medium text-gray-800">{u.displayName || 'No name'}</p>
+              <p className="text-sm font-medium text-gray-800">
+                {u.displayName || 'No name'}
+                <ProfileBadge badge={u.profileBadge} className="ml-1.5" />
+              </p>
               <p className="text-xs text-gray-500">{u.email}</p>
             </div>
           </Link>
@@ -81,8 +91,21 @@ export default function AdminUserRow({
         </div>
       </div>
 
-      {!isSelf && (
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
+        {/* The badge (Shradha, 21 Nov 2026) marks the member beside their name and changes nothing else, so it is
+            offered on every row, the admin's own too, and on every tab. */}
+        <button
+          type="button"
+          disabled={badgeBusy}
+          aria-label={hasBadge ? `Take the Premium badge off ${who}` : `Give ${who} the Premium badge`}
+          onClick={() => onBadge(hasBadge ? null : 'premium')}
+          data-testid={`admin-user-badge-${u.id}`}
+          className={cn(ACTION_BUTTON, hasBadge ? 'text-gray-600 hover:bg-gray-50' : 'text-amber-800 hover:bg-amber-50')}
+        >
+          {badgeBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Sparkles className="h-4 w-4" aria-hidden="true" />}
+          {hasBadge ? 'Remove Premium badge' : 'Give Premium badge'}
+        </button>
+        {!isSelf && (<>
           {tab === 'active' && (roleIsEditable(u.role, isSuperAdmin) ? (
             <label className="inline-flex items-center gap-2 text-sm text-gray-600">
               <span className="sr-only">Role for {u.displayName || u.email}</span>
@@ -118,8 +141,8 @@ export default function AdminUserRow({
             </button>
           ))}
           {busy && <span className="inline-flex items-center gap-1 text-xs text-gray-500"><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Saving…</span>}
-        </div>
-      )}
+        </>)}
+      </div>
     </Card>
   );
 }

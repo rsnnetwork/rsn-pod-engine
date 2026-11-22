@@ -6,8 +6,9 @@
 //   3. handleDmSend emits dm:conversation_updated to both users for inbox sort.
 //   4. handleDmSend writes a notifications row with type='direct_message'
 //      and emits notification:new (existing bell pattern).
-//   5. handleDmSend triggers email when recipient is offline (no socket
-//      in their userRoom), debounced via Redis 1 hour TTL.
+//   5. handleDmSend hands the email to the notification email gate (22 Nov 2026), which sends it only
+//      while the recipient is away, at most their daily maximum (it replaced the no-socket check and the
+//      Redis 1 hour debounce; notification-email.service.test.ts pins the gate).
 //   6. handleDmRead emits dm:read_receipt to the OTHER user (sender side).
 //   7. orchestration.service.ts wires both handlers on dm:send and dm:read.
 //   8. email.service.ts has sendDmNotificationEmail with snippet + thread URL.
@@ -88,27 +89,25 @@ describe('Phase D — DM real-time + notifications', () => {
       expect(routeSrc).toMatch(/broadcastDmMessage\(\s*io,/);
     });
 
-    it('handleDmSend checks recipient online status via fetchSockets', () => {
-      const fnStart = src.indexOf('async function isUserOnline');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/fetchSockets/);
+    it('the email goes through the notification email gate, which decides when the recipient is away', () => {
+      const fnStart = src.indexOf('async function queueDmEmail');
+      expect(fnStart).toBeGreaterThan(-1);
+      const fn = src.slice(fnStart, src.indexOf('export async function broadcastDmMessage(', fnStart));
+      expect(fn).toMatch(/notificationEmail\.queueNotificationEmail\(/);
+      expect(fn).toMatch(/kind: 'direct_message'/);
+      // Nothing here sends or asks for sockets any more: the gate is the one place that decides and sends.
+      expect(src).not.toMatch(/emailService\./);
+      expect(src).not.toMatch(/fetchSockets/);
     });
 
-    it('email path is debounced via Redis with hourly TTL', () => {
-      // Constants for the debounce key + TTL
-      expect(src).toMatch(/DM_EMAIL_DEBOUNCE_TTL_SECONDS\s*=\s*3600/);
-      expect(src).toMatch(/dm:email-debounce:/);
-    });
-
-    it('email send is fire-and-forget (void maybeSendDmEmail)', () => {
+    it('email send is fire-and-forget (void queueDmEmail)', () => {
       // We never want the socket response to block on email I/O. After the
       // 15 May refactor the call lives inside broadcastDmMessage instead of
       // handleDmSend directly.
       const fnStart = src.indexOf('export async function broadcastDmMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/void maybeSendDmEmail/);
+      expect(fn).toMatch(/void queueDmEmail/);
     });
 
     it('handleDmRead emits dm:read_receipt to the OTHER user', () => {

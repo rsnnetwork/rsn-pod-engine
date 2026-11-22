@@ -8,7 +8,7 @@
 // find other people based on profiling — with a side note that new arrivals
 // who fit will trigger a notification.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -37,10 +37,23 @@ interface PlatformMatch {
   pokeSentByOwner?: boolean | null;
 }
 
+/** A request the member sent that is still waiting for an answer (22 Nov 2026). */
+interface WaitingRequest {
+  userId: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  professionalRole: string | null;
+  company: string | null;
+  sentAt: string;
+}
+
 interface PlatformMatchesResult {
   matches: PlatformMatch[];
   profileIncomplete: boolean;
   nextEvent: { id: string; title: string; scheduledAt: string } | null;
+  /** Optional: an older server does not send them. */
+  waiting?: WaitingRequest[];
+  waitingCount?: number;
 }
 
 export default function MatchesPage() {
@@ -86,10 +99,18 @@ export default function MatchesPage() {
     }
   };
 
+  // For You's "and n more" opens #waiting: the list is drawn once the answer is in, so it is scrolled to then.
+  const hasData = data !== undefined;
+  useEffect(() => {
+    if (hasData && window.location.hash === '#waiting') document.getElementById('waiting')?.scrollIntoView({ block: 'start' });
+  }, [hasData]);
+
   if (isLoading) return <PageLoader />;
 
   const matches = data?.matches ?? [];
   const nextEvent = data?.nextEvent ?? null;
+  const waiting = data?.waiting ?? [];
+  const waitingCount = data?.waitingCount ?? waiting.length;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -235,6 +256,47 @@ export default function MatchesPage() {
             New people join all the time — we'll notify you when someone who fits arrives.
           </p>
         </div>
+      )}
+
+      {/* 22 Nov 2026: the people the member asked who have not answered. They left the suggestions (a request already
+          sent is not a suggestion), and this is where For You's "Waiting for their answer" row sends the member for
+          the full list, each with Withdraw beside it. */}
+      {waiting.length > 0 && (
+        <section id="waiting" aria-labelledby="waiting-title" className="space-y-3 scroll-mt-20 animate-fade-in-up">
+          <div>
+            <h2 id="waiting-title" className="font-semibold text-gray-900">Waiting for their answer ({waitingCount})</h2>
+            <p className="text-sm text-gray-500 mt-1">People you asked to meet. When they say yes, a chat opens.</p>
+          </div>
+          <div className="grid gap-3 min-[1024px]:grid-cols-2">
+            {waiting.map(w => (
+              <Card key={w.userId}>
+                <div className="flex flex-col gap-3 sm:max-[1023px]:flex-row sm:max-[1023px]:items-center sm:max-[1023px]:justify-between">
+                  <Link to={`/people/${w.userId}?from=People`} className="flex min-h-[44px] items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
+                    <Avatar src={w.avatarUrl} name={w.displayName || 'User'} size="md" className="shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-900 [overflow-wrap:anywhere]">{w.displayName || 'Member'}</p>
+                      <p className="text-xs text-gray-500 [overflow-wrap:anywhere]">
+                        {[w.professionalRole, w.company].filter(Boolean).join(' · ')}
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        Asked on {new Date(w.sentAt).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </p>
+                    </div>
+                  </Link>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <span className="flex items-center gap-1.5 text-sm text-emerald-600 font-medium min-h-[44px]" data-testid={`waiting-state-${w.userId}`}>
+                      <Check className="h-4 w-4" /> Request sent
+                    </span>
+                    <WithdrawRequestButton userId={w.userId} />
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+          {waitingCount > waiting.length && (
+            <p className="text-xs text-gray-500 px-1">These are the {waiting.length} you asked most recently.</p>
+          )}
+        </section>
       )}
     </div>
   );

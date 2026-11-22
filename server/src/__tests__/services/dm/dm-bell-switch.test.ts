@@ -5,6 +5,9 @@
 // "<name> sent you a message" row and pushed it live whatever the member had chosen. Now a member whose message bell is
 // off gets no bell row, no live bell and no notifications tag, while the message itself still arrives live in both
 // people's threads; and a member whose message email is off gets no email (the plan's pin, kept).
+//
+// 22 Nov 2026: the email is handed to the notification email gate (services/notification-email), online or not: the
+// gate decides whether the member was away and when it goes. Here the gate is stood in by mockQueue.
 
 import { jest } from '@jest/globals';
 
@@ -16,9 +19,9 @@ jest.mock('../../../config/logger', () => ({
 }));
 jest.mock('../../../config', () => ({ default: { clientUrl: 'http://localhost:5173' }, __esModule: true }));
 jest.mock('../../../services/dm/dm.service', () => ({ __esModule: true }));
-const mockSendEmail = jest.fn<any>(async () => undefined);
-jest.mock('../../../services/email/email.service', () => ({
-  sendDmNotificationEmail: (...a: unknown[]) => mockSendEmail(...a),
+const mockQueue = jest.fn<any>(async () => undefined);
+jest.mock('../../../services/notification-email/notification-email.service', () => ({
+  queueNotificationEmail: (...a: unknown[]) => mockQueue(...a),
   __esModule: true,
 }));
 const prefs = { dm_bell: true, dm_email: true };
@@ -55,7 +58,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 
 beforeEach(() => {
   mockQuery.mockReset();
-  mockSendEmail.mockClear();
+  mockQueue.mockClear();
   mockEmitEntities.mockClear();
   emitted.length = 0;
   online = true;
@@ -93,30 +96,52 @@ describe('the Direct messages bell switch', () => {
     expect(mockEmitEntities).toHaveBeenCalledWith(io, ['ana', 'ben'], ['dm-conversation:conv-1', 'user:ana:dms', 'user:ben:dms']);
   });
 
-  it('off: the offline email still goes, by its own switch', async () => {
+  it('off: the email is still handed to the gate, by its own switch', async () => {
     prefs.dm_bell = false;
     online = false;
     await broadcastDmMessage(io, 'ana', 'ben', 'conv-1', message);
     await settle();
-    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    expect(mockQueue).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('the Direct messages email switch', () => {
-  it('a message to someone offline with the switch off sends no email', async () => {
+  it('a message with the switch off queues no email', async () => {
     prefs.dm_email = false;
     online = false;
     await broadcastDmMessage(io, 'ana', 'ben', 'conv-1', message);
     await settle();
     expect(prefsService.shouldSendEmail).toHaveBeenCalledWith('ben', 'dm');
-    expect(mockSendEmail).not.toHaveBeenCalled();
+    expect(mockQueue).not.toHaveBeenCalled();
   });
 
-  it('with the switch on, someone offline is emailed', async () => {
+  it('with the switch on, the message is handed to the gate: who, which message, who wrote, its first words, the thread', async () => {
     online = false;
     await broadcastDmMessage(io, 'ana', 'ben', 'conv-1', message);
     await settle();
-    expect(mockSendEmail).toHaveBeenCalledWith('ben@rsn-e2e.invalid', 'Ben', expect.objectContaining({ senderName: 'Ana' }));
+    expect(mockQueue).toHaveBeenCalledWith({
+      userId: 'ben', kind: 'direct_message', sourceId: 'msg-1', actorId: 'ana',
+      payload: { senderName: 'Ana Lopez', snippet: 'Hello Ben', conversationId: 'conv-1' },
+    });
+  });
+
+  it('someone online is handed to the gate too: it waits ten minutes and lets it go if they were on REASON', async () => {
+    online = true;
+    await broadcastDmMessage(io, 'ana', 'ben', 'conv-1', message);
+    await settle();
+    expect(mockQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('a photo with no words is described, never left empty', async () => {
+    await broadcastDmMessage(io, 'ana', 'ben', 'conv-1', { ...message, content: null, attachmentType: 'image' } as any);
+    await settle();
+    expect(mockQueue).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ snippet: 'Sent you a photo' }) }));
+  });
+
+  it('notify:false (a card with its own bell) queues no email', async () => {
+    await broadcastDmMessage(io, 'ana', 'ben', 'conv-1', message, { notify: false });
+    await settle();
+    expect(mockQueue).not.toHaveBeenCalled();
   });
 });
 

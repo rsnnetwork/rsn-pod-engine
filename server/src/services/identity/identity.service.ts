@@ -136,6 +136,8 @@ export async function getUserById(id: string): Promise<User> {
             notify_matches AS "notifyMatches", profile_visible AS "profileVisible",
             invite_opt_out_public_events AS "inviteOptOutPublicEvents",
             show_communities AS "showCommunities",
+            meet_note_default AS "meetNoteDefault", meet_format_default AS "meetFormatDefault",
+            profile_badge AS "profileBadge",
             onboarding_completed AS "onboardingCompleted",
             onboarding_status AS "onboardingStatus",
             onboarding_version AS "onboardingVersion",
@@ -283,6 +285,8 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
     profileVisible: 'profile_visible',
     inviteOptOutPublicEvents: 'invite_opt_out_public_events',
     showCommunities: 'show_communities',
+    meetNoteDefault: 'meet_note_default',
+    meetFormatDefault: 'meet_format_default',
     professionalRole: 'professional_role',
     currentState: 'current_state',
     careerStage: 'career_stage',
@@ -1257,6 +1261,7 @@ export async function getUsers(params: {
             notify_email AS "notifyEmail", notify_event_reminders AS "notifyEventReminders",
             notify_matches AS "notifyMatches", profile_visible AS "profileVisible",
             invite_opt_out_public_events AS "inviteOptOutPublicEvents",
+            profile_badge AS "profileBadge",
             last_active_at AS "lastActiveAt",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM users ${whereClause}

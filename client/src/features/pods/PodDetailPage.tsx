@@ -2,14 +2,13 @@ import { useState, type MouseEvent } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio,
+  ArrowLeft, Users, Calendar, LogOut, Shield, Eye, Radio,
   UserPlus, Lock, Mail, UserCheck, X,
   Clock, XCircle, AlertTriangle, MessagesSquare,
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
-import ProfileCard from '@/components/ui/ProfileCard';
 import { Button } from '@/components/ui/Button';
 import Modal from '@/components/ui/Modal';
 import { PageLoader } from '@/components/ui/Spinner';
@@ -24,6 +23,7 @@ import EditPodModal from './EditPodModal';
 import PodWall from './PodWall';
 import { orchestrationLabel, podStatusLabel } from './pod-header-text';
 import PodEventsSection from './PodEventsSection';
+import PodMembersSection from './PodMembersSection';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -84,7 +84,6 @@ export default function PodDetailPage() {
   // Shirley pilot S7 (item 20): its director and hosts export its data.
   const [exportOpen, setExportOpen] = useState(false);
 
-  const [memberStatusFilter, setMemberStatusFilter] = useState<string | null>(null);
   // Duplicate pod: open CreatePodModal pre-filled
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   // Request to join: rules agreement
@@ -102,7 +101,7 @@ export default function PodDetailPage() {
     meta: { entities: podId ? [E.pod(podId)] : [] },
   });
 
-  const { data: members } = useQuery({
+  const { data: members, isLoading: membersLoading, isError: membersFailed, refetch: refetchMembers } = useQuery({
     queryKey: ['pod-members', podId],
     queryFn: () => api.get(`/pods/${podId}/members`).then(r => r.data.data ?? []),
     enabled: !!podId,
@@ -665,10 +664,11 @@ export default function PodDetailPage() {
         </div>
       )}
 
-      {/* ── Discussion beside Events and Members ────────────────────────── */}
-      {/* One column on a phone and a tablet (Discussion, Events, Members, in that order); from 1024px two: the
-          discussion on the left, the pod's events and members beside it. min-w-0 on both columns, because a
-          grid column does not shrink below its content and one long unbroken word would widen the page. */}
+      {/* ── Discussion beside Events (and Invitations) ───────────────────── */}
+      {/* One column on a phone and a tablet (Discussion, Events, then the Members below, in that order); from 1024px
+          two: the discussion on the left, the pod's events and invitations beside it, and the members across both
+          underneath. min-w-0 on both columns, because a grid column does not shrink below its content and one long
+          unbroken word would widen the page. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
         <section id="pod-discussion" className="min-w-0 scroll-mt-4">
           <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
@@ -692,7 +692,7 @@ export default function PodDetailPage() {
           {/* ── Invitations: who is invited, who declined (the pod's director, host and admins), for any pod that is not
                archived: a draft or suspended pod can be invited to (the button above shows; the server refuses only an
                archived pod), so its organisers see the card too. Above the members, so a director sees it without
-               scrolling past the whole list (P1 item 33). ─────── */}
+               scrolling past the whole list (P1 item 33): the members come after this grid. ─────── */}
           {canManageOrHost && pod.status !== 'archived' && podId && (
             <div id="pod-invitations" className="scroll-mt-4">
             <InviteStatusList
@@ -703,99 +703,32 @@ export default function PodDetailPage() {
             />
             </div>
           )}
-
-          {/* ── Members ──────────────────────────────────────────────────── */}
-          <section id="pod-members" className="scroll-mt-4 animate-fade-in-up stagger-2">
-            <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-              <Users className="h-5 w-5 text-rsn-red" /> Members ({memberTotal})
-            </h2>
-
-            {/* Status summary tabs (director/host only) */}
-            {canManageOrHost && podMemberCounts && (
-              <div className="flex flex-wrap gap-2 mb-3">
-                {[
-                  { key: null, label: 'All', count: memberTotal, color: 'bg-gray-100 text-gray-700 border-gray-200' },
-                  ...(podMemberCounts.active > 0 ? [{ key: 'active', label: 'Active', count: podMemberCounts.active, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }] : []),
-                  ...(podMemberCounts.invited > 0 ? [{ key: 'invited', label: 'Invited', count: podMemberCounts.invited, color: 'bg-blue-50 text-blue-700 border-blue-200' }] : []),
-                  ...(podMemberCounts.declined > 0 ? [{ key: 'declined', label: 'Declined', count: podMemberCounts.declined, color: 'bg-red-50 text-red-600 border-red-200' }] : []),
-                  ...(podMemberCounts.left > 0 ? [{ key: 'left', label: 'Left', count: podMemberCounts.left, color: 'bg-gray-100 text-gray-500 border-gray-200' }] : []),
-                ].map((tab: any) => (
-                  <button
-                    key={tab.key ?? 'all'}
-                    onClick={() => setMemberStatusFilter(tab.key)}
-                    className={`flex min-h-[44px] items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                      memberStatusFilter === tab.key
-                        ? 'ring-2 ring-rsn-red/30 border-rsn-red ' + tab.color
-                        : tab.color + ' hover:opacity-80'
-                    }`}
-                  >
-                    <span>{tab.label}</span>
-                    <span className="font-bold">{tab.count}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* grid-cols-1, not an auto track: an auto track grows to the longest truncated job title
-                in it, and the page then scrolls sideways on a phone. */}
-            <div className="grid grid-cols-1 gap-2">
-              {(memberStatusFilter === null ? activeMembers : membersList.filter((m: any) => m.status === memberStatusFilter)).map((m: any) => (
-                <Card key={m.userId || m.id} className="!p-3">
-                  {/* A director's two controls take the row from the name in the 320px column: they wrap under it. */}
-                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-                    <Link to={personHref(m.userId || m.id, 'Pods')} className="min-w-0 flex-[1_1_14rem] hover:opacity-80 transition-opacity">
-                      <ProfileCard
-                        compact
-                        user={{
-                          id: m.userId || m.id,
-                          displayName: m.displayName || 'Member',
-                          avatarUrl: m.avatarUrl,
-                          jobTitle: m.jobTitle,
-                          company: m.company,
-                        }}
-                        badge={m.role === 'director' ? 'director' : m.role === 'host' ? 'host' : undefined}
-                        badgeVariant={m.role === 'director' ? 'brand' : 'info'}
-                      />
-                    </Link>
-                    <div className="ml-auto flex items-center gap-2 shrink-0">
-                      {canManage && m.userId !== user?.id && m.role !== 'director' && (
-                        <button
-                          onClick={() => changeRoleMutation.mutate({
-                            userId: m.userId,
-                            role: m.role === 'host' ? 'member' : 'host',
-                          })}
-                          className="min-h-[44px] px-2 py-1 rounded-lg text-xs font-medium text-rsn-red hover:bg-rsn-red-light border border-rsn-red-200 transition-all"
-                          title={m.role === 'host' ? 'Demote to member' : 'Promote to host'}
-                        >
-                          {m.role === 'host' ? 'Demote' : 'Make Host'}
-                        </button>
-                      )}
-                      {canManage && m.userId !== user?.id && (
-                        <button
-                          onClick={() => void removeMember(m.userId, m.displayName || 'this member')}
-                          disabled={removeMemberMutation.isPending}
-                          data-testid={`pod-remove-${m.userId}`}
-                          className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all"
-                          title="Remove member"
-                          aria-label="Remove member"
-                        >
-                          <UserMinus className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </Card>
-              ))}
-              {activeMembers.length === 0 && (
-                <Card><p className="text-gray-400 text-sm text-center py-4">
-                  {canOpenWall ? 'No members yet' : 'To access pod details, please join the pod.'}
-                </p></Card>
-              )}
-            </div>
-          </section>
-
         </div>
       </div>
+
+      {/* ── Members: the page's full width, below the discussion and the events (21 Nov 2026) ── */}
+      {/* Stefan: "ux on how we show members, is really bad". In the 320px side column a 30-member pod was a long
+          scroll of tall cards beside an empty area; here the rows are compact, two or three across from 768px, with a
+          search, the first 12 and "Show all" (PodMembersSection). On a phone and a tablet it still comes after the
+          events, where the Members chip jumps to. */}
+      <section id="pod-members" className="min-w-0 scroll-mt-4 animate-fade-in-up stagger-2">
+        <PodMembersSection
+          members={membersList}
+          total={memberTotal}
+          counts={podMemberCounts}
+          canFilter={canManageOrHost}
+          readable={canOpenWall}
+          loading={membersLoading}
+          failed={membersFailed}
+          onRetry={() => void refetchMembers()}
+          me={user?.id}
+          canManage={canManage}
+          onRemove={(m) => void removeMember(m.userId, m.displayName || 'this member')}
+          onSetRole={(m, role) => changeRoleMutation.mutate({ userId: m.userId, role })}
+          removing={removeMemberMutation.isPending}
+          changingRole={changeRoleMutation.isPending}
+        />
+      </section>
       {confirmDialog}
     </div>
   );

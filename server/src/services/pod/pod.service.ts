@@ -10,7 +10,7 @@ import {
   PodVisibility, PodJoinConfig, podTypeRule,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError } from '../../middleware/errors';
-import { UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { UserRole, hasRoleAtLeast, type ProfileBadgeKind } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
 import { assertInPodsRestrictedCircles } from '../pods/pod-circle-gate';
 
@@ -461,9 +461,17 @@ export async function leavePod(podId: string, userId: string): Promise<void> {
   logger.info({ podId, userId }, 'Member left pod');
 }
 
-export async function getPodMembers(podId: string, status?: PodMemberStatus): Promise<(PodMember & { displayName?: string; email?: string; avatarUrl?: string; jobTitle?: string; company?: string; interests?: string[] })[]> {
+// Each member's profileBadge (21 Nov 2026) is the badge an admin gave them, shown beside their name: public, like the
+// rest of the card, so the member list keeps it for everyone.
+type PodMemberRow = PodMember & {
+  displayName?: string; email?: string; avatarUrl?: string; jobTitle?: string; company?: string; interests?: string[];
+  profileBadge: ProfileBadgeKind | null;
+};
+
+export async function getPodMembers(podId: string, status?: PodMemberStatus): Promise<PodMemberRow[]> {
   let sql = `SELECT ${MEMBER_COLUMNS}, u.display_name AS "displayName", u.email,
-                    u.avatar_url AS "avatarUrl", u.job_title AS "jobTitle", u.company, u.interests
+                    u.avatar_url AS "avatarUrl", u.job_title AS "jobTitle", u.company, u.interests,
+                    u.profile_badge AS "profileBadge"
              FROM pod_members
              JOIN users u ON u.id = pod_members.user_id
              WHERE pod_id = $1 AND ${activeMemberSql('u')}`;
@@ -477,7 +485,7 @@ export async function getPodMembers(podId: string, status?: PodMemberStatus): Pr
   }
 
   sql += ' ORDER BY joined_at ASC';
-  const result = await query<PodMember & { displayName?: string; email?: string; avatarUrl?: string; jobTitle?: string; company?: string; interests?: string[] }>(sql, values);
+  const result = await query<PodMemberRow>(sql, values);
   return result.rows;
 }
 

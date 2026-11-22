@@ -36,7 +36,7 @@ type Person = PersonBrief['person'];
 const person = (over: Partial<Person> = {}): Person => ({
   id: '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', displayName: 'Nora None', firstName: 'Nora', lastName: 'None', avatarUrl: null,
   bannerUrl: null, bio: null, company: null, jobTitle: null, industry: null, location: null, linkedinUrl: null, websiteUrl: null, instagramUrl: null, xUrl: null, facebookUrl: null, languages: [],
-  professionalRole: [], expertiseText: null, whatICanHelpWith: null, ...over,
+  professionalRole: [], expertiseText: null, whatICanHelpWith: null, profileBadge: null, ...over,
 });
 
 // ── The banner picture ────────────────────────────────────────────────────────────────────────────

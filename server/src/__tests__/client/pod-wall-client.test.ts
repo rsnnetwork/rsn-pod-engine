@@ -406,8 +406,16 @@ describe('the pod page', () => {
     expect(page).toMatch(/<PodWall\b[^>]*highlightPostId=\{highlightPostId\}/);
   });
 
-  it('is one column on a phone and two from 1024px: the discussion on the left, events and members on the right', () => {
+  it('is one column on a phone and two from 1024px: the discussion on the left, events (and invitations) on the right, the members across both below', () => {
     expect(page).toMatch(/grid-cols-1[^"]*lg:grid-cols-\[minmax\(0,1fr\)_320px\]/);
+    // 21 Nov 2026 (Stefan: "ux on how we show members, is really bad"): the members left the 320px column for the
+    // page's full width, after the two-column grid closes.
+    const grid = page.indexOf('lg:grid-cols-[minmax(0,1fr)_320px]');
+    const members = page.indexOf('<section id="pod-members"');
+    expect(grid).toBeGreaterThan(0);
+    expect(members).toBeGreaterThan(page.indexOf('<PodEventsSection', grid));
+    expect(page.slice(grid, members)).toMatch(/<\/div>\s*<\/div>\s*\{\/\* ── Members: the page's full width/);
+    expect(page).toMatch(/<section id="pod-members" className="min-w-0 scroll-mt-4[^"]*">\s*<PodMembersSection\b/);
   });
 
   it('has a row of 44px chips (Discussion, Events, Members) that is there on a phone and gone from 1024px', () => {
@@ -427,7 +435,7 @@ describe('the pod page', () => {
     expect(page).toMatch(/<PodWall\b[^>]*isActiveMember=\{/);
   });
 
-  it('keeps the member list a one-column grid with its Human Profile links (pinned by the shell and profile-text tests)', () => {
-    expect(page).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{\(memberStatusFilter === null \? activeMembers/);
+  it('keeps the member list a one-column grid on a phone (two from 768px, three from 1280px), with its Human Profile links (pinned by the shell and profile-text tests)', () => {
+    expect(read('features/pods/PodMembersSection.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">\s*\{view\.rows\.map/);
   });
 });

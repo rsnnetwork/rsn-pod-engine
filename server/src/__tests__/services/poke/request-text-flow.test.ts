@@ -34,11 +34,14 @@ jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
   broadcastDmMessage: (...args: unknown[]) => mockBroadcastDm(...args),
   __esModule: true,
 }));
-const mockSendPokeReceivedEmail = jest.fn().mockResolvedValue(undefined);
+// 22 Nov 2026: the email is handed to the notification email gate, which builds it from what is queued.
+const mockQueueNotificationEmail = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../../services/email/email.service', () => ({
-  sendPokeReceivedEmail: (...args: unknown[]) => mockSendPokeReceivedEmail(...args),
-  sendPokeAcceptedEmail: jest.fn().mockResolvedValue(undefined),
   isEmailTypeEnabled: jest.fn().mockResolvedValue(true),
+  __esModule: true,
+}));
+jest.mock('../../../services/notification-email/notification-email.service', () => ({
+  queueNotificationEmail: (...args: unknown[]) => mockQueueNotificationEmail(...args),
   __esModule: true,
 }));
 jest.mock('../../../services/notification-prefs/notification-prefs.service', () => ({
@@ -137,7 +140,7 @@ beforeEach(() => {
   mockQuery.mockReset();
   mockEmit.mockClear();
   mockBroadcastDm.mockClear();
-  mockSendPokeReceivedEmail.mockClear();
+  mockQueueNotificationEmail.mockClear();
   users[SHRADHA].status = 'active';
 });
 
@@ -189,8 +192,9 @@ describe('sending: the note and REASON\'s line are stored apart, and the bell sp
     armDb([]);
     await pokeService.sendPoke(SHRADHA, STEFAN, NOTE, undefined, undefined, 'A line.');
     await flushPromises();
-    expect(mockSendPokeReceivedEmail).toHaveBeenCalledWith('stefan@example.com', 'Stefan Avivson', expect.objectContaining({
-      senderName: 'Shradha Adhikari', note: NOTE, reasonLine: 'A line.',
+    expect(mockQueueNotificationEmail).toHaveBeenCalledWith(expect.objectContaining({
+      userId: STEFAN, kind: 'meeting_request',
+      payload: { senderName: 'Shradha Adhikari', note: NOTE, reasonLine: 'A line.' },
     }));
   });
 

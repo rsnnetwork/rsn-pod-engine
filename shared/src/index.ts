@@ -1,6 +1,9 @@
 // ─── RSN Shared Types & Contracts ────────────────────────────────────────────
 
 export * from './types/user';
+// The badges an admin can give (21 Nov 2026): a real VALUE, so it has its own named export, same as OPENINGS below.
+import { PROFILE_BADGES as _PROFILE_BADGES } from './types/user';
+export const PROFILE_BADGES = _PROFILE_BADGES;
 export * from './types/auth';
 export * from './types/pod';
 export * from './types/session';

@@ -331,8 +331,9 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
     // T14: the member rows (and the pod rows) moved into their own sections.
     expect(read('features/circles/CircleMembersSection.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.members\.map/);
     expect(read('features/circles/CirclePodsSection.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.pods\.map/);
-    // Pod detail: the member list, whose ProfileCard truncates the job title (+360px at a 360px window for a long one).
-    expect(read('features/pods/PodDetailPage.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{\(memberStatusFilter === null \? activeMembers/);
+    // Pod detail: the member list, whose rows truncate the job title (+360px at a 360px window for a long one). Since
+    // 21 Nov 2026 its own section, two across from 768px and three from 1280px (repeat(n, minmax(0, 1fr)), no auto track).
+    expect(read('features/pods/PodMembersSection.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">\s*\{view\.rows\.map/);
     // Event page: the participant list (8px at 360 in WebKit).
     expect(read('features/sessions/SessionDetailPage.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{\/\* Host\/Director card/);
   });

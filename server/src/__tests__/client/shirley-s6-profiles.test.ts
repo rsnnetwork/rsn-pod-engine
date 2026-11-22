@@ -42,7 +42,8 @@ describe('the two links', () => {
   // without the id, plus canBring (public-link.service.ts); a public field added to toPublicMember fails here until the
   // consent line names it.
   it('names every field the public card sends', () => {
-    const card = Object.keys(toPublicMember({ id: 'x' })).filter((k) => k !== 'id').concat('canBring').sort();
+    // The link leaves out the id and, since 21 Nov 2026, the badge an admin gave the member (public-link.service.ts).
+    const card = Object.keys(toPublicMember({ id: 'x' })).filter((k) => k !== 'id' && k !== 'profileBadge').concat('canBring').sort();
     const said: Record<string, RegExp> = {
       displayName: /your name/, firstName: /your name/, lastName: /your name/,
       avatarUrl: /photo/, bannerUrl: /banner/,

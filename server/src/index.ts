@@ -43,6 +43,8 @@ import { processMeetingReminders } from './services/meetings/meeting-reminder.wo
 import { processEnrichmentRetries, ENRICH_RETRY_INTERVAL_MS } from './services/onboarding/enrichment-retry.worker';
 import { closeOverdueEvents, OVERDUE_EVENT_INTERVAL_MS } from './services/session/overdue-events';
 import { processEventReminders, EVENT_REMINDER_INTERVAL_MS } from './services/session/event-reminder.worker';
+import { processDueNotificationEmails } from './services/notification-email/notification-email.service';
+import { processDailyDigests, processWeeklyDigests, DIGEST_INTERVAL_MS } from './services/notification-email/notification-digest.service';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -77,6 +79,8 @@ import entityRoutes from './routes/entities';
 import reportRoutes from './routes/reports';
 import groupRoutes from './routes/groups';
 import notificationPrefsRoutes from './routes/notification-prefs';
+import emailUnsubscribeRoutes from './routes/email-unsubscribe';
+import notificationEmailAdminRoutes from './routes/notification-email-admin';
 import { webhooksRouter } from './routes/webhooks';
 import postEventMessageRoutes from './routes/post-event-message';
 import eventChatRoutes from './routes/event-chat';
@@ -386,6 +390,8 @@ app.use('/api/sessions', scheduleRoutes); // The organisers' matching board draf
 app.use('/api/sessions', eventImageRoutes); // An event's image: /api/sessions/:id/image (Part 3 Task 1)
 app.use('/api/sessions', eventReportRoutes); // The organisers' event report and its CSVs: /api/sessions/:id/report (Part 3 Task 4)
 app.use('/api/join-requests', joinRequestRoutes);
+// An admin's sample of the daily and weekly emails, to their own address (22 Nov 2026).
+app.use('/api/admin/notification-email', notificationEmailAdminRoutes);
 app.use('/api/admin', adminRoutes);
 // Task E2 — admin per-user inspection API (onboarding, conversations, interactions).
 app.use('/api/admin', adminInspectRoutes);
@@ -410,6 +416,7 @@ app.use('/api/entities', entityRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/notification-prefs', notificationPrefsRoutes);
+app.use('/api/email', emailUnsubscribeRoutes); // The weekly email's one-click unsubscribe, signed out: the token is the proof
 // Phase 4 — LiveKit webhook receiver is mounted ABOVE the rate limiter (see
 // TRF-2 note near the limiter) so signed webhooks are never 429'd. The raw-body
 // handling lives on the route itself (express.raw on /livekit), so mount
@@ -487,6 +494,24 @@ async function start(): Promise<void> {
           logger.error({ err }, 'Event reminder cycle failed'));
       }, EVENT_REMINDER_INTERVAL_MS);
       logger.info({ mode: config.eventComms }, 'Event reminders started');
+    }
+
+    // Member notification emails (22 Nov 2026, Stefan): every minute, each member with a queued email due has their
+    // queue decided and sent as one email; every ten minutes, the next-morning "Yesterday on REASON" and Monday's
+    // "Your week on REASON". Each is claimed in the database, so several instances running them email a member once.
+    // NOTIFICATION_EMAIL_GATE=off sends each notification at once instead, and runs neither.
+    if (config.notificationEmailGate === 'on') {
+      setInterval(() => {
+        processDueNotificationEmails().catch(err =>
+          logger.error({ err }, 'Notification email cycle failed'));
+      }, 60_000);
+      setInterval(() => {
+        processDailyDigests()
+          .catch(err => logger.error({ err }, 'Daily digest cycle failed'))
+          .then(() => processWeeklyDigests())
+          .catch(err => logger.error({ err }, 'Weekly digest cycle failed'));
+      }, DIGEST_INTERVAL_MS);
+      logger.info('Notification email gate and digests started');
     }
 
     // Calendar free/busy (Shirley pilot S8): say whether it is on, and when it was asked for but stays off, why.

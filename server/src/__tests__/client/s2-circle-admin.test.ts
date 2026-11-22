@@ -193,7 +193,9 @@ describe('the pod page (S2)', () => {
 
   // Fix round 1: removing a member asks first, says they cannot come back by themselves, and shows the server's words.
   it('Remove member asks first, in words that match the re-entry rule, and a refusal shows the server\'s sentence', () => {
-    expect(pod).toMatch(/onClick=\{\(\) => void removeMember\(m\.userId, m\.displayName \|\| 'this member'\)\}/);
+    // 21 Nov 2026: Remove from pod is an entry of each row's "⋯" menu (PodMembersSection), which calls the page's removeMember.
+    expect(pod).toMatch(/onRemove=\{\(m\) => void removeMember\(m\.userId, m\.displayName \|\| 'this member'\)\}/);
+    expect(read('features/pods/PodMembersSection.tsx')).toMatch(/testId: `pod-remove-\$\{m\.userId\}`, onSelect: \(\) => p\.onRemove\(m\)/);
     expect(pod).not.toMatch(/onClick=\{\(\) => removeMemberMutation\.mutate\(m\.userId\)\}/);
     expect(pod).toMatch(/They cannot rejoin by themselves/);
     expect(pod).toMatch(/onError: \(err: any\) => addToast\(err\?\.response\?\.data\?\.error\?\.message \|\| 'They could not be removed\. Try again\.', 'error'\)/);

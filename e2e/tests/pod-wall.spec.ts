@@ -699,7 +699,11 @@ test('a populated pod at 360, 390, 414, 768, 1024, 1280 and 1440: no sideways sc
       await expect(chips, `${label}: the chips are gone`).toBeHidden();
       expect(events!.x, `${label}: events beside the discussion`).toBeGreaterThan(discussion!.x + discussion!.width - 1);
       expect(Math.abs(events!.width - 320), `${label}: the side column is 320px`).toBeLessThanOrEqual(1);
-      expect(Math.abs(members!.x - events!.x), `${label}: members under the events`).toBeLessThanOrEqual(1);
+      // 21 Nov 2026 (Stefan: "ux on how we show members, is really bad"): the members left the 320px column for the
+      // page's full width, under both columns.
+      expect(Math.abs(members!.x - discussion!.x), `${label}: members start at the discussion's left edge`).toBeLessThanOrEqual(1);
+      expect(members!.width, `${label}: members span both columns`).toBeGreaterThan(events!.x + events!.width - discussion!.x - 2);
+      expect(members!.y, `${label}: members under both columns`).toBeGreaterThan(Math.max(discussion!.y + discussion!.height, events!.y + events!.height) - 1);
       expect(events!.y, `${label}: the columns start together`).toBeLessThanOrEqual(discussion!.y + 60);
     }
 

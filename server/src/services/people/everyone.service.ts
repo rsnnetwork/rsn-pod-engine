@@ -14,7 +14,7 @@
 import { z } from 'zod';
 import { query } from '../../db';
 import { ValidationError } from '../../middleware/errors';
-import type { EveryoneMember, EveryonePage, RelationshipState } from '@rsn/shared';
+import type { EveryoneMember, EveryonePage, ProfileBadgeKind, RelationshipState } from '@rsn/shared';
 import { toPublicMember } from '../user/public-card';
 import { bannerUrlFor } from '../user/banner.service';
 import { CONNECTION_SIGNALS_SQL } from './connections.service';
@@ -44,6 +44,7 @@ interface Row {
   professional_role: string[] | null;
   expertise_text: string | null;
   what_i_can_help_with: string | null;
+  profile_badge: ProfileBadgeKind | null;
   sort_name: string;
   poke_status: 'pending' | 'accepted' | null;
   poke_sent_by_owner: boolean | null;
@@ -83,7 +84,7 @@ const EVERYONE_SQL = `
   SELECT u.id, u.display_name, u.first_name, u.last_name, u.avatar_url,
          CASE WHEN u.banner_blob IS NOT NULL THEN u.banner_updated_at END AS banner_updated_at,
          u.bio, u.company, u.job_title, u.industry, u.location, u.linkedin_url, u.languages,
-         u.professional_role, u.expertise_text, u.what_i_can_help_with,
+         u.professional_role, u.expertise_text, u.what_i_can_help_with, u.profile_badge,
          lower(COALESCE(u.display_name, '')) AS sort_name,
          pk.status AS poke_status, (pk.sender_id = $1) AS poke_sent_by_owner,
          (pe.person_id IS NOT NULL) AS connected, COALESCE(pe.met, false) AS met,
@@ -148,6 +149,7 @@ const toRow = (r: Row): EveryoneRow => ({
     professionalRole: r.professional_role ?? [],
     expertiseText: r.expertise_text,
     whatICanHelpWith: r.what_i_can_help_with,
+    profileBadge: r.profile_badge,
   }),
   pokeStatus: r.poke_status,
   pokeSentByOwner: r.poke_status ? !!r.poke_sent_by_owner : null,

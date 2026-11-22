@@ -14,8 +14,17 @@ const read = (rel: string) => fs.readFileSync(path.join(SRC, rel), 'utf8');
 
 describe('the bursts the server makes run in the bulk lane', () => {
   it('the bulk invite sends each email inside asBulkEmail', () => {
+    // 22 Nov 2026: through the notification email gate, which queues a member's and sends anyone else's at once.
     const src = read('services/invite/invite-candidates.service.ts');
-    expect(src).toMatch(/await asBulkEmail\(\(\) => invites\.emailInvite\(/);
+    expect(src).toMatch(/await asBulkEmail\(\(\) => invites\.emailOrQueueInvite\(/);
+  });
+
+  it('the notification email gate and the digests send from their jobs inside asBulkEmail', () => {
+    const gate = read('services/notification-email/notification-email.service.ts');
+    expect(gate).toMatch(/await emailService\.asBulkEmail\(\(\) => sendItems\(member, going\)\)/);
+    const digests = read('services/notification-email/notification-digest.service.ts');
+    expect(digests.slice(digests.indexOf('export async function processDailyDigests'))).toMatch(/await emailService\.asBulkEmail\(async \(\) => \{/);
+    expect(digests.slice(digests.indexOf('export async function processWeeklyDigests'))).toMatch(/await emailService\.asBulkEmail\(async \(\) => \{/);
   });
 
   it('the event\'s Remind all sends its batches inside asBulkEmail', () => {

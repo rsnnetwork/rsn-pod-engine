@@ -6,6 +6,7 @@ import { useId } from 'react';
 import { Link } from 'react-router-dom';
 import type { PersonConnection } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
+import ProfileBadge from '@/components/ui/ProfileBadge';
 import { cn } from '@/lib/utils';
 import { STATE_LABEL } from '../human/labels';
 import { personName, visibleText } from '../person';
@@ -39,6 +40,8 @@ export default function ConnectionCard({ person }: { person: PersonConnection })
         <div className="min-w-0">
           <h2 id={headingId} className="text-[16px] font-bold leading-tight [overflow-wrap:anywhere]">
             <Link to={profileUrl} className="hover:underline">{name}</Link>
+            {/* The badge an admin gave them (21 Nov 2026), display only; nothing for a member without one. */}
+            <ProfileBadge badge={person.profileBadge} className="ml-1.5" />
           </h2>
           {roleLine && <p className="mt-0.5 text-[12px] text-[#677080] [overflow-wrap:anywhere] min-[721px]:text-[13px]">{roleLine}</p>}
           <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-reason-muted">

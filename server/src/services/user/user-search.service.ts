@@ -10,6 +10,7 @@
 // findable is not the same as being open.
 
 import { query } from '../../db';
+import type { ProfileBadgeKind } from '@rsn/shared';
 
 export interface SearchResult {
   userId: string;
@@ -18,6 +19,8 @@ export interface SearchResult {
   jobTitle: string | null;
   company: string | null;
   location: string | null;
+  /** The badge an admin gave them (21 Nov 2026, display only), shown beside the name; null for none. */
+  profileBadge: ProfileBadgeKind | null;
   /**
    * Where a meeting request between the searcher and this member stands, either way (10 Nov 2026, Stefan: "if I
    * have ALREADY asked them, why is that not shown?"): the newest one pending or accepted, as For You reads it. A
@@ -71,7 +74,7 @@ export async function searchMembers(
   const r = await query<SearchResult>(
     `SELECT u.id AS "userId", u.display_name AS "displayName",
             u.avatar_url AS "avatarUrl", u.job_title AS "jobTitle",
-            u.company, u.location,
+            u.company, u.location, u.profile_badge AS "profileBadge",
             pk.status AS "pokeStatus",
             CASE WHEN pk.sender_id IS NULL THEN NULL ELSE pk.sender_id = $1 END AS "pokeSentByOwner",
             EXISTS (SELECT 1 FROM user_pokes d

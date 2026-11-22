@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { Facebook, Globe, Instagram, Linkedin, Twitter, type LucideIcon } from 'lucide-react';
 import type { PersonBrief } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
+import ProfileBadge from '@/components/ui/ProfileBadge';
 import { cn } from '@/lib/utils';
 import ReasonSheep from '../brand/ReasonSheep';
 import { visibleText } from '../person';
@@ -85,6 +86,8 @@ interface FrameProps {
   kicker: string;
   /** Drawn under the role line, centred: the match strength. */
   badge?: ReactNode;
+  /** The badge an admin gave the member (21 Nov 2026, display only), drawn under the name; none when null. */
+  profileBadge?: string | null;
   /** Drawn on the photo's lower right: the pencil, on your own profile only (30 Oct review, T3a). */
   photoAction?: ReactNode;
   /**
@@ -110,7 +113,7 @@ interface FrameProps {
 const OVERLAP = '-mt-[85px] md:-mt-[118px]';
 
 export function HeroFrame({
-  photo, who, kicker, badge, photoAction, onPhotoClick, photoLabel, hasBanner = false, note, panel, actions, fit = 'screen',
+  photo, who, kicker, badge, profileBadge, photoAction, onPhotoClick, photoLabel, hasBanner = false, note, panel, actions, fit = 'screen',
 }: FrameProps) {
   const roleLine = [who.role, who.company].filter(Boolean).join(' · ');
   const avatar = <Avatar src={photo} name={who.name} size="2xl" className="h-28 w-28 text-4xl ring-4 ring-white shadow-[0_10px_30px_rgba(17,18,22,.12)] md:h-36 md:w-36 md:text-5xl" />;
@@ -134,6 +137,7 @@ export function HeroFrame({
         </div>
         <p className="mt-4 text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#646a77] md:text-[11px]">{kicker}</p>
         <h1 className="mt-2 text-[40px] font-extrabold leading-[.94] tracking-[-0.055em] [overflow-wrap:anywhere] md:text-[52px]">{who.name}</h1>
+        <ProfileBadge badge={profileBadge} size="md" className="mt-2.5" />
         {roleLine && <p className="mt-3 text-[15px] text-reason-muted [overflow-wrap:anywhere]">{roleLine}</p>}
         {badge}
         <ProfileLinks links={who.links} />
@@ -168,6 +172,7 @@ export default function ProfileHero({ brief, who, source, userId }: Props) {
       photo={brief.person.avatarUrl}
       who={who}
       hasBanner={!!brief.person.bannerUrl}
+      profileBadge={brief.person.profileBadge}
       kicker="The human"
       actions={<ProfileHeroActions brief={brief} userId={userId} call={brief.canCall && <ProfileCallButton brief={brief} userId={userId} name={who.name} />} />}
       badge={brief.match && (

@@ -18,6 +18,7 @@
 import type { Server as SocketServer, Socket } from 'socket.io';
 import { PRESENCE_TTL_SECONDS, clearActive, isActive, markActive } from './presence.service';
 import { queuePresencePush } from './presence-push';
+import { noteSeen } from './last-seen';
 import logger from '../../config/logger';
 
 export const PRESENCE_EVENTS_PER_WINDOW = 20;
@@ -62,6 +63,8 @@ function presenceBudget(): () => boolean {
 export async function onPresencePing(socket: Pick<Socket, 'data'>, userId: string): Promise<void> {
   const wasForeground = socket.data.foreground === true;
   socket.data.foreground = true;
+  // The moment is kept too (users.last_seen_at, at most once a minute): the notification email gate reads it.
+  noteSeen(userId);
   const turned = await markActive(userId);
   if (turned !== null) armLapseTimer(userId);
   // Without Redis nothing is stamped: this socket coming to the front is the change.

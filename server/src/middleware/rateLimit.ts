@@ -1328,3 +1328,14 @@ export const calendarWriteLimiter = oneBucketLimit('calendar-write', 60 * 60 * 1
 
 // GET /api/public/config: what the server has switched on (Shirley pilot S8). Read once per page load; per address.
 export const publicConfigLimiter = oneBucketLimit('public-config', 60 * 1000, 120);
+
+// An admin giving or removing a member's badge (21 Nov 2026): one press a row, or up to 100 rows from the bulk bar. Sixty
+// a minute per admin lets someone work down a whole onboarding list without a pause while a runaway client is stopped.
+export const profileBadgeLimiter = oneBucketLimit('profile-badge', 60 * 1000, 60);
+
+// Notification emails (22 Nov 2026): a member saving their notification settings (each switch saves on its own, so a
+// minute of flicking through them stays well inside thirty); the weekly email's unsubscribe page and its one-click POST,
+// signed out, per address; and an admin sending themselves a sample of the daily or weekly email, six an hour.
+export const notificationPrefsLimiter = oneBucketLimit('notification-prefs', 60 * 1000, 30);
+export const emailUnsubscribeLimiter = oneBucketLimit('email-unsubscribe', 10 * 60 * 1000, 20);
+export const digestSampleLimiter = oneBucketLimit('digest-sample', 60 * 60 * 1000, 6);

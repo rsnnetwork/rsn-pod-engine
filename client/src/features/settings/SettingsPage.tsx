@@ -7,7 +7,7 @@ import { Skeleton } from '@/components/ui/Spinner';
 import Badge from '@/components/ui/Badge';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
-import { Bell, Shield, Eye, CreditCard, Check, Lock, Zap, MessageSquare } from 'lucide-react';
+import { Bell, Shield, Eye, CreditCard, Check, Lock, Zap, MessageSquare, Mail } from 'lucide-react';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { messageSoundOn, setMessageSoundOn } from '@/lib/chime';
@@ -17,22 +17,32 @@ import CalendarsCard from '@/features/calendar/CalendarsCard';
  * Phase J (1 May 2026 spec) — per-channel toggles for chat notifications.
  * Stefan: "the possibility should be there, and be changed in your settings".
  */
-function MessageNotificationPrefsCard() {
+/**
+ * The member's notification settings (GET /notification-prefs), shared by the two cards that edit them. Tagged with
+ * user:<id>:notification-prefs (22 Nov 2026) so a save in another tab, or the weekly email's unsubscribe link, shows
+ * here without a refresh. Each change saves on its own.
+ */
+function useNotificationPrefs() {
   const { addToast } = useToastStore();
   const currentUserId = useAuthStore((s) => s.user?.id);
-  const { data: prefs, refetch } = useQuery({
+  const { data: prefs, refetch, isError } = useQuery({
     queryKey: ['notification-prefs'],
     queryFn: () => api.get('/notification-prefs').then(r => r.data.data),
-    meta: { entities: currentUserId ? [E.userNotifications(currentUserId)] : [] },
+    meta: { entities: currentUserId ? [E.userNotifications(currentUserId), E.userNotificationPrefs(currentUserId)] : [] },
   });
 
   const updateMutation = useMutation({
-    mutationFn: (patch: Record<string, boolean>) => api.put('/notification-prefs', patch),
+    mutationFn: (patch: Record<string, boolean | number>) => api.put('/notification-prefs', patch),
     onSuccess: () => { refetch(); },
     onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to save', 'error'),
   });
 
-  const set = (key: string, value: boolean) => updateMutation.mutate({ [key]: value });
+  const set = (key: string, value: boolean | number) => updateMutation.mutate({ [key]: value });
+  return { prefs, set, saving: updateMutation.isPending, failed: !prefs && isError, retry: () => { void refetch(); } };
+}
+
+function MessageNotificationPrefsCard() {
+  const { prefs, set } = useNotificationPrefs();
 
   if (!prefs) return null;
 
@@ -80,6 +90,67 @@ function MessageNotificationPrefsCard() {
         ))}
       </div>
       <MessageSoundToggle />
+    </Card>
+  );
+}
+
+/** The choices "Most emails a day" offers; the server accepts only these. */
+const EMAIL_MAX_CHOICES = [1, 3, 5, 10] as const;
+
+/**
+ * How often REASON emails the member (22 Nov 2026, Stefan): only while away, at most so many a day (the rest come in
+ * one email the next morning), and the Monday weekly digest.
+ */
+function EmailPacingCard() {
+  const { prefs, set, saving, failed, retry } = useNotificationPrefs();
+  const groupLabelId = useId();
+  const groupDescriptionId = useId();
+  return (
+    <Card className="animate-fade-in-up">
+      <div className="flex items-center gap-2 mb-4">
+        <Mail className="h-5 w-5 text-rsn-red" />
+        <h2 className="font-semibold text-[#1a1a2e]">How often we email you</h2>
+      </div>
+      {prefs ? (
+        <div className="divide-y divide-gray-100">
+          <Toggle
+            enabled={prefs.email_away_only !== false}
+            onToggle={() => { if (!saving) set('email_away_only', prefs.email_away_only === false); }}
+            label="Only email me when I'm away"
+            description="We wait 10 minutes and email you only if you haven't been on REASON since. Turn off to get emails straight away."
+          />
+          <div className="py-3">
+            <p id={groupLabelId} className="text-sm font-medium text-gray-800">Most emails a day</p>
+            <p id={groupDescriptionId} className="text-xs text-gray-400">Anything more waits for one email the next morning.</p>
+            <div role="radiogroup" aria-labelledby={groupLabelId} aria-describedby={groupDescriptionId} className="mt-2 grid grid-cols-4 gap-2 max-w-xs">
+              {EMAIL_MAX_CHOICES.map((n) => {
+                const chosen = (prefs.email_max_per_day ?? 3) === n;
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    role="radio"
+                    aria-checked={chosen}
+                    disabled={saving}
+                    onClick={() => { if (!chosen) set('email_max_per_day', n); }}
+                    className={`min-h-[44px] min-w-[44px] rounded-lg border text-sm font-semibold transition-colors disabled:opacity-60 ${chosen ? 'border-rsn-red bg-rsn-red text-white' : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'}`}
+                  >
+                    {n}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <Toggle
+            enabled={prefs.weekly_digest !== false}
+            onToggle={() => { if (!saving) set('weekly_digest', prefs.weekly_digest === false); }}
+            label="Weekly digest"
+            description="A Monday morning email with your week on REASON, what's coming up, and people worth meeting."
+          />
+        </div>
+      ) : (
+        <PrefsPlaceholder rows={3} failed={failed} announce onRetry={retry} />
+      )}
     </Card>
   );
 }
@@ -337,6 +408,9 @@ export default function SettingsPage() {
 
       {/* Phase J — Messaging notifications. Per-channel toggles. */}
       <MessageNotificationPrefsCard />
+
+      {/* 22 Nov 2026: only while away, most emails a day, the weekly digest. */}
+      <EmailPacingCard />
 
       {/* Privacy */}
       <Card className="animate-fade-in-up">

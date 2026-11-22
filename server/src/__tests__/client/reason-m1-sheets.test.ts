@@ -40,7 +40,11 @@ describe('REASON sheets: typing survives the parent re-rendering', () => {
     }
     // Closing is not opening: the fields are put back only for an id (the closed sheet is not drawn).
     // The note greets the person the sheet opened for (field test, 13 Nov 2026), so it is made from their name each time.
-    expect(flat('MeetSheet')).toContain('if (person) { setNote(defaultMeetNote(person.displayName)); setFormat(DEFAULT_FORMAT); setError(null); }');
+    // Since 21 Nov 2026 the fields hold only the member's edits: putting them back to null shows the member's saved
+    // message made out to this person (or REASON's own) and their saved format again.
+    expect(flat('MeetSheet')).toContain('if (person) { setNoteDraft(null); setFormatDraft(null); setError(null); }');
+    expect(flat('MeetSheet')).toContain('const note = noteDraft ?? startingMeetNote(saved?.note, person?.displayName);');
+    expect(flat('MeetSheet')).toContain('const format = formatDraft ?? saved?.format ?? DEFAULT_FORMAT;');
     expect(flat('OutcomeSheet')).toContain('if (personId) { setWorth(null); setPicked([]); setError(null); }');
   });
 
@@ -70,8 +74,11 @@ describe('REASON Meet sheet: the note and its cap', () => {
 
   it('counts what the server counts: the trimmed string, which is also what is sent', () => {
     const src = flat('MeetSheet');
-    expect(src).toContain('const length = note.trim().length;');
-    expect(src).toContain('note: note.trim()');
+    // 21 Nov 2026: what is sent has any {first} the member typed made out to the person, and is what is counted.
+    expect(src).toContain('const sent = fillFirstName(note, person?.displayName).trim();');
+    expect(src).toContain('const length = sent.length;');
+    expect(src).toContain('note: sent, format');
+    expect(src).not.toContain('note: note.trim()');
   });
 });
 
@@ -162,8 +169,8 @@ describe('REASON sheets: a failure keeps what the member entered', () => {
 
   it('the error clears as soon as the member edits any field', () => {
     const meet = flat('MeetSheet');
-    expect(meet).toContain('onChange={(e) => { setNote(e.target.value); setError(null); }}');
-    expect(meet).toContain('onChange={(e) => { setFormat(e.target.value as MeetingFormat); setError(null); }}');
+    expect(meet).toContain('onChange={(e) => { setNoteDraft(e.target.value); setError(null); }}');
+    expect(meet).toContain('onChange={(e) => { setFormatDraft(e.target.value as MeetingFormat); setError(null); }}');
     const outcome = flat('OutcomeSheet');
     expect(outcome).toContain('const choose = (key: WorthContinuing) => { setWorth(key); setError(null); };');
     expect(outcome).toMatch(/const toggle = \(key: OutcomeKey\) => \{.*?setError\(null\); \};/);

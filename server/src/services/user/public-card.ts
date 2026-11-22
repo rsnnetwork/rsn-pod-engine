@@ -8,7 +8,7 @@
 // member. Every such read path goes through here, so a new private column
 // added to `users` cannot leak by accident on some other screen.
 
-import type { PublicCardBasics, PublicMember, User } from '@rsn/shared';
+import { PROFILE_BADGES, type PublicCardBasics, type PublicMember, type User } from '@rsn/shared';
 import type { IntentProfile } from '../matching/platform-match.service';
 
 /** Keys of `User` that must never reach another member. */
@@ -26,6 +26,8 @@ export const PRIVATE_MEMBER_KEYS: ReadonlySet<string> = new Set([
   'publicProfileToken', 'publicProfileTokenCreatedAt',
   // whether their profile lists their communities (Shirley pilot S3): a setting of theirs, not part of the card
   'showCommunities',
+  // the note and format their meeting requests start with (21 Nov 2026): their own wording, sent only when they send it
+  'meetNoteDefault', 'meetFormatDefault',
 ]);
 
 /** The public card: who they are and what they offer — nothing about why they're here. */
@@ -51,6 +53,9 @@ export function toPublicMember(u: Partial<User> & { id: string }): PublicMember 
     professionalRole: u.professionalRole ?? [],
     expertiseText: u.expertiseText ?? null,
     whatICanHelpWith: u.whatICanHelpWith ?? null,
+    // The badge an admin gave them (21 Nov 2026): public, it is shown beside their name. A value this build does not
+    // know is read as none.
+    profileBadge: u.profileBadge && (PROFILE_BADGES as readonly string[]).includes(u.profileBadge) ? u.profileBadge : null,
   };
 }
 

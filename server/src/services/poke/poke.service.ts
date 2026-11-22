@@ -10,13 +10,13 @@ import { v4 as uuid } from 'uuid';
 import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
-import config from '../../config';
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import type { MeetingFormat, MeetingRequestStatus, MeetingRequestText } from '@rsn/shared';
 import * as blockService from '../block/block.service';
 import * as emailService from '../email/email.service';
 import * as prefsService from '../notification-prefs/notification-prefs.service';
+import * as notificationEmail from '../notification-email/notification-email.service';
 import { REQUEST_MESSAGE_MAX } from './request-message';
 import { activeMemberSql } from '../users/active-member';
 import { requestBellLink } from './request-link';
@@ -33,6 +33,11 @@ import { REASON_HEADING, combinedRequestMessage, requestBellBody, requestText } 
 const POKE_REQUEST_EMAIL_TYPE = 'poke_request';
 const POKE_ACCEPTED_EMAIL_TYPE = 'poke_accepted';
 
+// 22 Nov 2026 (Stefan: "only get notifications if I am not online", "max X a day"): both emails go through the
+// notification email gate (services/notification-email), which sends them only while the member is away, folds several
+// into one, holds what is over the member's daily maximum for the next morning, and drops one whose bell or request has
+// been answered meanwhile. The switches below are still read first, so nothing is queued for a member who said no.
+
 /**
  * Email the poke recipient that someone wants to meet them. Fire-and-forget:
  * any failure (missing email, DB hiccup, Resend error) is logged and
@@ -40,6 +45,8 @@ const POKE_ACCEPTED_EMAIL_TYPE = 'poke_accepted';
  */
 async function notifyPokeReceivedByEmail(
   recipientId: string,
+  senderId: string,
+  pokeId: string,
   senderName: string,
   text: MeetingRequestText,
 ): Promise<void> {
@@ -60,11 +67,13 @@ async function notifyPokeReceivedByEmail(
     // pokes-notification-prefs (23 Jul 2026) — Settings "Pokes" email toggle.
     if (!(await prefsService.shouldSendEmail(recipientId, 'poke'))) return;
 
-    await emailService.sendPokeReceivedEmail(recipient.email, recipient.display_name || 'there', {
-      senderName,
-      note: text.note,
-      reasonLine: text.reasonLine,
-      messagesUrl: `${config.clientUrl}/messages`,
+    await notificationEmail.queueNotificationEmail({
+      userId: recipientId,
+      kind: 'meeting_request',
+      sourceId: pokeId,
+      actorId: senderId,
+      bellLink: requestBellLink(pokeId),
+      payload: { senderName, note: text.note, reasonLine: text.reasonLine },
     });
   } catch (err) {
     logger.warn({ err, recipientId }, 'Poke received email failed to send (non-fatal)');
@@ -77,6 +86,9 @@ async function notifyPokeReceivedByEmail(
  */
 async function notifyPokeAcceptedByEmail(
   senderId: string,
+  accepterId: string,
+  pokeId: string,
+  conversationId: string,
   accepterName: string,
 ): Promise<void> {
   try {
@@ -95,9 +107,13 @@ async function notifyPokeAcceptedByEmail(
     // pokes-notification-prefs (23 Jul 2026) — Settings "Pokes" email toggle.
     if (!(await prefsService.shouldSendEmail(senderId, 'poke'))) return;
 
-    await emailService.sendPokeAcceptedEmail(sender.email, sender.display_name || 'there', {
-      accepterName,
-      messagesUrl: `${config.clientUrl}/messages`,
+    await notificationEmail.queueNotificationEmail({
+      userId: senderId,
+      kind: 'meeting_accepted',
+      sourceId: pokeId,
+      actorId: accepterId,
+      bellLink: `/messages/${conversationId}`,
+      payload: { accepterName, conversationId },
     });
   } catch (err) {
     logger.warn({ err, senderId }, 'Poke accepted email failed to send (non-fatal)');
@@ -487,7 +503,7 @@ export async function sendPoke(
     // on notify_email + email_config + poke_email inside the helper; a
     // rejection there is already caught internally so this can never
     // throw or block the poke response.
-    void notifyPokeReceivedByEmail(recipientId, senderName, text);
+    void notifyPokeReceivedByEmail(recipientId, senderId, pokeId, senderName, text);
   } catch (notifErr) {
     logger.warn({ notifErr }, 'Poke notification insert failed (non-fatal)');
   }
@@ -753,7 +769,7 @@ async function announceAccepted(request: PokeRow, done: Connected): Promise<void
   // Task F2 — email the original sender, fire-and-forget, right alongside
   // the socket push above. Gated on notify_email + email_config inside the
   // helper; internally self-catching, so it can never throw here.
-  void notifyPokeAcceptedByEmail(senderId, done.senderBell.accepterName);
+  void notifyPokeAcceptedByEmail(senderId, request.recipient_id, request.id, done.conversationId, done.senderBell.accepterName);
 }
 
 /**

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate, invalidateUserStatusCache } from '../middleware/auth';
 import { recordAudit } from '../middleware/audit';
-import { adminOnboardingExportLimiter, clientIp } from '../middleware/rateLimit';
+import { adminOnboardingExportLimiter, clientIp, profileBadgeLimiter } from '../middleware/rateLimit';
 import { csvRow } from '../lib/csv';
 import type { CsvValue } from '../lib/csv';
 import { ONBOARDING_CSV_COLUMNS, onboardingReportRows } from '../services/onboarding/onboarding-report';
@@ -12,8 +12,9 @@ import { requireRole } from '../middleware/rbac';
 import { accountChangeRefusal, guardAccountChange, readTargetRoles } from '../middleware/role-guard';
 import { requireReauthForAdminRoleChange } from '../middleware/reauth';
 import { query } from '../db';
-import { ApiResponse, ErrorCodes, UserRole } from '@rsn/shared';
-import { ConflictError } from '../middleware/errors';
+import { ApiResponse, ErrorCodes, PROFILE_BADGES, UserRole } from '@rsn/shared';
+import { PROFILE_BADGE_BULK_MAX, setProfileBadge } from '../services/user/profile-badge.service';
+import { ConflictError, NotFoundError } from '../middleware/errors';
 import * as joinRequestService from '../services/join-request/join-request.service';
 import * as reportService from '../services/report/report.service';
 import { fanoutAccountStatusChange, fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
@@ -279,6 +280,53 @@ router.post(
       })();
 
       const response: ApiResponse = { success: true, data: { affected: result.rowCount } };
+      return res.json(response);
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+// ─── PUT /admin/users/profile-badge (21 Nov 2026) ────────────────────────────
+// Shradha: "once it's done, can we update a premium badge to them?" Gives the badge to every member named (badge null
+// takes it away): one row's button, or the selected rows from the bulk bar. Display only (users.profile_badge, never
+// is_premium). Each change is on record with what it was before. Then everyone who could be looking at those members is
+// told: the member's own screens, every admin's Users list and inspector, and the people around each member (their
+// pods' member lists, their events, their connections' People lists and Messages, their group chats and circles).
+
+const profileBadgeSchema = z.object({
+  userIds: z.array(z.string().uuid('Not a member id')).min(1, 'Choose at least one member.')
+    .max(PROFILE_BADGE_BULK_MAX, `Choose at most ${PROFILE_BADGE_BULK_MAX} members at a time.`),
+  badge: z.enum(PROFILE_BADGES, { message: 'Choose one of the offered badges.' }).nullable(),
+});
+
+router.put(
+  '/users/profile-badge',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  profileBadgeLimiter,
+  validate(profileBadgeSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { userIds, badge } = req.body as z.infer<typeof profileBadgeSchema>;
+      const result = await setProfileBadge(req.user!.userId, userIds, badge, req.ip);
+      // Not one of them is a member: a 404 in words. Some missing among real members is answered, with them listed.
+      if (result.found === 0) {
+        throw new NotFoundError('User', undefined, 'We could not find those members.');
+      }
+      if (result.changed.length > 0) {
+        fanoutAdminEntities('users').catch(() => {});
+        for (const c of result.changed) fanoutUserEntity(c.userId).catch(() => {});
+        // One member at a time, after the answer, as the bulk status change does: up to 100 audiences read at once
+        // would crowd the pool.
+        void (async () => {
+          for (const c of result.changed) await fanoutAccountStatusChange(c.userId).catch(() => {});
+        })();
+      }
+      const response: ApiResponse = {
+        success: true,
+        data: { badge, changed: result.changed.map((c) => c.userId), missing: result.missing },
+      };
       return res.json(response);
     } catch (err) {
       return next(err);

@@ -22,6 +22,7 @@ import PictureEditor from '@/components/picture/PictureEditor';
 import { useMemberPicture } from '@/components/picture/useMemberPicture';
 import { LOCATION, locationProblem } from '@/features/onboarding/flow';
 import { LOCATION_SUGGESTIONS } from '@/lib/location-suggestions';
+import MeetRequestSection from './MeetRequestSection';
 
 interface ProfileForm {
   displayName: string;
@@ -540,6 +541,9 @@ export default function ProfilePage() {
           </Button>
         </div>
       </form>
+
+      {/* Stefan, 21 Nov 2026: the message and format a meeting request of yours starts with. Its own form and Save. */}
+      <MeetRequestSection />
     </div>
   );
 }

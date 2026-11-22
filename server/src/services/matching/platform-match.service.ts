@@ -24,6 +24,7 @@
 // matching."): designation buckets + token overlap over the intent columns
 // the chatbot onboarding already fills.
 
+import { createHash } from 'crypto';
 import { query } from '../../db';
 import logger from '../../config/logger';
 import { E } from '../../realtime/entities';
@@ -38,9 +39,10 @@ import { clip } from '../people/text';
 import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
 import { fitToUnits } from '../poke/request-text';
 import { isReservedTestAddress } from '../identity/reserved-address';
+import { activeMemberSql } from '../users/active-member';
 import { visibleEventsSql } from '../session/event-access';
 import { eventImageColumns, eventImageUrlOf } from '../session/event-image-url';
-import { canBring, eventZone, type MatchStrength, type MeetingFormat } from '@rsn/shared';
+import { canBring, eventZone, type MatchStrength, type MeetingFormat, type ProfileBadgeKind } from '@rsn/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -91,6 +93,23 @@ export interface PlatformMatch {
   pokeStatus?: 'pending' | 'accepted' | null;
   /** True when this member sent it, false when they received it. */
   pokeSentByOwner?: boolean | null;
+  /** The badge an admin gave them (display only, migration 159), or null. Public: it is on their card. */
+  profileBadge: ProfileBadgeKind | null;
+}
+
+/**
+ * Someone the member asked to meet who has not answered yet (22 Nov 2026, Stefan: "Why are these 5 people suggested
+ * to me?"). They are not suggestions any more, so they no longer take For You's places; For You lists them apart, in
+ * "Waiting for their answer". Only what their public card shows, and when the member asked.
+ */
+export interface WaitingRequest {
+  userId: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  professionalRole: string | null;
+  company: string | null;
+  profileBadge: ProfileBadgeKind | null;
+  sentAt: Date;
 }
 
 export interface PlatformMatchesResult {
@@ -100,13 +119,36 @@ export interface PlatformMatchesResult {
   nextEvent: { id: string; title: string; scheduledAt: Date; timezone: string; imageUrl: string | null } | null;
   /** The viewer's OWN want, shown back to them on each card. */
   youAreLookingFor: string | null;
+  /** The member's own requests still waiting for an answer, newest first, at most WAITING_LIMIT of them (22 Nov 2026). */
+  waiting: WaitingRequest[];
+  /** How many requests are waiting in all, which can be more than `waiting` holds. */
+  waitingCount: number;
+  /** True when the member asks for so many kinds of people that For You suggests narrowing it (BROAD_WANTS). */
+  wantsBroad: boolean;
 }
 
-// A suggestion must clear this; a designation hit alone (0.6) qualifies, and
-// so does strong token overlap. Browse mode ("find other people based on
-// profiling", the no-match option) relaxes to BROWSE_THRESHOLD.
+// A suggestion must clear this. Strong token overlap qualifies on its own; a
+// designation hit (0.6) does for a matching agent, but on For You it needs a
+// second signal (DESIGNATION_ALONE_SCORE). Browse mode ("find other people based
+// on profiling", the no-match option) relaxes to BROWSE_THRESHOLD.
 export const MATCH_THRESHOLD = 0.45;
 export const BROWSE_THRESHOLD = 0.12;
+
+/**
+ * 22 Nov 2026 (Stefan, on For You: "Why are these 5 people suggested to me? makes no sense"). Every card read
+ * "You're looking to meet founders, X is a Founder": a designation hit alone scored 0.6, most members are founders,
+ * and a member who ticks many kinds of people hits nearly everyone. On a profile-level fit (For You, a profile's
+ * match line, the new-member bell) a designation alone is now a close match: strong needs a second signal on their
+ * card besides the role (a word of the want in what they do, their industry or company, or the place the want names).
+ * A matching agent's want is one focused search ("developers"), so there a designation alone is still strong.
+ */
+export const DESIGNATION_ALONE_SCORE = 0.4;
+
+/** This many kinds of people asked for (of the ~22 in ROLE_TAXONOMY) is broad: For You suggests narrowing it. */
+export const BROAD_WANTS = 8;
+
+/** The most waiting requests one For You answer carries; waitingCount says how many there are in all. */
+export const WAITING_LIMIT = 100;
 
 // ── The fit rule (pure — unit-tested directly) ───────────────────────────────
 
@@ -130,6 +172,49 @@ function strongOfferSources(p: IntentProfile): Array<string | null | undefined> 
     // ("manufacturing") or a self-description in the bio should count.
     p.industry, p.bio, p.location,
   ];
+}
+
+/**
+ * What they do, beyond their title: the public fields a second signal is read from (22 Nov 2026). The role and job
+ * title are left out: they are what the designation already matched, so they cannot also be the second reason.
+ */
+function doesSources(p: IntentProfile): Array<string | null | undefined> {
+  return [p.company, p.expertiseText, p.whatICanHelpWith, p.industry, p.bio, p.location];
+}
+
+/**
+ * Words for a kind of person that no designation bucket holds ("business leaders", "serial entrepreneurs"), and the
+ * words that only describe one ("experienced", "seasoned"). Neither says what someone does.
+ */
+const PERSON_KIND = /^(entrepreneur|leader|expert|specialist|businessm[ae]n|businesswom[ae]n)s?$|^(experienced|seasoned|successful|serial|aspiring|established)$/;
+
+/** A word that names or describes a kind of person ("founders", "ceo", "marketing"): the designation's business, never a second signal. */
+function isRoleWord(w: string): boolean {
+  return PERSON_KIND.test(w) || normalizeDesignation(w) !== null || designationsWanted(w).length > 0;
+}
+
+/**
+ * The matched words as their card has them, in the order it has them, words that stand side by side kept together
+ * ("early stage", "lead generation"): read word by word, "early, stage" said nothing. Lower case, as tokens are.
+ */
+export function cardPhrases(sources: Array<string | null | undefined>, matched: Set<string>, max: number): string[] {
+  const phrases: string[] = [];
+  // A comma, a full stop or a slash ends a phrase: "Strategy, Lead Generation" is two things, not one.
+  const clauses = sources.map(fuseCompoundSenses).flatMap(t => (t ? t.toLowerCase().split(/[^a-z0-9\s-]+/) : []));
+  for (const clause of clauses) {
+    let run: string[] = [];
+    for (const w of [...clause.split(/[^a-z0-9]+/), '']) {
+      if (matched.has(w)) { run.push(w); continue; }
+      if (run.length) phrases.push(run.join(' '));
+      run = [];
+    }
+  }
+  return [...new Set(phrases)].slice(0, max);
+}
+
+/** "growth", "growth and strategy", "growth, strategy and fintech". */
+function wordList(words: string[]): string {
+  return words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 }
 
 /** What they are curious about: counts unless it repeats their own want (15 Sep 2026). */
@@ -185,7 +270,17 @@ export function wantedDesignationsFrom(
  * can raise the score, and are never quoted.
  */
 export function scoreFit(me: IntentProfile, other: IntentProfile, generic?: Set<string>): { score: number; reason: string } {
-  return scoreWants(wantSources(me), other, generic);
+  // A member's profile wants are usually many kinds of people at once, so a designation alone is a close match here
+  // (22 Nov 2026, DESIGNATION_ALONE_SCORE). Every profile-level reader goes through this: For You, the mutual-fit
+  // order, a profile's match line and the new-member bell, so they all agree on what is strong.
+  const f = analyzeWants(wantSources(me), other, generic, undefined, { designationAloneIsClose: true });
+  return { score: f.score, reason: f.score <= 0 ? '' : formatForSeeker(f) };
+}
+
+/** How one want is judged. */
+interface FitRules {
+  /** A designation with no second signal scores DESIGNATION_ALONE_SCORE, a close match (profile-level wants only). */
+  designationAloneIsClose?: boolean;
 }
 
 /**
@@ -260,6 +355,11 @@ interface WantFit {
   /** The title that actually produced the hit ("frontend engineer"). */
   matchedTitle: string | null;
   sharedTerms: string[];
+  /**
+   * With a designation: the words on their card, beyond the title, that the want also reached ("growth", "fintech"),
+   * so the reason names what fits and not only the kind of person (22 Nov 2026). Public fields only.
+   */
+  alsoTerms: string[];
   name: string;
   /** The explicit place in the want that this person satisfies: a country ("united states"), a city or a region's key ("europe"). */
   placeMatched: string | null;
@@ -283,6 +383,7 @@ function formatForSeeker(f: WantFit): string {
   let base: string;
   if (f.designationLabel && f.matchedTitle) {
     base = `You're looking to meet ${f.designationLabel} — ${f.name} is ${article(f.matchedTitle)} ${f.matchedTitle}`;
+    if (f.alsoTerms.length) base += `, and their profile mentions ${wordList(f.alsoTerms)}`;
   } else if (f.designationLabel) {
     base = `You're looking to meet ${f.designationLabel} — ${f.name} fits`;
   } else {
@@ -320,8 +421,10 @@ function analyzeWants(
   other: IntentProfile,
   generic?: Set<string>,
   own?: Array<string | null | undefined>,
+  rules: FitRules = {},
 ): WantFit {
   const name = other.displayName || 'They';
+  const none: WantFit = { score: 0, designationLabel: null, matchedTitle: null, sharedTerms: [], alsoTerms: [], name, placeMatched: null, yearsUnknown: false };
 
   // Explicit constraints (Stefan, 9 Sep 2026): a place or a minimum experience
   // named in the want is STRICT and never widened — "manufacturer in US with 20
@@ -329,9 +432,7 @@ function analyzeWants(
   // states 5 years. (Unstated years can't be verified: kept, demoted, flagged.)
   const constraints = extractConstraints(wants);
   const check = checkConstraints(constraints, other);
-  if (check.locationOk === false || check.yearsOk === false) {
-    return { score: 0, designationLabel: null, matchedTitle: null, sharedTerms: [], name, placeMatched: null, yearsUnknown: false };
-  }
+  if (check.locationOk === false || check.yearsOk === false) return none;
 
   // The CATEGORY is matched by meaning: synonyms applied at score time (not
   // only when an agent was created) and related word forms, so "manufacturer"
@@ -397,10 +498,23 @@ function analyzeWants(
   const designationHit = wanted.find(w => titleByDesignation.has(w.key)) ?? null;
   const matchedTitle = designationHit ? titleByDesignation.get(designationHit.key)! : null;
 
+  // 22 Nov 2026: the second signal a designation needs on a profile-level fit (DESIGNATION_ALONE_SCORE). A word of
+  // the want that is not itself a kind of person, found in what they do beyond their title (doesSources), read with
+  // the same rule as above: one of the member's own words, or two that only a synonym brought in. Or the place the
+  // want names. Each is on their public card, so the reason can name it.
+  // Neither side of a hit may be a kind of person ("advisors" reaching "advisor", "management" reaching "managers"),
+  // nor a word of the title the reason already names.
+  const titleTokens = new Set(tokenizeTerms([matchedTitle]));
+  const doesTokens = tokenizeTerms(doesSources(other).map(fuseCompoundSenses)).filter(o => !isRoleWord(o) && !titleTokens.has(o));
+  const cardWordFor = (w: string) => (isRoleWord(w) ? undefined : doesTokens.find(o => isRelatedTerm(w, o)));
+  const ownAlso = ownTokens.map(cardWordFor).filter((o): o is string => !!o);
+  const expandedAlso = expandedTokens.map(cardWordFor).filter((o): o is string => !!o);
+  const placeMatched = check.locationOk ? matchedPlace(constraints, other) : null;
+  const secondSignal = ownAlso.length > 0 || expandedAlso.length >= 2 || placeMatched !== null;
+
   let score = 0.7 * overlap + (designationHit ? 0.6 : 0);
-  if (!designationHit && ownHits === 0 && expandedHits === 1) {
-    return { score: 0, designationLabel: null, matchedTitle: null, sharedTerms: [], name, placeMatched: null, yearsUnknown: false };
-  }
+  if (!designationHit && ownHits === 0 && expandedHits === 1) return none;
+  if (designationHit && rules.designationAloneIsClose && !secondSignal) score = Math.min(score, DESIGNATION_ALONE_SCORE);
   // A required experience the profile doesn't state: keep them, but below
   // anyone who does state it, and say so on the card.
   if (check.yearsUnknown) score *= 0.85;
@@ -422,10 +536,15 @@ function analyzeWants(
     designationLabel: designationHit ? designationHit.label : null,
     matchedTitle: designationHit && role ? role : null,
     sharedTerms: shared,
+    // Their own words, as their card has them, the member's own words first; none when they did not count.
+    // A place the want names is said by its own note ("(in Germany)"), so their location is not named twice.
+    alsoTerms: designationHit && secondSignal
+      ? cardPhrases(doesSources(other).filter(s => !placeMatched || s !== other.location), new Set([...ownAlso, ...expandedAlso]), 3)
+      : [],
     name,
     // The place THIS person satisfies, not merely the first the want names: "Germany or the Nordics"
     // says "the Nordics" for someone in Stockholm.
-    placeMatched: check.locationOk ? matchedPlace(constraints, other) : null,
+    placeMatched,
     yearsUnknown: check.yearsUnknown,
   };
 }
@@ -503,13 +622,52 @@ export async function loadProfile(userId: string): Promise<(IntentProfile & { on
 }
 
 /** A candidate as loadCandidates reads them. */
-type CandidateRow = IntentProfile & {
+export type CandidateRow = IntentProfile & {
   pokeStatus: 'pending' | 'accepted' | null;
   pokeSentByOwner: boolean | null;
   saved: boolean | null;
   /** They passed on the member. Only keeps them from being lifted as a mutual fit; never on a card. */
   passedOnMember: boolean | null;
+  profileBadge?: ProfileBadgeKind | null;
+  /** Pods, circles and events the two share (22 Nov 2026). Orders equal fits only; never on a card. */
+  sharedContext?: number | null;
+  /** users.last_active_at. Orders equal fits only, in coarse steps (activityStep); never on a card. */
+  lastActiveAt?: Date | string | null;
 };
+
+// ── The order of equal fits (22 Nov 2026) ────────────────────────────────────
+//
+// Among people with the same fit the order used to be their ids, which reads as random to a person and made the
+// same founders take the first places for everyone, every day. Now, in turn: what the two already share (pods,
+// circles, events), how complete the person's card is (a photo, something they can bring), how lately they were
+// active, and last a rotation that is the same all day for one member and moves on the next (a hash of the member,
+// the person and the UTC date). It decides ties only, so a better fit always comes first, and none of it is shown:
+// a card's score stays its band.
+
+/** 2 when active this week, 1 this month, 0 before or never. Coarse, so a minute's difference never reorders anyone. */
+export function activityStep(lastActiveAt: Date | string | null | undefined, now: Date): number {
+  if (!lastActiveAt) return 0;
+  const days = (now.getTime() - new Date(lastActiveAt).getTime()) / 86_400_000;
+  return days <= 7 ? 2 : days <= 30 ? 1 : 0;
+}
+
+/** A photo, and something they can bring: 0 to 2. */
+export function cardCompleteness(c: IntentProfile): number {
+  return (c.avatarUrl?.trim() ? 1 : 0) + (canBring(c) ? 1 : 0);
+}
+
+/** The same number all UTC day for this member and this person, a different one the next day. */
+export function dailyRotation(memberId: string, candidateId: string, now: Date): number {
+  return createHash('sha256').update(`${memberId}:${candidateId}:${now.toISOString().slice(0, 10)}`).digest().readUInt32BE(0);
+}
+
+/** Negative when `a` goes first: shared context, then card completeness, then recent activity, then the day's rotation. */
+export function compareEqualFits(memberId: string, now: Date, a: CandidateRow, b: CandidateRow): number {
+  return ((b.sharedContext ?? 0) - (a.sharedContext ?? 0))
+    || (cardCompleteness(b) - cardCompleteness(a))
+    || (activityStep(b.lastActiveAt, now) - activityStep(a.lastActiveAt, now))
+    || (dailyRotation(memberId, a.id, now) - dailyRotation(memberId, b.id, now));
+}
 
 /**
  * SQL boolean expression (no leading AND): true when the member and `otherAlias` are NOT
@@ -520,9 +678,11 @@ type CandidateRow = IntentProfile & {
  *  - a request between them, in either direction, was ACCEPTED;
  *  - they have an encounter (met in an event or accepted a request) and no request
  *    between them is still PENDING.
- * A PENDING request, in either direction, keeps the person on the page: the card is
- * badged "Request sent" or shows the request, so the member sees something happened
- * (the 22 Sep 2026 rule). Accepting writes an encounter row and ends the pending state,
+ * A PENDING request, in either direction, does not count as being in touch (the 22 Sep 2026
+ * rule). One the member received keeps the person on For You with its Respond state; one
+ * the member SENT is a separate rule in loadCandidates (22 Nov 2026): the person leaves the
+ * suggestions for For You's "Waiting for their answer" row (loadWaiting), and searches keep
+ * showing them as "Request sent". Accepting writes an encounter row and ends the pending state,
  * so an accepted person leaves the page; before this the encounter check was
  * overridden by any non-declined request, which kept accepted people on it.
  * Declined requests and blocks are separate rules in loadCandidates.
@@ -565,20 +725,32 @@ export function notMarkedMetSql(memberParam: string, otherAlias: string): string
 /**
  * Candidates someone can be matched with: active, onboarded, not blocked, not
  * already in touch (notAlreadyInTouchSql), not turned down, and not passed on.
- * Someone they have ASKED and who has not answered yet stays, carrying where the
- * request got to, so the card can say so instead of the person quietly
- * disappearing (22 Sep 2026). Someone they SAVED stays too, carrying that, so the
- * card can show it (5 Oct 2026).
- * The card shows the newest request still standing, pending or accepted (10 Nov 2026): a withdrawn one
- * (cancelled) is as if it had never been sent, so the person is back to "I want to meet".
+ * Someone they have ASKED and who has not answered yet is not a candidate (22 Nov
+ * 2026): from 22 Sep they stayed, badged "Request sent", so the member saw that
+ * something had happened, but a member who asks many people found every place on
+ * For You taken by people already asked (Stefan: 27 of 27 suggestions). They are
+ * listed apart now (loadWaiting), which is where the member sees it happened.
+ * Someone who asked the MEMBER stays, carrying the request, so the card offers Respond.
+ * Someone they SAVED stays too, carrying that, so the card can show it (5 Oct 2026).
+ * A withdrawn request (cancelled) is as if it had never been sent, so the person is
+ * back to "I want to meet" (10 Nov 2026).
  */
 async function loadCandidates(userId: string): Promise<CandidateRow[]> {
   const r = await query<CandidateRow>(
     `SELECT ${PROFILE_COLUMNS},
+            u.profile_badge AS "profileBadge",
+            u.last_active_at AS "lastActiveAt",
             pk.status AS "pokeStatus",
             (pk.sender_id = $1) AS "pokeSentByOwner",
             (pr.response = 'saved') AS "saved",
-            (prb.response = 'passed') AS "passedOnMember"
+            (prb.response = 'passed') AS "passedOnMember",
+            -- 22 Nov 2026: what the two share, to order equal fits (compareEqualFits). Never shown.
+            ((SELECT count(*) FROM pod_members mp JOIN pod_members tp ON tp.pod_id = mp.pod_id
+               WHERE mp.user_id = $1 AND mp.status = 'active' AND tp.user_id = u.id AND tp.status = 'active')
+             + (SELECT count(*) FROM circle_members mc JOIN circle_members tc ON tc.circle_id = mc.circle_id
+               WHERE mc.user_id = $1 AND tc.user_id = u.id)
+             + (SELECT count(*) FROM session_participants ms JOIN session_participants ts ON ts.session_id = ms.session_id
+               WHERE ms.user_id = $1 AND ts.user_id = u.id))::int AS "sharedContext"
      FROM users u
      LEFT JOIN LATERAL (
        SELECT p2.status, p2.sender_id
@@ -609,12 +781,17 @@ async function loadCandidates(userId: string): Promise<CandidateRow[]> {
        AND ${notAlreadyInTouchSql('$1', 'u')}
        -- 10 Nov 2026: someone the member marked "Already met" (outside the platform) is not suggested either.
        AND ${notMarkedMetSql('$1', 'u')}
-       -- 22 Sep 2026: only a DECLINED request hides someone. This used to drop
+       -- 22 Sep 2026: a DECLINED request hides someone. This used to drop
        -- anyone with a request in either direction at any status, so pressing
        -- "I want to meet" made that person vanish off the page — the member
        -- got no lasting sign that anything had happened, which is the whole of
-       -- Shradha's "nothing happened" complaint. Someone you asked stays,
-       -- badged, exactly as the searches have kept them since 8 Sep.
+       -- Shradha's "nothing happened" complaint.
+       -- 22 Nov 2026: a request the member SENT that is still waiting takes the
+       -- person off the suggestions too, into For You's "Waiting for their answer"
+       -- row (loadWaiting), the lasting sign. The searches keep them, badged.
+       AND NOT EXISTS (
+         SELECT 1 FROM user_pokes ws
+         WHERE ws.status = 'pending' AND ws.sender_id = $1 AND ws.recipient_id = u.id)
        AND NOT EXISTS (
          SELECT 1 FROM user_pokes p
          WHERE p.status = 'declined'
@@ -624,21 +801,73 @@ async function loadCandidates(userId: string): Promise<CandidateRow[]> {
          SELECT 1 FROM user_blocks b
          WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
             OR (b.blocker_id = u.id AND b.blocked_id = $1))
-     -- People with the same score keep this order, so the list is the same on every load.
+     -- A fixed order in, so the same rows always score in the same order. Equal fits are
+     -- ordered by compareEqualFits, not by this (22 Nov 2026).
      ORDER BY u.id`,
     [userId],
   );
   return r.rows;
 }
 
+/** A waiting request as loadWaiting reads it. */
+interface WaitingRow extends WaitingRequest {
+  professionalRoleRaw: unknown;
+  jobTitle: string | null;
+  total: number;
+}
+
+/**
+ * The member's own requests still waiting for an answer (22 Nov 2026), newest first: For You's "Waiting for their
+ * answer" row and the list on Matches. Every pending request they sent to a member others may see, whether or not
+ * that person fits their wants today, since it is the member's own request. One per person (the unique index allows
+ * one pending request per direction), a blocked pair never, and at most WAITING_LIMIT rows with the full count.
+ */
+async function loadWaiting(userId: string): Promise<{ waiting: WaitingRequest[]; waitingCount: number }> {
+  const r = await query<WaitingRow>(
+    `SELECT w.*, COUNT(*) OVER ()::int AS total
+       FROM (
+         SELECT DISTINCT ON (wp.recipient_id)
+                wu.id AS "userId", wu.display_name AS "displayName", wu.avatar_url AS "avatarUrl",
+                wu.professional_role AS "professionalRoleRaw", wu.job_title AS "jobTitle", wu.company,
+                wu.profile_badge AS "profileBadge", wp.created_at AS "sentAt"
+           FROM user_pokes wp
+           JOIN users wu ON wu.id = wp.recipient_id
+          WHERE wp.sender_id = $1 AND wp.status = 'pending'
+            AND ${activeMemberSql('wu')}
+            AND NOT EXISTS (
+              SELECT 1 FROM user_blocks wb
+              WHERE (wb.blocker_id = $1 AND wb.blocked_id = wu.id)
+                 OR (wb.blocker_id = wu.id AND wb.blocked_id = $1))
+          ORDER BY wp.recipient_id, wp.created_at DESC
+       ) w
+      ORDER BY w."sentAt" DESC, w."userId"
+      LIMIT $2`,
+    [userId, WAITING_LIMIT],
+  );
+  return {
+    waiting: r.rows.map((w) => ({
+      userId: w.userId,
+      displayName: w.displayName,
+      avatarUrl: w.avatarUrl,
+      professionalRole: flatten(w.professionalRoleRaw, ', ') || w.jobTitle,
+      company: w.company,
+      profileBadge: w.profileBadge ?? null,
+      sentAt: w.sentAt,
+    })),
+    waitingCount: r.rows[0]?.total ?? 0,
+  };
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export async function getPlatformMatches(
   userId: string,
-  opts: { browse?: boolean; limit?: number } = {},
+  /** `now` only for tests: the day the rotation of equal fits is for, and how lately "recently active" is. */
+  opts: { browse?: boolean; limit?: number; now?: Date } = {},
 ): Promise<PlatformMatchesResult> {
   const limit = Math.min(opts.limit ?? 10, 50);
-  const me = await loadProfile(userId);
+  const now = opts.now ?? new Date();
+  const [me, { waiting, waitingCount }] = await Promise.all([loadProfile(userId), loadWaiting(userId)]);
 
   // 5 Oct 2026: the same visibility rule as the events list (listSessions). This used to
   // take the next event of ANY pod, so a private pod's event was named to people outside
@@ -660,7 +889,7 @@ export async function getPlatformMatches(
     : null;
 
   if (!me || !me.onboardingCompleted) {
-    return { matches: [], profileIncomplete: true, nextEvent, youAreLookingFor: null };
+    return { matches: [], profileIncomplete: true, nextEvent, youAreLookingFor: null, waiting, waitingCount, wantsBroad: false };
   }
 
   const threshold = opts.browse ? BROWSE_THRESHOLD : MATCH_THRESHOLD;
@@ -677,9 +906,10 @@ export async function getPlatformMatches(
       .map(x => ({ ...x, fit: { ...x.fit, reason: `Close match — ${x.fit.reason}` } }));
     picked = [...picked, ...close];
   }
-  // Who is shown, and how many, is settled here by what the member wants, as before.
+  // Who is shown, and how many, is settled here by what the member wants, as before; among equal fits by
+  // compareEqualFits (22 Nov 2026), which used to be their ids.
   const chosen = picked
-    .sort((a, b) => b.fit.score - a.fit.score)
+    .sort((a, b) => (b.fit.score - a.fit.score) || compareEqualFits(userId, now, a.c, b.c))
     .slice(0, limit);
   // Only then the other direction: it moves people up the list, never onto it or off it.
   const ordered = mutualFitsFirst(chosen, me, generic);
@@ -704,6 +934,7 @@ export async function getPlatformMatches(
       // rather than offering a button that would be refused.
       pokeStatus: (x.c as { pokeStatus?: 'pending' | 'accepted' | null }).pokeStatus ?? null,
       pokeSentByOwner: (x.c as { pokeSentByOwner?: boolean | null }).pokeSentByOwner ?? null,
+      profileBadge: x.c.profileBadge ?? null,
     }));
 
   // The member's OWN want, shown back to them on each card. A blank answer falls through
@@ -713,6 +944,9 @@ export async function getPlatformMatches(
     profileIncomplete: false,
     nextEvent,
     youAreLookingFor: clip(me.whoIWantToMeet) ?? clip(me.myIntent),
+    waiting,
+    waitingCount,
+    wantsBroad: wantedDesignations(me).length >= BROAD_WANTS,
   };
 }
 

@@ -24,21 +24,18 @@
 //     type='direct_message' and emit `notification:new` to the recipient's
 //     userRoom (existing pattern reused from invite notifications).
 //
-// Email path:
-//   - If the recipient has no live socket OR has been idle >10 minutes,
-//     send an email via the existing emailService.
-//   - Debounce via Redis: one email per (sender, recipient) pair per hour
-//     so a flurry of messages doesn't generate a flurry of emails.
+// Email path (22 Nov 2026):
+//   - Handed to the notification email gate (services/notification-email): sent only while the
+//     recipient is away, folded with whatever else is waiting, at most their daily maximum.
 
 import { Server as SocketServer, Socket } from 'socket.io';
 import logger from '../../../config/logger';
 import { query } from '../../../db';
 import { v4 as uuid } from 'uuid';
 import * as dmService from '../../dm/dm.service';
-import * as emailService from '../../email/email.service';
 import * as prefsService from '../../notification-prefs/notification-prefs.service';
-import { getRedisClient } from '../../redis/redis.client';
-import config from '../../../config';
+import * as notificationEmail from '../../notification-email/notification-email.service';
+import { snippetOf } from '../../notification-email/notification-email.rules';
 import type { MessageReplyQuote } from '@rsn/shared';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. DM message /
 // reaction / read-receipt / notification:new fanouts get sibling
@@ -49,83 +46,30 @@ import { E } from '../../../realtime/entities';
 
 const userRoom = (userId: string) => `user:${userId}`;
 
-// Email debounce: one email per (sender, recipient) pair per hour.
-const DM_EMAIL_DEBOUNCE_TTL_SECONDS = 3600;
-// Recipient considered "offline enough to email" if they're not connected
-// to ANY socket. We don't need to check idle time — if they're not
-// connected, they're not seeing the bell badge either.
-
 /**
- * Get the user's socket connections in the io server. Returns the count.
- * Zero means the recipient is not currently online and we should email them.
+ * The recipient's email about a message goes through the notification email gate (22 Nov 2026, Stefan: "only get
+ * notifications if I am not online"): queued, sent only if they have not been on REASON or read it since, several folded
+ * into one email, at most their daily maximum (services/notification-email). It replaced the check here that emailed
+ * anyone with no open socket at once, and the hour-long per-pair Redis debounce: the gate's ten minutes and daily cap
+ * are what keep a flurry of messages from becoming a flurry of emails now. Best-effort: never throws.
  */
-async function isUserOnline(io: SocketServer, userId: string): Promise<boolean> {
-  const sockets = await io.in(userRoom(userId)).fetchSockets();
-  return sockets.length > 0;
-}
-
-/**
- * Send the recipient an email only if we haven't already sent one for this
- * pair in the last hour. Best-effort: any error is logged and swallowed.
- */
-async function maybeSendDmEmail(
-  fromUserId: string,
-  toUserId: string,
-  contentSnippet: string,
-  conversationId: string,
-): Promise<void> {
-  // Phase J — respect recipient's notification preferences. Skip email
-  // entirely if they've turned off DM email in settings.
-  if (!(await prefsService.shouldSendEmail(toUserId, 'dm'))) return;
-
-  const redis = getRedisClient();
-  const debounceKey = `dm:email-debounce:${fromUserId}:${toUserId}`;
-
-  // Check debounce
-  if (redis) {
-    try {
-      const exists = await redis.get(debounceKey);
-      if (exists) return; // recently emailed, skip
-    } catch (err) {
-      logger.warn({ err, debounceKey }, 'Redis debounce check failed; falling through to send');
-    }
-  }
-
-  // Look up sender + recipient details for the email body
-  const userResult = await query<{
-    id: string; email: string | null; display_name: string | null;
-  }>(
-    `SELECT id, email, display_name FROM users WHERE id = ANY($1)`,
-    [[fromUserId, toUserId]],
-  );
-  const sender = userResult.rows.find(u => u.id === fromUserId);
-  const recipient = userResult.rows.find(u => u.id === toUserId);
-  if (!recipient || !recipient.email || !sender) {
-    logger.warn({ fromUserId, toUserId }, 'DM email skipped: missing sender or recipient details');
-    return;
-  }
-
+async function queueDmEmail(fromUserId: string, toUserId: string, conversationId: string, message: BroadcastableDmMessage): Promise<void> {
   try {
-    await emailService.sendDmNotificationEmail(
-      recipient.email,
-      recipient.display_name || 'there',
-      {
-        senderName: sender.display_name || 'Someone',
-        snippet: contentSnippet.slice(0, 200),
-        threadUrl: `${config.clientUrl}/messages/${conversationId}`,
+    if (!(await prefsService.shouldSendEmail(toUserId, 'dm'))) return;
+    const sender = await query<{ display_name: string | null }>(`SELECT display_name FROM users WHERE id = $1`, [fromUserId]);
+    await notificationEmail.queueNotificationEmail({
+      userId: toUserId,
+      kind: 'direct_message',
+      sourceId: message.id,
+      actorId: fromUserId,
+      payload: {
+        senderName: sender.rows[0]?.display_name || 'Someone',
+        snippet: snippetOf(message.content, message.attachmentType),
+        conversationId,
       },
-    );
-    logger.info({ fromUserId, toUserId }, 'DM email sent');
-
-    if (redis) {
-      try {
-        await redis.set(debounceKey, '1', 'EX', DM_EMAIL_DEBOUNCE_TTL_SECONDS);
-      } catch (err) {
-        logger.warn({ err, debounceKey }, 'Failed to write debounce key');
-      }
-    }
+    });
   } catch (err) {
-    logger.warn({ err, fromUserId, toUserId }, 'DM email failed to send (non-fatal)');
+    logger.warn({ err, fromUserId, toUserId }, 'DM email not queued (non-fatal)');
   }
 }
 
@@ -291,24 +235,8 @@ export async function broadcastDmMessage(
   if (shouldNotify) {
   await ringDmBell(io, fromUserId, toUserId, conversationId, message, options.bellTitle);
 
-  // Offline fallback: email the recipient (debounced) if they're not
-  // connected. Snippet uses the content if present; attachment-only sends
-  // get a small descriptor so the email body isn't empty.
-  try {
-    const recipientOnline = await isUserOnline(io, toUserId);
-    if (!recipientOnline) {
-      const snippet = message.content && message.content.trim().length > 0
-        ? message.content
-        : message.attachmentType === 'image'
-          ? '📷 Sent you a photo'
-          : message.attachmentType === 'audio'
-            ? '🎤 Sent you a voice message'
-            : 'New message';
-      void maybeSendDmEmail(fromUserId, toUserId, snippet, conversationId);
-    }
-  } catch (err) {
-    logger.warn({ err, fromUserId, toUserId }, 'DM offline-email check failed (non-fatal)');
-  }
+  // The email: through the notification email gate, which decides whether and when (queueDmEmail).
+  void queueDmEmail(fromUserId, toUserId, conversationId, message);
   } // end if (shouldNotify)
 }
 

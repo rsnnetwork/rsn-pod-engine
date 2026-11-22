@@ -135,6 +135,12 @@ export const config = {
   //   off — every calendar route answers 404 and the client shows nothing (default)
   //   on  — the routes answer and the client shows Calendars in Settings and the hint in the meeting picker
   calendarSync: (['off', 'on'] as const).find(m => m === process.env.CALENDAR_SYNC) ?? 'off',
+  // Member notification emails through one gate (22 Nov 2026, Stefan): a meeting request, an accepted request, a direct
+  // message and an invite to a member are queued, sent only while the member is away, coalesced, capped per day, and
+  // the rest told the next morning; the weekly digest runs beside it. A rollback lever, not a dark launch:
+  //   on  — the gate and the digest jobs run (default)
+  //   off — every such email goes at once, as before the gate, and no digest job runs
+  notificationEmailGate: (['off', 'on'] as const).find(m => m === process.env.NOTIFICATION_EMAIL_GATE) ?? 'on',
   calendarTokenKey: process.env.CALENDAR_TOKEN_KEY || '',
   // Where the browser starts a connection and where the provider sends it back (`<base>/api/calendar/<provider>/...`).
   // Unset, the API's own address (API_BASE_URL). The registered redirect URIs must match it exactly.

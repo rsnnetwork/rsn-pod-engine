@@ -29,7 +29,10 @@ const full = {
   professionalRole: ['Developer'],
   expertiseText: 'react, typescript, distributed systems',
   whatICanHelpWith: 'frontend architecture reviews',
+  profileBadge: 'premium',
   // private
+  meetNoteDefault: 'Hi {first}, my own words',
+  meetFormatDefault: 'coffee',
   interests: ['sailing', 'chess'],
   reasonsToConnect: ['find a cofounder'],
   whatICareAbout: 'climate',
@@ -83,7 +86,17 @@ describe('toPublicMember', () => {
       professionalRole: ['Developer'],
       expertiseText: 'react, typescript, distributed systems',
       whatICanHelpWith: 'frontend architecture reviews',
+      // The badge an admin gave them (21 Nov 2026): public, shown beside their name.
+      profileBadge: 'premium',
     });
+  });
+
+  it('reads a badge this build does not know, or none, as no badge (21 Nov 2026)', () => {
+    expect(toPublicMember({ id: 'u-3' }).profileBadge).toBeNull();
+    expect(toPublicMember({ id: 'u-3', profileBadge: null }).profileBadge).toBeNull();
+    for (const odd of ['gold', 'toString', '__proto__', 'Premium']) {
+      expect({ odd, badge: toPublicMember({ id: 'u-3', profileBadge: odd as never }).profileBadge }).toEqual({ odd, badge: null });
+    }
   });
 
   it('never carries a private key — why they are here, wants, interests, contact, prefs', () => {
@@ -95,7 +108,7 @@ describe('toPublicMember', () => {
     // adding it here fails loudly.
     expect([...PRIVATE_MEMBER_KEYS].sort()).toEqual([
       'careerStage', 'currentState', 'email', 'goals', 'interests', 'inviteOptOutPublicEvents',
-      'invitedByUserId', 'lastOnboardedAt', 'matchingNotes', 'meetingPreferences', 'myIntent',
+      'invitedByUserId', 'lastOnboardedAt', 'matchingNotes', 'meetFormatDefault', 'meetNoteDefault', 'meetingPreferences', 'myIntent',
       'notifyEmail', 'notifyEventReminders', 'notifyMatches', 'onboardingStatus', 'phone',
       'profileVisible', 'publicProfileToken', 'publicProfileTokenCreatedAt', 'reasonsToConnect', 'showCommunities', 'timezone',
       'whatICareAbout', 'whoIWantToMeet',

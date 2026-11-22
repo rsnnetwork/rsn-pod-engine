@@ -1,6 +1,15 @@
 // ─── User Domain Types ───────────────────────────────────────────────────────
 
 import type { OnboardingStatus } from './onboarding';
+import type { MeetingFormat } from './reason';
+
+/**
+ * The badges an admin can give a member (Shradha, 21 Nov 2026: "can we update a premium badge to them?"), shown beside
+ * their name wherever members are listed. Display only: nothing about matching, access or billing reads it (that is
+ * users.is_premium, which this is not). Migration 159's CHECK is the same list written out.
+ */
+export const PROFILE_BADGES = ['premium'] as const;
+export type ProfileBadgeKind = (typeof PROFILE_BADGES)[number];
 
 export enum UserRole {
   SUPER_ADMIN = 'super_admin',
@@ -94,6 +103,15 @@ export interface User {
    * discover (on by default). Optional: an older server does not send it, and a screen reads a missing one as on.
    */
   showCommunities?: boolean;
+  /**
+   * The note a meeting request starts with, as the member saved it (Stefan, 21 Nov 2026), at most MEET_NOTE_MAX
+   * characters; {first} in it is the person's first name. Null: REASON's own default note. Only the member reads it.
+   */
+  meetNoteDefault?: string | null;
+  /** The format a meeting request proposes, as the member saved it. Null: the 20 minute video conversation. */
+  meetFormatDefault?: MeetingFormat | null;
+  /** The badge an admin gave them (display only), or null. Public: it is on their card too. */
+  profileBadge?: ProfileBadgeKind | null;
   onboardingStatus?: OnboardingStatus;
   /** 2 once the member has finished the new onboarding; null before (an earlier one, or none). The preview gates on it. */
   onboardingVersion?: number | null;
@@ -135,6 +153,8 @@ export interface PublicMember {
   professionalRole: string[];
   expertiseText: string | null;
   whatICanHelpWith: string | null;
+  /** The badge an admin gave them (display only), shown beside their name; null for none. */
+  profileBadge: ProfileBadgeKind | null;
 }
 
 /**
@@ -142,7 +162,7 @@ export interface PublicMember {
  * card, cut from PublicMember so it can only ever hold less (no member id), and what they can bring, worded as members
  * read it. Nothing else: no entities, no circles or pods, no way to message, call or meet them.
  */
-export interface PublicProfileCard extends Omit<PublicMember, 'id'> {
+export interface PublicProfileCard extends Omit<PublicMember, 'id' | 'profileBadge'> {
   canBring: string | null;
 }
 
@@ -203,6 +223,8 @@ export interface UpdateUserInput {
   profileVisible?: boolean;
   inviteOptOutPublicEvents?: boolean;
   showCommunities?: boolean;
+  meetNoteDefault?: string | null;
+  meetFormatDefault?: MeetingFormat | null;
 }
 
 export interface PremiumSelection {
