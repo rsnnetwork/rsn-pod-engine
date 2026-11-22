@@ -14,4 +14,9 @@ describe('pod page: the pod itself refreshes on member changes', () => {
     const block = src.slice(start, end);
     expect(block).toMatch(/meta: \{ entities: podId \? \[E\.pod\(podId\), E\.podMembers\(podId\)\] : \[\] \}/);
   });
+
+  it('a refused member-counts read counts as none, so a demoted host falls back to the live memberCount', () => {
+    expect(src).toMatch(/const podMemberCounts = memberCountsRead\.isError \? undefined : memberCountsRead\.data;/);
+    expect(src).toMatch(/const memberTotal = podMemberCounts\s*\n?\s*\?[\s\S]{0,200}: pod\.memberCount \?\? activeMembers\.length;/);
+  });
 });

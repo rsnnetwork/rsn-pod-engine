@@ -124,12 +124,17 @@ export default function PodDetailPage() {
   // Shirley pilot S3: the Manage menu offers Circles only when the pod is in some (the same read as its chips).
   const { data: podCircles } = usePodCircles(podId);
 
-  const { data: podMemberCounts } = useQuery({
+  const memberCountsRead = useQuery({
     queryKey: ['pod-member-counts', podId],
     queryFn: () => api.get(`/pods/${podId}/member-counts`).then(r => r.data.data),
     enabled: !!podId,
     meta: { entities: podId ? [E.pod(podId), E.podMembers(podId)] : [] },
   });
+  // The counts are for the pod's directors and hosts; anyone else is refused them. A member who was a host keeps the
+  // counts read while they were one, and React Query keeps that data when the next read is refused, so a refused read
+  // counts as none: the heading then follows the pod's own memberCount (22 Nov 2026 prod smoke: a demoted host's
+  // "Members (n)" stayed one too high after a removal).
+  const podMemberCounts = memberCountsRead.isError ? undefined : memberCountsRead.data;
 
   // ─── Mutations ─────────────────────────────────────────────────────────────
 
