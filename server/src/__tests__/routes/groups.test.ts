@@ -89,7 +89,7 @@ const nothingCalled = () => {
   expect(mockFanoutGroupReadMark).not.toHaveBeenCalled();
   expect(mockPush).not.toHaveBeenCalled();
 };
-const full = () => new ConflictError(ErrorCodes.GROUP_FULL, 'This group is full (50 people).');
+const full = () => new ConflictError(ErrorCodes.GROUP_FULL, 'This chat is full (50 people).');
 
 const sent = {
   message: { id: 'm-1', groupId: GROUP, fromUserId: 'u-send', senderName: 'Claus', senderAvatarUrl: null, content: 'Hello all', createdAt: '2026-10-26T10:00:00.000Z' },
@@ -161,7 +161,7 @@ describe('POST /groups/from-event/:sessionId', () => {
     mockCreateFromEvent.mockRejectedValueOnce(full());
     const res = await request(app).post(`/groups/from-event/${SESSION}`).set(me).send({});
     expect(res.status).toBe(409);
-    expect(res.body.error).toEqual(expect.objectContaining({ code: 'GROUP_FULL', message: 'This group is full (50 people).' }));
+    expect(res.body.error).toEqual(expect.objectContaining({ code: 'GROUP_FULL', message: 'This chat is full (50 people).' }));
     expect(mockFanoutGroup).not.toHaveBeenCalled();
   });
 
@@ -201,10 +201,10 @@ describe('GET /groups/:id', () => {
   });
 
   it('passes a refusal on', async () => {
-    mockGet.mockRejectedValueOnce(new ForbiddenError('You are not in this group.'));
+    mockGet.mockRejectedValueOnce(new ForbiddenError('You are not in this chat.'));
     const res = await request(app).get(`/groups/${GROUP}`).set(as('u-get'));
     expect(res.status).toBe(403);
-    expect(res.body.error.message).toBe('You are not in this group.');
+    expect(res.body.error.message).toBe('You are not in this chat.');
   });
 });
 
@@ -259,7 +259,7 @@ describe('POST /groups/:id/messages', () => {
   });
 
   it('a refused message tells nobody and rings nobody', async () => {
-    mockSend.mockRejectedValueOnce(new ForbiddenError('You are not in this group.'));
+    mockSend.mockRejectedValueOnce(new ForbiddenError('You are not in this chat.'));
     expect((await request(app).post(`/groups/${GROUP}/messages`).set(me).send({ content: 'hi' })).status).toBe(403);
     expect(mockFanoutGroup).not.toHaveBeenCalled();
     expect(mockPush).not.toHaveBeenCalled();
@@ -316,7 +316,7 @@ describe('POST /groups/:id/members', () => {
     mockAdd.mockRejectedValueOnce(full());
     const res = await request(app).post(`/groups/${GROUP}/members`).set(me).send({ userIds: [B] });
     expect(res.status).toBe(409);
-    expect(res.body.error.message).toBe('This group is full (50 people).');
+    expect(res.body.error.message).toBe('This chat is full (50 people).');
     expect(mockFanoutGroup).not.toHaveBeenCalled();
   });
 
@@ -342,10 +342,10 @@ describe('DELETE /groups/:id/members/:userId', () => {
   });
 
   it('passes a refusal on and tells nobody', async () => {
-    mockRemove.mockRejectedValueOnce(new AppError(404, ErrorCodes.GROUP_MEMBER_NOT_FOUND, 'This person is not in the group.'));
+    mockRemove.mockRejectedValueOnce(new AppError(404, ErrorCodes.GROUP_MEMBER_NOT_FOUND, 'This person is not in the chat.'));
     const res = await request(app).delete(`/groups/${GROUP}/members/${B}`).set(me);
     expect(res.status).toBe(404);
-    expect(res.body.error.message).toBe('This person is not in the group.');
+    expect(res.body.error.message).toBe('This person is not in the chat.');
     expect(mockFanoutGroup).not.toHaveBeenCalled();
   });
 
@@ -408,7 +408,7 @@ describe('the routes are rate limited', () => {
 
   it('only a group that was started uses up the hourly allowance for starting them', async () => {
     const starter = as('u-starter');
-    mockCreateFromEvent.mockRejectedValue(new AppError(400, ErrorCodes.GROUP_TOO_SMALL, 'A group chat needs at least 3 people.'));
+    mockCreateFromEvent.mockRejectedValue(new AppError(400, ErrorCodes.GROUP_TOO_SMALL, 'A chat needs at least 3 people.'));
     for (let i = 0; i < 12; i += 1) {
       expect((await request(app).post(`/groups/from-event/${SESSION}`).set(starter).send({})).status).toBe(400);
     }
@@ -418,7 +418,7 @@ describe('the routes are rate limited', () => {
     }
     const refused = await request(app).post(`/groups/from-event/${SESSION}`).set(starter).send({});
     expect(refused.status).toBe(429);
-    expect(refused.body.error.message).toBe('You have started a lot of group chats this hour. Try again later.');
+    expect(refused.body.error.message).toBe('You have started a lot of chats this hour. Try again later.');
   });
 });
 

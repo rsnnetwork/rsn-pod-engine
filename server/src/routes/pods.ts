@@ -21,6 +21,8 @@ import { assertCircleManager } from '../services/circle/circle-managers';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
 import { canViewPod } from '../services/pods/pod-access';
+import * as nestedPods from '../services/pod/nested-pods.service';
+import { fanoutNestingChange, fanoutPodRelatives, readPodRelatives, tellPodRelatives } from '../realtime/fanout-nesting';
 import { eventListedForSql } from '../services/session/event-access';
 import {
   ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, OrchestrationMode, CommunicationMode, hasRoleAtLeast,
@@ -56,6 +58,24 @@ const createPodSchema = z.object({
   allowMemberInvites: z.boolean().optional(),
   // T14 (1 Nov 2026): made from a circle's page and attached to it in the same transaction. Production's form never sends it.
   circleId:          z.string().uuid().transform((id) => id.toLowerCase()).optional(),
+  // 22 Nov 2026: made inside this main pod, in the same transaction (its director or a platform admin).
+  parentPodId:       z.string().uuid(PATH_REFUSALS.pod).transform((id) => id.toLowerCase()).optional(),
+}).refine((b) => !(b.circleId && b.parentPodId), {
+  message: 'Make the pod in a circle or inside a pod, not both at once.',
+  path: ['parentPodId'],
+});
+
+/** 22 Nov 2026: put this pod inside a main pod. */
+const putInsideSchema = z.object({
+  parentPodId: z.string({ required_error: 'Choose the pod to put it inside.' }).uuid(PATH_REFUSALS.pod).transform((id) => id.toLowerCase()),
+});
+
+/** 22 Nov 2026: the main pod's director's choice that its pods are for its members. */
+const innerPodsSettingSchema = z.object({
+  innerPodsMembersOnly: z.boolean({
+    required_error: 'Choose whether people must be members of this pod to join its pods.',
+    invalid_type_error: 'Choose whether people must be members of this pod to join its pods.',
+  }),
 });
 
 const updatePodSchema = z.object({
@@ -109,12 +129,19 @@ router.post(
       if (circleId) {
         await assertCircleManager(circleId, req.user!.userId, req.user!.role, 'Only the people who run this circle can add a pod to it.');
       }
+      // 22 Nov 2026: a pod is made inside a main pod only by its director or a platform admin, checked first (404 for a
+      // pod the maker may not see), so a refusal never leaves a pod behind. Where it may go is createPod's, under a lock.
+      const parentPodId: string | undefined = req.body.parentPodId;
+      if (parentPodId) {
+        await nestedPods.assertDirectsPod(parentPodId, { userId: req.user!.userId, role: req.user!.role }, nestedPods.NESTING_PERMISSION.make);
+      }
       const pod = await podService.createPod(req.user!.userId, req.body);
       // 26 Oct 2026 — a new pod used to tell nobody (the client refetched its own list by hand). Its only
       // member, the creator, gets the pod and their pods list; every admin's pod list refreshes.
       fanoutPodEntities(pod.id, [E.userPods(req.user!.userId)]).catch(() => {});
       fanoutAdminEntities('pods').catch(() => {});
       if (circleId) fanoutCircleChange(circleId, req.user!.userId).catch(() => {});
+      if (parentPodId) void fanoutNestingChange([parentPodId, pod.id]); // never throws
       const response: ApiResponse = { success: true, data: circleId ? { ...pod, circleId } : pod };
       res.status(201).json(response);
     } catch (err) {
@@ -230,8 +257,13 @@ router.get(
 
       const pod = await podService.getPodById(req.params.id);
       const memberRole = await podService.getMemberRole(req.params.id, req.user!.userId);
+      // 22 Nov 2026: where the pod sits, for this viewer. A main pod they may not see is not named, nor its id given.
+      const nesting = await nestedPods.readPodNesting(pod, { userId: req.user!.userId, role: req.user!.role });
 
-      const response: ApiResponse = { success: true, data: { ...pod, memberRole } };
+      const response: ApiResponse = {
+        success: true,
+        data: { ...pod, parentPodId: nesting.parentPod?.id ?? null, memberRole, ...nesting },
+      };
       res.json(response);
     } catch (err) {
       next(err);
@@ -256,6 +288,8 @@ router.put(
       fanoutPodEntities(req.params.id).catch(() => {});
       // S2: a pod made private (or renamed, archived) changes the page of every circle it is in.
       void fanoutCirclesOfPod(req.params.id, req.user!.userId); // never throws
+      // 22 Nov 2026: and of its main pod (which lists it) and of the pods inside it (which name it).
+      void fanoutPodRelatives(req.params.id); // never throws
       const response: ApiResponse = { success: true, data: pod };
       res.json(response);
     } catch (err) {
@@ -280,6 +314,8 @@ router.delete(
       await podService.deletePod(req.params.id, req.user!.userId, req.user!.role);
       fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
       void fanoutCirclesOfPod(req.params.id, req.user!.userId); // never throws
+      // 22 Nov 2026: archiving moves no pod in or out; its main pod's list and its pods' pages show it archived.
+      void fanoutPodRelatives(req.params.id); // never throws
       const response: ApiResponse = { success: true, data: { message: 'Pod deleted' } };
       res.json(response);
     } catch (err) {
@@ -428,6 +464,7 @@ router.post(
       // Cover the added user too (in case they're not in the active
       // members SELECT yet on a slow replica) — direct user-room emit.
       emitEntities(getRealtimeIo(), [req.body.userId], [E.pod(req.params.id), E.podMembers(req.params.id), E.userPods(req.body.userId)]).catch(() => {});
+      void fanoutPodRelatives(req.params.id); // the main pod lists its member count (22 Nov 2026); never throws
       const response: ApiResponse = { success: true, data: member };
       res.status(201).json(response);
     } catch (err) {
@@ -452,6 +489,7 @@ router.delete(
       // notifier first while the row is still present in the result set.
       fanoutPodMembershipForUser(req.params.id, req.params.userId).catch(() => {});
       fanoutPodEntities(req.params.id, [E.userPods(req.params.userId)]).catch(() => {});
+      void fanoutPodRelatives(req.params.id); // the main pod lists its member count (22 Nov 2026); never throws
       const response: ApiResponse = { success: true, data: { message: 'Member removed' } };
       res.json(response);
     } catch (err) {
@@ -500,6 +538,7 @@ router.post(
       // The joiner might not be in the active-member SELECT yet if status
       // is 'pending_approval' — emit direct to their user room too.
       emitEntities(getRealtimeIo(), [req.user!.userId], [E.pod(req.params.id), E.podMembers(req.params.id), E.userPods(req.user!.userId)]).catch(() => {});
+      void fanoutPodRelatives(req.params.id); // the main pod lists its member count (22 Nov 2026); never throws
       const response: ApiResponse = { success: true, data: member };
       res.status(201).json(response);
     } catch (err) {
@@ -572,6 +611,7 @@ router.post(
       // member list everyone sees updates immediately (new approved
       // member appears, pending count decrements).
       fanoutPodEntities(req.params.id).catch(() => {});
+      void fanoutPodRelatives(req.params.id); // the main pod lists its member count (22 Nov 2026); never throws
       const response: ApiResponse = { success: true, data: member };
       res.json(response);
     } catch (err) {
@@ -621,6 +661,7 @@ router.post(
       // fanoutPodMembershipForUser call covers them directly.
       fanoutPodMembershipForUser(req.params.id, req.user!.userId).catch(() => {});
       fanoutPodEntities(req.params.id).catch(() => {});
+      void fanoutPodRelatives(req.params.id); // the main pod lists its member count (22 Nov 2026); never throws
       const response: ApiResponse = { success: true, data: { message: 'Left pod successfully' } };
       res.json(response);
     } catch (err) {
@@ -643,6 +684,7 @@ router.post(
       // back from "archived" to "active" instantly.
       fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
       void fanoutCirclesOfPod(req.params.id, req.user!.userId); // never throws
+      void fanoutPodRelatives(req.params.id); // never throws (22 Nov 2026)
       const response: ApiResponse = { success: true, data: pod };
       res.json(response);
     } catch (err) {
@@ -713,6 +755,121 @@ router.put(
   }
 );
 
+// ─── Pods inside pods (Stefan, 22 Nov 2026; services/pod/nested-pods.service.ts) ────────────────────────────────────
+// Circle > main pod > the pods inside it > events. One level only. Each pod's main pod is pods.parent_pod_id.
+
+const viewerOf = (req: Request): nestedPods.Viewer => ({ userId: req.user!.userId, role: req.user!.role });
+
+// ─── GET /pods/:id/pods: the pods inside this one that the viewer may see ───────────────────────────────────────────
+
+router.get(
+  '/:id/pods',
+  authenticate,
+  podReadLimiter,
+  uuidInPath('id', PATH_REFUSALS.pod),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!(await canViewPod(req.user!.userId, req.params.id, req.user!.role))) throw new NotFoundError('Pod', req.params.id);
+      const pods = await nestedPods.listInnerPods(req.params.id, viewerOf(req));
+      const response: ApiResponse = { success: true, data: pods };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /pods/:id/pods/candidates: the director's own pods that could go inside this one ────────────────────────
+
+router.get(
+  '/:id/pods/candidates',
+  authenticate,
+  podReadLimiter,
+  uuidInPath('id', PATH_REFUSALS.pod),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await nestedPods.assertDirectsPod(req.params.id, viewerOf(req), nestedPods.NESTING_PERMISSION.put);
+      const pods = await nestedPods.listInnerPodCandidates(req.params.id, viewerOf(req));
+      const response: ApiResponse = { success: true, data: pods };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── PUT /pods/:id/parent: put this pod inside a main pod ({ parentPodId }) ────────────────────────────────────────
+
+router.put(
+  '/:id/parent',
+  authenticate,
+  podWriteLimiter,
+  uuidInPath('id', PATH_REFUSALS.pod),
+  validate(putInsideSchema),
+  auditMiddleware('put_pod_inside', 'pod'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const move = await nestedPods.putPodInside(req.body.parentPodId, req.params.id, viewerOf(req));
+      // Both pods' people: the main pod lists it, the pod says "Part of", and each member's pods list says "in".
+      if (move.changed) void fanoutNestingChange([req.body.parentPodId, req.params.id]); // never throws
+      const response: ApiResponse = {
+        success: true,
+        data: { podId: req.params.id, parentPodId: move.parentPodId, changed: move.changed },
+      };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── DELETE /pods/:id/parent: take this pod out of its main pod (it stands alone again) ───────────────────────────
+
+router.delete(
+  '/:id/parent',
+  authenticate,
+  podWriteLimiter,
+  uuidInPath('id', PATH_REFUSALS.pod),
+  auditMiddleware('take_pod_out', 'pod'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const move = await nestedPods.takePodOut(req.params.id, viewerOf(req));
+      if (move.changed) void fanoutNestingChange([move.previousParentPodId, req.params.id]); // never throws
+      const response: ApiResponse = {
+        success: true,
+        data: { podId: req.params.id, parentPodId: null, previousParentPodId: move.previousParentPodId, changed: move.changed },
+      };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── PUT /pods/:id/inner-pods-setting: "People must be members of <pod> to join its pods" ({ innerPodsMembersOnly }) ─
+
+router.put(
+  '/:id/inner-pods-setting',
+  authenticate,
+  podWriteLimiter,
+  uuidInPath('id', PATH_REFUSALS.pod),
+  validate(innerPodsSettingSchema),
+  auditMiddleware('set_inner_pods_members_only', 'pod'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await nestedPods.setInnerPodsMembersOnly(req.params.id, req.body.innerPodsMembersOnly, viewerOf(req));
+      if (result.changed) {
+        void fanoutNestingChange([req.params.id]); // never throws
+        void fanoutPodRelatives(req.params.id); // the pods inside it: who may join them changed; never throws
+      }
+      const response: ApiResponse = { success: true, data: { podId: req.params.id, ...result } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── DELETE /pods/:id/permanent (super_admin only) ─────────────────────────
 
 router.delete(
@@ -727,8 +884,11 @@ router.delete(
       // delete is saved, as every mutation does (12 Nov 2026: it used to tell them first, so a page that read the pod
       // again at once could still find it). includeUserPodsPerMember so every member's My Pods list flips.
       const audience = await podAudience(req.params.id);
+      // 22 Nov 2026: the pods inside it stand alone once it is gone (ON DELETE SET NULL), so they are read first too.
+      const relatives = await readPodRelatives(req.params.id);
       await podService.hardDeletePod(req.params.id);
       tellPodAudience(audience, req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
+      void tellPodRelatives(relatives); // never throws
       const response: ApiResponse = { success: true, data: { message: 'Pod permanently deleted' } };
       return res.json(response);
     } catch (err) {

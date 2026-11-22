@@ -60,22 +60,22 @@ export interface SentGroupMessage {
 
 /** The words people read, for the route and the tests. */
 export const GROUP_COPY = {
-  full: `This group is full (${GROUP_CHAT_MAX_MEMBERS} people).`,
-  tooSmall: `A group chat needs at least ${GROUP_CHAT_MIN_MEMBERS} people.`,
-  notFound: 'This group chat could not be found.',
-  notMember: 'You are not in this group.',
+  full: `This chat is full (${GROUP_CHAT_MAX_MEMBERS} people).`,
+  tooSmall: `A chat needs at least ${GROUP_CHAT_MIN_MEMBERS} people.`,
+  notFound: 'This chat could not be found.',
+  notMember: 'You are not in this chat.',
   eventNotFound: 'This event could not be found.',
-  notOrganiser: 'Only the people who ran this event can start a group chat from it.',
-  notEnded: 'You can start a group chat after the event ends.',
+  notOrganiser: 'Only the people who ran this event can start its chat.',
+  notEnded: 'You can start the event chat after the event ends.',
   notAttendee: 'Only people who took part in this event can be added.',
   notInEvent: 'Only the people who ran this event, or took part in it, can see who may be added.',
   blocked: "You can't add someone you can no longer message.",
   notMet: 'You can only add people you have met.',
-  noEvent: 'New people can only be added to a group started from an event.',
-  adminAdds: "Only the group's admin can add people.",
-  adminRemoves: "Only the group's admin can remove people.",
-  removeSelf: 'To leave the group, use Leave.',
-  memberNotFound: 'This person is not in the group.',
+  noEvent: 'New people can only be added to a chat started from an event.',
+  adminAdds: "Only the chat's admin can add people.",
+  adminRemoves: "Only the chat's admin can remove people.",
+  removeSelf: 'To leave the chat, use Leave chat.',
+  memberNotFound: 'This person is not in the chat.',
   formerMember: FORMER_MEMBER,
 } as const;
 
@@ -341,7 +341,7 @@ export async function createGroupFromEvent(
     }
     checkStartingSize(members.length);
 
-    const name = excerpt(input.name?.trim() || row.title?.trim() || 'Group chat', NAME_MAX);
+    const name = excerpt(input.name?.trim() || row.title?.trim() || 'Event chat', NAME_MAX);
     const inserted = await client.query<GroupRow>(
       `INSERT INTO dm_groups (name, type, session_id, created_by)
        VALUES ($1, 'event', $2, $3)

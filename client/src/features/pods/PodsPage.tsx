@@ -12,6 +12,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import CreatePodModal from './CreatePodModal';
 import { podStatusLabel } from './pod-header-text';
+import { listNote } from './nested-pods-view';
 
 type PodFilter = 'browse' | 'active' | 'archived';
 
@@ -143,6 +144,8 @@ export default function PodsPage() {
           {filteredData.map((pod: any) => {
             const vis = VISIBILITY_CONFIG[pod.visibility] || VISIBILITY_CONFIG.public;
             const VisIcon = vis.icon;
+            // 22 Nov 2026: a pod inside a main pod says which ("in a private pod" when the viewer may not see it).
+            const insideNote = listNote(pod.parentPodId, pod.parentPodName);
             return (
               <Card key={pod.id} hover onClick={() => navigate(`/pods/${pod.id}`)} className="card-hover min-w-0">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -154,6 +157,9 @@ export default function PodsPage() {
                         instead of pushing the page wider than a 360px phone (P2 item 2, 1 Nov 2026). */}
                     <div className="min-w-0">
                       <p className="font-medium text-gray-800 break-words">{pod.name}</p>
+                      {insideNote && (
+                        <p className="text-xs font-medium text-rsn-red break-words" data-testid={`pod-list-inside-${pod.id}`}>{insideNote}</p>
+                      )}
                       <p className="text-sm text-gray-500 break-words">
                         {pod.memberCount || 0} members · {pod.sessionCount || 0} events
                         {pod.description ? ` · ${pod.description}` : ''}

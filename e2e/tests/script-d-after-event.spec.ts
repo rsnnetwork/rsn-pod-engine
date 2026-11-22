@@ -225,10 +225,10 @@ test('Script D: the chat of an event, its pod\'s wall, a message to everyone and
     const hostPage = (await openAs(browser, claus, `/sessions/${sessionId}`)).page;
     const card = hostPage.getByTestId('start-group-chat');
     await expect(card).toBeVisible({ timeout: SLOW });
-    await card.getByRole('button', { name: 'Start a group chat' }).click();
-    const sheet = hostPage.getByRole('dialog', { name: 'Start a group chat' });
+    await card.getByRole('button', { name: 'Start the event chat' }).click();
+    const sheet = hostPage.getByRole('dialog', { name: 'Start the event chat' });
     await expect(sheet.getByTestId('start-group-count')).toHaveText('3 of 50');
-    await sheet.getByRole('button', { name: 'Start group chat', exact: true }).click();
+    await sheet.getByRole('button', { name: 'Start the chat', exact: true }).click();
     await expect(hostPage).toHaveURL(/\/messages\/g\/[0-9a-f-]{36}$/, { timeout: 30_000 });
     made.groups.push(new URL(hostPage.url()).pathname.split('/').pop()!);
     const groupRow = (p: Page) => p.getByTestId('group-row').filter({ hasText: TITLE });

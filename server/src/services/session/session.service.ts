@@ -18,6 +18,7 @@ import {
 import { eventImageUrl } from './event-image-url';
 import { NotFoundError, ConflictError, ForbiddenError, AppError, ValidationError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
+import { assertMayJoinInnerPod } from '../pods/pod-parent-gate';
 import { activeMemberSql } from '../users/active-member';
 import { assertGuestMayRegister } from './guest-registration';
 import { APPROVAL_POD_EVENT_REFUSAL, approvalPodOutsiderSql } from './session-access';
@@ -786,6 +787,9 @@ async function registerParticipantTx(
       // place is given (joinPublicPod below), after the capacity lock and the recount for a new place, so every path
       // takes the lock before this row (registerOrWaitlist and the promotion do), and a full event writes nothing.
       joinsPublicPod = !isGuest;
+      // 22 Nov 2026: a pod inside a main pod whose pods are for its members takes into its events (and so into the pod)
+      // only the main pod's members (pod-parent-gate.ts), refused here before any place is given.
+      if (joinsPublicPod) await assertMayJoinInnerPod(client, session.podId, userId, 'event');
     } else if ((podVisibility === 'invite_only' || podVisibility === 'private') && !isMember) {
       // For private/invite-only pods, only allow if user has a valid (accepted) invite
       // User must go through acceptInvite() first which adds them to pod + marks invite

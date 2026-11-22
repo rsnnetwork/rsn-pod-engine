@@ -39,10 +39,10 @@ const sessionParams = z.object({ sessionId: uuid('Not an event id') });
 
 // A list longer than any group could take is a runaway request; within it, the service gives the reason
 // a group cannot take everyone ("This group is full (50 people).").
-const people = z.array(uuid('Not a member id')).max(200, 'That is more people than a group can hold.');
+const people = z.array(uuid('Not a member id')).max(200, 'That is more people than a chat can hold.');
 
 const fromEventBody = z.object({
-  name: z.string().trim().max(200, 'A group name can be up to 200 characters.')
+  name: z.string().trim().max(200, 'A chat name can be up to 200 characters.')
     .refine(storable, 'That name has a character that cannot be saved.').optional(),
   memberIds: people.optional(),
 });

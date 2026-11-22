@@ -67,7 +67,7 @@ export function policySavedToast(name: string, policy: CircleJoinPolicy): string
   return `${name} is open. Anyone on REASON can join.`;
 }
 export const NO_REQUESTS = 'Nobody is waiting to join.';
-export const ATTACH_EMPTY = 'You have no other pods to attach. Pods you direct or host are listed here.';
+export const ATTACH_EMPTY = 'You have no other pods to attach. Pods you direct or host that are not in a circle yet are listed here, since a pod can be in one circle.';
 /** T15 (30 Oct review 7.3): the circle's Organisations. */
 export const ORGANISATIONS = 'Organisations';
 export const LINK_ENTITY = 'Link an entity';

@@ -16,9 +16,9 @@ import { acceptConfirmDialogs } from '../helpers/confirm-dialog';
 //   3. One opens the group: the message is there, and their counts clear. They answer; the organiser reads it live.
 //   4. The third opens the group from the bell, then leaves it from the members sheet (asked first): back in Messages,
 //      the group gone from their list, and the organiser's header says "2 of 50" without a reload. The group's address
-//      now says "You are not in this group."; a group that does not exist says it could not be found.
+//      now says "You are not in this chat."; a group that does not exist says it could not be found.
 //   5. The cap: an event with 50 more people who took part. The start sheet asks the organiser to choose (more than 49
-//      took part), stops at 50 ("This group is full (50 people)."), and starts a group of 49. In the members sheet the
+//      took part), stops at 50 ("This chat is full (50 people)."), and starts a group of 49. In the members sheet the
 //      organiser adds one more (the 51st cannot be chosen, and says why); the group is full at 50, and the server
 //      refuses a 51st add with the same sentence.
 //   6. A long group (two pages) whose details arrive after its messages still opens at its newest message, and
@@ -37,8 +37,8 @@ const FULL_TITLE = `E2E full group ${RUN}`;
 const LONG_GROUP = `Long thread ${RUN}`;
 const HELLO = `Thank you both for coming, next steps soon ${RUN}`;
 const REPLY = `Thanks Claus, count me in ${RUN}`;
-const FULL = 'This group is full (50 people).';
-const LIMIT = 'Group chats hold up to 50 people.';
+const FULL = 'This chat is full (50 people).';
+const LIMIT = 'A chat holds up to 50 people.';
 const FILLERS = 50;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
@@ -181,7 +181,7 @@ test('an organiser starts a group chat; the others see it and its messages live,
   // A plain participant's page for the same event offers no group chat (only the people who ran it start one).
   const stefanPage = await open(stefan, 'stefan', `/sessions/${eventId}`, { width: 360, height: 740 });
   await expect(stefanPage.getByRole('heading', { name: TITLE })).toBeVisible({ timeout: 40_000 });
-  await expect(stefanPage.getByRole('button', { name: 'Start a group chat' })).toHaveCount(0);
+  await expect(stefanPage.getByRole('button', { name: 'Start the event chat' })).toHaveCount(0);
   await gotoRetry(stefanPage, `${APP}/messages`);
   await expect(stefanPage.getByRole('heading', { name: 'Messages', exact: true })).toBeVisible({ timeout: 30_000 });
   await markNotReloaded(stefanPage);
@@ -197,14 +197,14 @@ test('an organiser starts a group chat; the others see it and its messages live,
   await expect(card).toContainText(LIMIT);
   await noSidewaysScroll(clausPage, 'organiser, event page @390');
   await clausPage.screenshot({ path: 'test-results/gc-1-event-card.png', fullPage: true });
-  await card.getByRole('button', { name: 'Start a group chat' }).click();
-  const sheet = clausPage.getByRole('dialog', { name: 'Start a group chat' });
+  await card.getByRole('button', { name: 'Start the event chat' }).click();
+  const sheet = clausPage.getByRole('dialog', { name: 'Start the event chat' });
   await expect(sheet.getByTestId('start-group-count')).toHaveText('3 of 50');
   await expect(sheet).toContainText(LIMIT);
   await expect(sheet.getByRole('checkbox', { name: 'Stefan Group' })).toBeChecked();
   await expect(sheet.getByRole('checkbox', { name: 'Ines Group' })).toBeChecked();
-  const start = sheet.getByRole('button', { name: 'Start group chat', exact: true });
-  await expectReachable(clausPage, start, 'Start group chat @390');
+  const start = sheet.getByRole('button', { name: 'Start the chat', exact: true });
+  await expectReachable(clausPage, start, 'Start the chat @390');
   await clausPage.screenshot({ path: 'test-results/gc-2-start-sheet.png' });
   await start.click();
   const groupId = await groupIdOf(clausPage);
@@ -273,12 +273,12 @@ test('an organiser starts a group chat; the others see it and its messages live,
   await expect(members.getByTestId('group-member').filter({ hasText: 'Claus Group' })).toContainText('Admin');
   await expect(members.getByTestId('group-member').filter({ hasText: 'Ines Group' })).toContainText('You');
   await expect(members.getByRole('button', { name: 'Remove' }), 'only the admin removes people').toHaveCount(0);
-  const leave = members.getByRole('button', { name: 'Leave group' });
-  await expectReachable(inesPage, leave, 'Leave group @414');
+  const leave = members.getByRole('button', { name: 'Leave chat' });
+  await expectReachable(inesPage, leave, 'Leave chat @414');
   await inesPage.screenshot({ path: 'test-results/gc-6-members-sheet-414.png' });
   await leave.click();
-  await expect(members.getByTestId('leave-confirm'), 'Leave asks first').toContainText("You will stop getting its messages. Only the group's admin can add you back.");
-  await members.getByTestId('leave-confirm').getByRole('button', { name: 'Leave group' }).click();
+  await expect(members.getByTestId('leave-confirm'), 'Leave asks first').toContainText("You will stop getting its messages. Only the chat's admin can add you back.");
+  await members.getByTestId('leave-confirm').getByRole('button', { name: 'Leave chat' }).click();
   await expect(inesPage, 'back in Messages').toHaveURL(`${APP}/messages`, { timeout: 20_000 });
   await expect(inesPage.getByText(`You left ${TITLE}.`)).toBeVisible();
   await expect(groupRow(inesPage, TITLE), 'the group is gone from her list').toHaveCount(0, { timeout: 20_000 });
@@ -293,14 +293,14 @@ test('an organiser starts a group chat; the others see it and its messages live,
 
   // The group's address, now that she is not in it, and a group that does not exist: said in words, a way back.
   await gotoRetry(inesPage, `${APP}/messages/g/${groupId}`);
-  await expect(inesPage.getByTestId('group-thread-problem')).toContainText('You are not in this group.', { timeout: 30_000 });
+  await expect(inesPage.getByTestId('group-thread-problem')).toContainText('You are not in this chat.', { timeout: 30_000 });
   await expect(inesPage.getByRole('link', { name: 'Back to Messages' })).toBeVisible();
   await expect(inesPage.getByText(/Page not found/i)).toHaveCount(0);
   await noSidewaysScroll(inesPage, 'left member, group address @414');
   await gotoRetry(inesPage, `${APP}/messages/g/0b5f3f5e-3c1a-4e3a-9a3e-6d2f1c0a9b7e`);
-  await expect(inesPage.getByTestId('group-thread-problem')).toContainText('This group chat could not be found.', { timeout: 30_000 });
+  await expect(inesPage.getByTestId('group-thread-problem')).toContainText('This chat could not be found.', { timeout: 30_000 });
   await gotoRetry(inesPage, `${APP}/messages/g/not-a-group`);
-  await expect(inesPage.getByTestId('group-thread-problem')).toContainText('This group chat could not be found.', { timeout: 30_000 });
+  await expect(inesPage.getByTestId('group-thread-problem')).toContainText('This chat could not be found.', { timeout: 30_000 });
 
   expect(pageErrors, 'no page errors').toEqual([]);
 });
@@ -310,15 +310,15 @@ test('a group chat holds 50 people: the start sheet asks to choose, stops at 50,
   const page = await open(organiser, 'claus-cap', `/sessions/${bigEventId}`, { width: 390, height: 844 });
   const card = page.getByTestId('start-group-chat');
   await expect(card).toBeVisible({ timeout: 40_000 });
-  await card.getByRole('button', { name: 'Start a group chat' }).click();
-  const sheet = page.getByRole('dialog', { name: 'Start a group chat' });
+  await card.getByRole('button', { name: 'Start the event chat' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Start the event chat' });
 
   // Fifty took part besides the organiser: nobody is ticked yet, and the sheet says to choose up to 49.
   await expect(sheet).toContainText('More than 49 people took part. Choose up to 49, or use Message everyone who took part to reach them all.');
   await expect(sheet.getByTestId('start-group-count')).toHaveText('1 of 50');
   await expect(sheet.getByRole('checkbox', { checked: true })).toHaveCount(0);
-  await expect(sheet).toContainText('A group chat needs at least 3 people.');
-  const start = sheet.getByRole('button', { name: 'Start group chat', exact: true });
+  await expect(sheet).toContainText('A chat needs at least 3 people.');
+  const start = sheet.getByRole('button', { name: 'Start the chat', exact: true });
   await expect(start).toBeDisabled();
 
   // Choosing stops at 50: the last box is off, and the sheet says why.
@@ -367,9 +367,9 @@ test('a group chat holds 50 people: the start sheet asks to choose, stops at 50,
   // The admin removes someone (asked first): 49 of 50, and there is room to add again.
   const first = members.getByTestId('group-member').filter({ hasText: guest(1) });
   await first.getByRole('button', { name: 'Remove' }).click();
-  await expect(first).toContainText(`Remove ${guest(1)} from the group?`);
+  await expect(first).toContainText(`Remove ${guest(1)} from the chat?`);
   await first.getByRole('button', { name: 'Remove' }).click();
-  await expect(page.getByText(`${guest(1)} is no longer in the group.`)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(`${guest(1)} is no longer in the chat.`)).toBeVisible({ timeout: 20_000 });
   await expect(members.getByTestId('group-members-count')).toHaveText('49 of 50', { timeout: 20_000 });
   await expect(members.getByTestId('group-member').filter({ hasText: guest(1) })).toHaveCount(0);
   await expect(members.getByRole('button', { name: 'Add people' })).toBeVisible();

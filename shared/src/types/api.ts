@@ -75,6 +75,7 @@ export const ErrorCodes = {
   POD_MEMBER_EXISTS: 'POD_MEMBER_EXISTS',
   CIRCLE_MEMBER_EXISTS: 'CIRCLE_MEMBER_EXISTS',
   CIRCLE_CLOSED: 'CIRCLE_CLOSED',  // 403; a closed circle: joining needs an ask its managers approve, and its wall, members and events are for members
+  POD_IN_OTHER_CIRCLE: 'POD_IN_OTHER_CIRCLE',  // 409; a pod belongs to one circle (Stefan, 22 Nov 2026), so it leaves the one it is in first
   CIRCLE_ARCHIVED: 'CIRCLE_ARCHIVED',  // 409; an archived circle's wall is read-only (S4, 11 Nov 2026)
   CIRCLE_REQUEST_ALREADY_ANSWERED: 'CIRCLE_REQUEST_ALREADY_ANSWERED',  // 409; an ask for a new circle was approved, declined or withdrawn already
   CIRCLE_REQUEST_REFUSED: 'CIRCLE_REQUEST_REFUSED',  // 409; too many asks waiting, the same name waiting, or a name a circle has
@@ -82,6 +83,10 @@ export const ErrorCodes = {
   WALL_EDIT_CONFLICT: 'WALL_EDIT_CONFLICT',  // 409; the post or comment was edited elsewhere since the editor opened it
   POD_MEMBER_NOT_FOUND: 'POD_MEMBER_NOT_FOUND',
   POD_UNAUTHORIZED: 'POD_UNAUTHORIZED',
+
+  // Pods inside pods (Stefan, 22 Nov 2026; nested-pods.service.ts)
+  POD_NESTING_REFUSED: 'POD_NESTING_REFUSED',  // 409; one level only, never inside itself, out of another main pod first, never in an archived pod
+  MAIN_POD_MEMBERS_ONLY: 'MAIN_POD_MEMBERS_ONLY',  // 403; the main pod's director chose that its pods are for its members, and this person is not one
 
   // Group chat errors (26 Oct 2026)
   GROUP_NOT_FOUND: 'GROUP_NOT_FOUND',

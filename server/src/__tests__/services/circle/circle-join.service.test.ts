@@ -220,7 +220,8 @@ describe('the attach picker', () => {
     await listAttachablePods(C, { userId: OWNER, role: 'member' }, { q: 'Fo%', page: 2, pageSize: 20 });
     const [sql, params] = callOf(/FROM pods p LEFT JOIN pod_members pm/)!;
     expect(flat(sql)).toContain("WHERE p.status <> 'archived' AND ($3::boolean OR pm.role IN ('director', 'host'))");
-    expect(flat(sql)).toContain('AND NOT EXISTS (SELECT 1 FROM circle_pods cp WHERE cp.circle_id = $1 AND cp.pod_id = p.id)');
+    // A pod belongs to one circle (Stefan, 22 Nov 2026): one attached here, or to any circle not archived, is left out.
+    expect(flat(sql)).toContain('AND NOT EXISTS (SELECT 1 FROM circle_pods cp JOIN circles oc ON oc.id = cp.circle_id WHERE cp.pod_id = p.id AND (cp.circle_id = $1 OR oc.archived_at IS NULL))');
     expect(params).toEqual([C, OWNER, false, '%Fo\\%%', 21, 20]);
     mockQuery.mockClear();
     await listAttachablePods(C, { userId: 'u-platform', role: 'admin' }, { page: 1, pageSize: 500 });

@@ -13,6 +13,8 @@ import { NotFoundError, ConflictError, ForbiddenError } from '../../middleware/e
 import { UserRole, hasRoleAtLeast, type ProfileBadgeKind } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
 import { assertInPodsRestrictedCircles } from '../pods/pod-circle-gate';
+import { assertMayJoinInnerPod } from '../pods/pod-parent-gate';
+import { lockParentForNewInnerPod } from './nested-pods-rules';
 
 // ─── Column select helpers ──────────────────────────────────────────────────
 
@@ -28,6 +30,7 @@ const POD_COLUMNS = `
   CASE WHEN visibility::text = 'invite_only' THEN 'private' ELSE visibility::text END AS visibility,
   status, max_members AS "maxMembers",
   rules, join_config AS "joinConfig", config, allow_member_invites AS "allowMemberInvites",
+  parent_pod_id AS "parentPodId", inner_pods_members_only AS "innerPodsMembersOnly",
   created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
@@ -55,6 +58,10 @@ const MEMBER_COLUMNS = `
  * transaction (they were two separate queries, so a failure between them left a pod nobody directed), and a pod made
  * from a circle's page (`input.circleId`) is attached to that circle in the same transaction: an archived or missing
  * circle is a 404 and nothing is left behind. Who may add a pod to a circle is the route's check, made first.
+ * 22 Nov 2026: a pod made inside a main pod (`input.parentPodId`) is written with its link in the same transaction,
+ * after the main pod's row is locked and read again (nested-pods-rules.ts: one level only, never an archived pod), so
+ * no other request can put the main pod inside another meanwhile. Who may (its director, a platform admin) is the
+ * route's check, made first.
  */
 export async function createPod(userId: string, input: CreatePodInput): Promise<Pod> {
   const podId = uuid();
@@ -65,9 +72,10 @@ export async function createPod(userId: string, input: CreatePodInput): Promise<
   const typeRule = podTypeRule(podType);
 
   const pod = await transaction(async (client) => {
+    if (input.parentPodId) await lockParentForNewInnerPod(client, input.parentPodId);
     const result = await client.query<Pod>(
-      `INSERT INTO pods (id, name, description, pod_type, orchestration_mode, communication_mode, visibility, status, max_members, rules, created_by, allow_member_invites)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10, $11)
+      `INSERT INTO pods (id, name, description, pod_type, orchestration_mode, communication_mode, visibility, status, max_members, rules, created_by, allow_member_invites, parent_pod_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10, $11, $12)
        RETURNING ${POD_COLUMNS}`,
       [
         podId,
@@ -81,6 +89,7 @@ export async function createPod(userId: string, input: CreatePodInput): Promise<
         input.rules || null,
         userId,
         input.allowMemberInvites ?? false,
+        input.parentPodId ?? null,
       ]
     );
 
@@ -102,7 +111,7 @@ export async function createPod(userId: string, input: CreatePodInput): Promise<
     return result.rows[0];
   });
 
-  logger.info({ podId, userId, name: input.name, circleId: input.circleId ?? null }, 'Pod created');
+  logger.info({ podId, userId, name: input.name, circleId: input.circleId ?? null, parentPodId: input.parentPodId ?? null }, 'Pod created');
   return pod;
 }
 
@@ -224,9 +233,16 @@ export async function listPods(params: {
   // requestingUserId is used to look up the caller's role in each pod
   let memberRoleJoin = '';
   let memberRoleSelect = 'NULL AS "memberRole"';
+  // 22 Nov 2026: a pod inside a main pod says "in <main pod>". The main pod is named only to someone who may see it (a
+  // pod people may find, or one they are in); otherwise the row says only that it is inside one (parentPodName null).
+  let parentNameSelect = `CASE WHEN parent.visibility::text IN ('public', 'public_with_approval') THEN parent.name END AS "parentPodName"`;
   if (params.requestingUserId) {
     memberRoleJoin = ` LEFT JOIN pod_members pm_role ON pm_role.pod_id = p.id AND pm_role.user_id = $${paramIdx} AND pm_role.status = 'active'`;
     memberRoleSelect = 'pm_role.role AS "memberRole"';
+    parentNameSelect = `CASE WHEN parent.visibility::text IN ('public', 'public_with_approval')
+                               OR EXISTS (SELECT 1 FROM pod_members ppm WHERE ppm.pod_id = parent.id
+                                             AND ppm.user_id = $${paramIdx} AND ppm.status = 'active')
+                             THEN parent.name END AS "parentPodName"`;
     values.push(params.requestingUserId);
     paramIdx++;
   }
@@ -261,19 +277,22 @@ export async function listPods(params: {
   const total = parseInt(countResult.rows[0].count, 10);
 
   values.push(pageSize, offset);
-  const result = await query<Pod & { memberCount: number; sessionCount: number; memberRole: string | null }>(
+  const result = await query<Pod & { memberCount: number; sessionCount: number; memberRole: string | null; parentPodName: string | null }>(
     `SELECT p.id, p.name, p.description, p.pod_type AS "podType", p.orchestration_mode AS "orchestrationMode",
             p.communication_mode AS "communicationMode",
             CASE WHEN p.visibility::text = 'invite_only' THEN 'private' ELSE p.visibility::text END AS visibility,
             p.status, p.max_members AS "maxMembers",
             p.rules, p.join_config AS "joinConfig", p.config,
             p.created_by AS "createdBy", p.created_at AS "createdAt", p.updated_at AS "updatedAt",
+            p.parent_pod_id AS "parentPodId", p.inner_pods_members_only AS "innerPodsMembersOnly",
+            ${parentNameSelect},
             COALESCE(mc.cnt, 0)::int AS "memberCount",
             COALESCE(sc.cnt, 0)::int AS "sessionCount",
             ${memberRoleSelect}
      FROM pods p
      LEFT JOIN (${ACTIVE_MEMBER_COUNTS}) mc ON mc.pod_id = p.id
      LEFT JOIN (${PUBLISHED_EVENT_COUNTS}) sc ON sc.pod_id = p.id
+     LEFT JOIN pods parent ON parent.id = p.parent_pod_id
      ${memberRoleJoin}
      ${whereClause}
      ORDER BY p.created_at DESC
@@ -329,6 +348,14 @@ export async function addMember(
       `SELECT id, status, removal_kind, left_at FROM pod_members WHERE pod_id = $1 AND user_id = $2`,
       [podId, userId]
     );
+
+    // 22 Nov 2026: a pod inside a main pod whose pods are for its members takes only its members (pod-parent-gate.ts).
+    // Asked here, under the pod's lock, for every way in that comes through addMember; someone already in is answered
+    // as before (POD_MEMBER_EXISTS), so the setting never turns an existing member away.
+    if (existing.rows[0]?.status !== 'active') {
+      const voice = admission.by === 'organiser' && status === PodMemberStatus.ACTIVE ? 'organiser' : 'self';
+      await assertMayJoinInnerPod(client, podId, userId, voice, pod.parentPodId ?? null);
+    }
 
     if (existing.rows.length > 0) {
       const existingStatus = existing.rows[0].status;
@@ -664,12 +691,17 @@ export async function approveMember(podId: string, memberUserId: string, approve
     await requirePodRole(podId, approvedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
   }
 
-  const result = await query<PodMember>(
-    `UPDATE pod_members SET status = 'active', joined_at = NOW(), left_at = NULL, removal_kind = NULL
-     WHERE pod_id = $1 AND user_id = $2 AND status = 'pending_approval'
-     RETURNING ${MEMBER_COLUMNS}`,
-    [podId, memberUserId]
-  );
+  // 22 Nov 2026: an ask made before the main pod's director turned "its pods are for its members" on is approved only
+  // once the person is in the main pod (pod-parent-gate.ts), in the same transaction as the approval.
+  const result = await transaction(async (client) => {
+    await assertMayJoinInnerPod(client, podId, memberUserId, 'organiser');
+    return client.query<PodMember>(
+      `UPDATE pod_members SET status = 'active', joined_at = NOW(), left_at = NULL, removal_kind = NULL
+       WHERE pod_id = $1 AND user_id = $2 AND status = 'pending_approval'
+       RETURNING ${MEMBER_COLUMNS}`,
+      [podId, memberUserId]
+    );
+  });
 
   if (result.rows.length === 0) {
     throw new NotFoundError('PendingMember');

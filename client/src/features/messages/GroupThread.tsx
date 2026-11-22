@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Loader2, Send, Smile, Users } from 'lucide-react';
+import { ArrowLeft, Calendar, Loader2, Send, Smile, Users } from 'lucide-react';
 import type { DmGroupDetail, GroupChatMessage } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import PersonLink, { isFormerMemberName } from '@/components/people/PersonLink';
@@ -28,7 +28,7 @@ import {
   BACK_TO_MESSAGES, EARLIER_FAILED, GROUP_EMPTY, GROUP_FAILED, GROUP_GONE, GROUP_MESSAGE_MAX, MESSAGE_PLACEHOLDER,
   MESSAGE_PLACEHOLDER_SHORT, NOT_IN_GROUP, SEND_FAILED, SHOW_EARLIER, TRY_AGAIN, TRYING_AGAIN,
   clusterGroupMessages, groupErrorSentence, groupLoadProblem, isRateLimited, newestFromOthers,
-  markReadDelay, ofMax, readMarkKey, sendSchema, threadInOrder, untilEarlierPage, type SendValues,
+  OPEN_EVENT, chatKindLabel, markReadDelay, ofMax, readMarkKey, sendSchema, threadInOrder, untilEarlierPage, type SendValues,
 } from './group-chat-text';
 
 // ─── A group chat, open in Messages (26 Oct 2026, C12, COM-04) ───
@@ -229,9 +229,21 @@ function ThreadHeader({ group, onMembers }: { group: DmGroupDetail; onMembers: (
         </span>
         <span className="min-w-0">
           <span className="block truncate text-sm font-bold text-[#1a1a2e]">{group.name}</span>
-          <span data-testid="group-member-count" className="block text-xs text-gray-500">{ofMax(group.memberCount)}</span>
+          <span data-testid="group-member-count" className="block text-xs text-gray-500">{chatKindLabel(group.type)} · {ofMax(group.memberCount)}</span>
         </span>
       </button>
+      {/* An event chat belongs to its event (Stefan, 22 Nov 2026), so its header leads back to it. */}
+      {group.type === 'event' && group.sessionId && (
+        <Link
+          to={`/sessions/${group.sessionId}`}
+          data-testid="group-open-event"
+          className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-rsn-red hover:bg-rsn-red/5"
+        >
+          <Calendar className="h-4 w-4" aria-hidden="true" />
+          <span className="hidden sm:inline">{OPEN_EVENT}</span>
+          <span className="sm:hidden">Event</span>
+        </Link>
+      )}
     </div>
   );
 }

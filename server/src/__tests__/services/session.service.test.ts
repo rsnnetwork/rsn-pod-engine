@@ -161,6 +161,8 @@ describe('Session Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // Shirley pilot S2 fix round 2: not a member of the public pod, so whether an organiser removed them is read
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // 22 Nov 2026: the pod is inside no members-only main pod (pod-parent-gate.ts), so nothing keeps them out
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // Check existing registration — none found (Part 3 Task 3: read before capacity)
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // Part 3 Task 3 (K3): a new place is given under the event's capacity lock, after the person's row is read again

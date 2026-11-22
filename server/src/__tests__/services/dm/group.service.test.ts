@@ -144,8 +144,8 @@ beforeEach(() => {
 
 describe('the words people read', () => {
   it('says the two limits verbatim', () => {
-    expect(GROUP_COPY.full).toBe('This group is full (50 people).');
-    expect(GROUP_COPY.tooSmall).toBe('A group chat needs at least 3 people.');
+    expect(GROUP_COPY.full).toBe('This chat is full (50 people).');
+    expect(GROUP_COPY.tooSmall).toBe('A chat needs at least 3 people.');
     expect(GROUP_CHAT_MAX_MEMBERS).toBe(50);
   });
 });
@@ -231,7 +231,7 @@ describe('createGroupFromEvent', () => {
   it('refuses someone who took part but did not run the event, and writes nothing', async () => {
     startsWith([A, B], [], eventRow({ host_user_id: A }));
     const e = await caught(createGroupFromEvent({ userId: CREATOR, role: UserRole.MEMBER }, SESSION, {}));
-    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'Only the people who ran this event can start a group chat from it.' });
+    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'Only the people who ran this event can start its chat.' });
     expect(ran(mockTx, INSERT_GROUP)).toBe(false);
   });
 
@@ -244,14 +244,14 @@ describe('createGroupFromEvent', () => {
   it.each(['scheduled', 'lobby_open', 'round_active', 'closing_lobby', 'cancelled'])('waits for the event to end (%s)', async (status) => {
     startsWith([A, B], [], eventRow({ status }));
     const e = await caught(createGroupFromEvent(host, SESSION, {}));
-    expect(refusal(e)).toEqual({ status: 409, code: ErrorCodes.VALIDATION_ERROR, message: 'You can start a group chat after the event ends.' });
+    expect(refusal(e)).toEqual({ status: 409, code: ErrorCodes.VALIDATION_ERROR, message: 'You can start the event chat after the event ends.' });
     expect(ran(mockTx, INSERT_GROUP)).toBe(false);
   });
 
   it('needs at least 3 people with the creator', async () => {
     startsWith([A]);
     const e = await caught(createGroupFromEvent(host, SESSION, {}));
-    expect(refusal(e)).toEqual({ status: 400, code: ErrorCodes.GROUP_TOO_SMALL, message: 'A group chat needs at least 3 people.' });
+    expect(refusal(e)).toEqual({ status: 400, code: ErrorCodes.GROUP_TOO_SMALL, message: 'A chat needs at least 3 people.' });
     expect(ran(mockTx, INSERT_GROUP)).toBe(false);
   });
 
@@ -268,7 +268,7 @@ describe('createGroupFromEvent', () => {
     jest.clearAllMocks();
     startsWith(people(50));
     const e = await caught(createGroupFromEvent(host, SESSION, {}));
-    expect(refusal(e)).toEqual({ status: 409, code: ErrorCodes.GROUP_FULL, message: 'This group is full (50 people).' });
+    expect(refusal(e)).toEqual({ status: 409, code: ErrorCodes.GROUP_FULL, message: 'This chat is full (50 people).' });
     expect(ran(mockTx, INSERT_GROUP)).toBe(false);
   });
 
@@ -404,21 +404,21 @@ describe('addGroupMembers', () => {
     const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect(refusal(rejected[0].reason)).toEqual({ status: 409, code: ErrorCodes.GROUP_FULL, message: 'This group is full (50 people).' });
+    expect(refusal(rejected[0].reason)).toEqual({ status: 409, code: ErrorCodes.GROUP_FULL, message: 'This chat is full (50 people).' });
     expect(members.size).toBe(50);
   });
 
   it('only the group\'s admin adds', async () => {
     adds([ADMIN, A, B], [A, B, C]);
     const e = await caught(addGroupMembers(GROUP, A, [C]));
-    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: "Only the group's admin can add people." });
+    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: "Only the chat's admin can add people." });
     expect(ran(mockTx, INSERT_MEMBERS)).toBe(false);
   });
 
   it('someone outside the group cannot add to it', async () => {
     adds([ADMIN, A, B], [A, B, C]);
     const e = await caught(addGroupMembers(GROUP, C, [C]));
-    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'You are not in this group.' });
+    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'You are not in this chat.' });
   });
 
   it('only people who took part in the event: someone who registered and never came is refused, by name (H2b item 23)', async () => {
@@ -432,7 +432,7 @@ describe('addGroupMembers', () => {
   it('a group with no event (not started from one, or its event deleted) takes nobody new', async () => {
     adds([ADMIN, A, B], [A, B, C], [], { id: GROUP, name: 'G', type: 'event', session_id: null } as never);
     const e = await caught(addGroupMembers(GROUP, ADMIN, [C]));
-    expect(refusal(e)).toEqual({ status: 409, code: ErrorCodes.VALIDATION_ERROR, message: 'New people can only be added to a group started from an event.' });
+    expect(refusal(e)).toEqual({ status: 409, code: ErrorCodes.VALIDATION_ERROR, message: 'New people can only be added to a chat started from an event.' });
   });
 
   it('nobody can add someone blocked with them, in either direction; the refusal names them (H2b item 23)', async () => {
@@ -454,14 +454,14 @@ describe('addGroupMembers', () => {
     const full = [ADMIN, ...people(49)];
     adds(full, [C]);
     const e = await caught(addGroupMembers(GROUP, ADMIN, [C]));
-    expect(refusal(e)).toEqual({ status: 409, code: ErrorCodes.GROUP_FULL, message: 'This group is full (50 people).' });
+    expect(refusal(e)).toEqual({ status: 409, code: ErrorCodes.GROUP_FULL, message: 'This chat is full (50 people).' });
     expect(ran(mockTx, INSERT_MEMBERS)).toBe(false);
   });
 
   it('says a group that is not there cannot be found', async () => {
     tx([[LOCK, []]]);
     const e = await caught(addGroupMembers(GROUP, ADMIN, [C]));
-    expect(refusal(e)).toEqual({ status: 404, code: 'GROUP_NOT_FOUND', message: 'This group chat could not be found.' });
+    expect(refusal(e)).toEqual({ status: 404, code: 'GROUP_NOT_FOUND', message: 'This chat could not be found.' });
   });
 });
 
@@ -484,26 +484,26 @@ describe('removeGroupMember', () => {
   it('a member cannot remove anyone', async () => {
     members({ [CREATOR]: 'admin', [A]: 'member', [B]: 'member' });
     const e = await caught(removeGroupMember(GROUP, A, B));
-    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: "Only the group's admin can remove people." });
+    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: "Only the chat's admin can remove people." });
     expect(ran(mockTx, DELETE_MEMBER)).toBe(false);
   });
 
   it('someone outside the group cannot remove anyone', async () => {
     members({ [CREATOR]: 'admin', [A]: 'member' });
     const e = await caught(removeGroupMember(GROUP, C, A));
-    expect(refusal(e)?.message).toBe('You are not in this group.');
+    expect(refusal(e)?.message).toBe('You are not in this chat.');
   });
 
   it('says so when the person is not in the group', async () => {
     members({ [CREATOR]: 'admin' });
     const e = await caught(removeGroupMember(GROUP, CREATOR, A));
-    expect(refusal(e)).toEqual({ status: 404, code: 'GROUP_MEMBER_NOT_FOUND', message: 'This person is not in the group.' });
+    expect(refusal(e)).toEqual({ status: 404, code: 'GROUP_MEMBER_NOT_FOUND', message: 'This person is not in the chat.' });
   });
 
   it('the admin leaves with Leave, not by removing themselves', async () => {
     members({ [CREATOR]: 'admin' });
     const e = await caught(removeGroupMember(GROUP, CREATOR, CREATOR));
-    expect(refusal(e)).toEqual({ status: 400, code: ErrorCodes.VALIDATION_ERROR, message: 'To leave the group, use Leave.' });
+    expect(refusal(e)).toEqual({ status: 400, code: ErrorCodes.VALIDATION_ERROR, message: 'To leave the chat, use Leave chat.' });
     expect(mockTransaction).not.toHaveBeenCalled();
   });
 });
@@ -593,7 +593,7 @@ describe('sendGroupMessage', () => {
   it('someone outside the group cannot write in it, and nothing is kept', async () => {
     tx([[LOCK, [{ id: GROUP, name: 'G', type: 'event', session_id: SESSION }]], [SENDER, []]]);
     const e = await caught(sendGroupMessage(GROUP, C, 'hello'));
-    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'You are not in this group.' });
+    expect(refusal(e)).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'You are not in this chat.' });
     expect(ran(mockTx, INSERT_MESSAGE)).toBe(false);
     expect(ran(mockTx, BELLS)).toBe(false);
   });
@@ -755,7 +755,7 @@ describe('listGroupMessages', () => {
 
   it('someone outside the group reads nothing', async () => {
     pool([member(null)]);
-    expect(refusal(await caught(listGroupMessages(GROUP, C, {})))).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'You are not in this group.' });
+    expect(refusal(await caught(listGroupMessages(GROUP, C, {})))).toEqual({ status: 403, code: ErrorCodes.AUTH_FORBIDDEN, message: 'You are not in this chat.' });
     expect(ran(mockPool, THREAD)).toBe(false);
   });
 
@@ -853,7 +853,7 @@ describe('getGroup', () => {
 
   it('says a group that is not there cannot be found', async () => {
     pool([[ACCESS, []]]);
-    expect(refusal(await caught(getGroup(GROUP, C)))).toEqual({ status: 404, code: 'GROUP_NOT_FOUND', message: 'This group chat could not be found.' });
+    expect(refusal(await caught(getGroup(GROUP, C)))).toEqual({ status: 404, code: 'GROUP_NOT_FOUND', message: 'This chat could not be found.' });
   });
 });
 

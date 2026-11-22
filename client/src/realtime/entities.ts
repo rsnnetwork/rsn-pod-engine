@@ -17,6 +17,8 @@ export const E = {
   podMembers: (podId: string) => `pod:${podId}:members`,
   podInvites: (podId: string) => `pod:${podId}:invites`,
   podSessions: (podId: string) => `pod:${podId}:sessions`,
+  // Pods inside pods (22 Nov 2026): the pods inside a main pod (made, put in, taken out, renamed, archived, joined)
+  podInnerPods: (podId: string) => `pod:${podId}:inner-pods`,
 
   // Pod wall (26 Oct 2026): a pod's discussion feed, and one post's thread on it
   podWall: (podId: string) => `pod:${podId}:wall`,

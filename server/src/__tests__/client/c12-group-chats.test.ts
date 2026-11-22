@@ -64,16 +64,16 @@ function read(rel: string): string {
 // ── The words ────────────────────────────────────────────────────────────────
 
 describe('the product says how big a group chat can be', () => {
-  it('"Group chats hold up to 50 people." and "{n} of 50" in the header, from the shared cap', () => {
+  it('"A chat holds up to 50 people." and "{n} of 50" in the header, from the shared cap', () => {
     expect(GROUP_CHAT_MAX_MEMBERS).toBe(50);
-    expect(GROUP_LIMIT).toBe('Group chats hold up to 50 people.');
+    expect(GROUP_LIMIT).toBe('A chat holds up to 50 people.');
     expect(ofMax(12)).toBe('12 of 50');
     expect(ofMax(50)).toBe('50 of 50');
   });
 
   it('a full group and a group too small are refused in the server\'s own words', () => {
-    expect(GROUP_FULL).toBe('This group is full (50 people).');
-    expect(GROUP_TOO_SMALL).toBe('A group chat needs at least 3 people.');
+    expect(GROUP_FULL).toBe('This chat is full (50 people).');
+    expect(GROUP_TOO_SMALL).toBe('A chat needs at least 3 people.');
   });
 
   it('every sentence says "event", never "session", and REASON, never RSN', () => {
@@ -243,9 +243,9 @@ describe('what went wrong, said plainly', () => {
 
   it('a refusal is the server\'s own sentence when it is one a member can read', () => {
     const F = 'Fallback.';
-    expect(groupErrorSentence(refused(409, 'This group is full (50 people).'), F)).toBe('This group is full (50 people).');
-    expect(groupErrorSentence(refused(403, "Only the group's admin can add people."), F)).toBe("Only the group's admin can add people.");
-    expect(groupErrorSentence(refused(404, 'This person is not in the group.'), F)).toBe('This person is not in the group.');
+    expect(groupErrorSentence(refused(409, 'This chat is full (50 people).'), F)).toBe('This chat is full (50 people).');
+    expect(groupErrorSentence(refused(403, "Only the chat's admin can add people."), F)).toBe("Only the chat's admin can add people.");
+    expect(groupErrorSentence(refused(404, 'This person is not in the chat.'), F)).toBe('This person is not in the chat.');
     expect(groupErrorSentence(refused(429, 'You are sending messages very quickly. Wait a moment, then try again.'), F))
       .toBe('You are sending messages very quickly. Wait a moment, then try again.');
     expect(groupErrorSentence(refused(400, 'Validation failed', { content: ['Write a message first.'] }), F)).toBe('Write a message first.');

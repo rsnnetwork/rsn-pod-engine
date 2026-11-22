@@ -150,7 +150,9 @@ describe('a new pod from the circle', () => {
   const modal = read('features/pods/CreatePodModal.tsx');
   it('reads "New pod in {circle}", sends the circle, and stays on the circle with the toast', () => {
     expect(modal).toMatch(/title=\{circle \? `New pod in \$\{circle\.name\}`/);
-    expect(modal).toMatch(/api\.post\('\/pods', circle \? \{ \.\.\.podBody\(values\), circleId: circle\.id \} : podBody\(values\)\)/);
+    // 22 Nov 2026: the body is built by createBody, which also makes a pod inside a main pod (never both at once).
+    expect(modal).toMatch(/api\.post\('\/pods', createBody\(values, circle, parent\)\)/);
+    expect(modal).toMatch(/if \(circle\) return \{ \.\.\.podBody\(values\), circleId: circle\.id \};/);
     const success = modal.slice(modal.indexOf('if (circle) {'), modal.indexOf('return;', modal.indexOf('if (circle) {')));
     expect(success).toMatch(/podMadeToast\(/);
     expect(success).not.toMatch(/navigate\(/);

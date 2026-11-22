@@ -479,5 +479,8 @@ export function answer(raw: string, params: unknown[] = []): { rows: unknown[]; 
     }]);
   }
 
+  // ── a pod inside a members-only main pod (22 Nov 2026, pod-parent-gate.ts): this world's pods stand alone ──
+  if (sql.includes('FROM pods child JOIN pods parent ON parent.id = child.parent_pod_id')) return rows([]);
+
   throw new Error(`The waiting-list world does not know this statement: ${sql.slice(0, 200)}`);
 }

@@ -5,6 +5,8 @@
 // T14 (1 Nov 2026): opened from a circle's page with `circle`, it reads "New pod in {circle}", sends the circle so the
 // server makes and attaches the pod in one transaction, and stays on the circle with "{pod} is created and added to
 // {circle}." instead of going to the new pod.
+// 22 Nov 2026 (pods inside pods): opened from a main pod's "Pods inside" with `parent`, it reads "New pod inside
+// {main pod}", sends the main pod so the server makes the pod inside it in one transaction, and stays on the main pod.
 import { useId, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -17,6 +19,7 @@ import api from '@/lib/api';
 import { formResolver } from '@/lib/form-resolver';
 import PodFormFields from './PodFormFields';
 import { podMadeToast } from '../circles/circle-logic';
+import { NESTED_TOAST } from './nested-pods-view';
 import { newPodValues, podBody, podProblemSummary, podProblems, podFormSchema, type PodField, type PodFormValues, type PodSource } from './pod-type-form';
 
 interface Props {
@@ -26,17 +29,26 @@ interface Props {
   initialValues?: PodSource;
   /** Made from this circle's page: attached to it, and the page stays where it is. */
   circle?: { id: string; name: string };
+  /** Made inside this main pod (22 Nov 2026), and the page stays where it is. */
+  parent?: { id: string; name: string };
 }
 
 const COPY = { fallback: 'Could not create the pod just now. Try again in a moment.', forbidden: 'You cannot create a pod with this account.' };
 
-export default function CreatePodModal({ open, onClose, initialValues, circle }: Props) {
+export default function CreatePodModal({ open, onClose, initialValues, circle, parent }: Props) {
   // Mounted only while open, so every opening starts from the type's defaults (or the pod being duplicated).
   if (!open) return null;
-  return <CreatePodSheet onClose={onClose} initialValues={initialValues} circle={circle} />;
+  return <CreatePodSheet onClose={onClose} initialValues={initialValues} circle={circle} parent={parent} />;
 }
 
-function CreatePodSheet({ onClose, initialValues, circle }: Omit<Props, 'open'>) {
+/** What the form sends: the pod, and the circle or main pod it is made in. */
+function createBody(values: PodFormValues, circle?: Props['circle'], parent?: Props['parent']) {
+  if (circle) return { ...podBody(values), circleId: circle.id };
+  if (parent) return { ...podBody(values), parentPodId: parent.id };
+  return podBody(values);
+}
+
+function CreatePodSheet({ onClose, initialValues, circle, parent }: Omit<Props, 'open'>) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
@@ -53,7 +65,7 @@ function CreatePodSheet({ onClose, initialValues, circle }: Omit<Props, 'open'>)
 
   const create = useMutation({
     networkMode: 'always',
-    mutationFn: (values: PodFormValues) => api.post('/pods', circle ? { ...podBody(values), circleId: circle.id } : podBody(values)),
+    mutationFn: (values: PodFormValues) => api.post('/pods', createBody(values, circle, parent)),
     onSuccess: (res) => {
       const newPodId = res.data?.data?.id;
       qc.invalidateQueries({ queryKey: ['my-pods'] });
@@ -62,6 +74,14 @@ function CreatePodSheet({ onClose, initialValues, circle }: Omit<Props, 'open'>)
         qc.invalidateQueries({ queryKey: ['circle', circle.id] });
         qc.invalidateQueries({ queryKey: ['circles'] });
         addToast(podMadeToast(res.data?.data?.name ?? 'The pod', circle.name), 'success');
+        onClose();
+        return;
+      }
+      if (parent) {
+        // The main pod's page also hears pod:<id>:inner-pods from the server; this one reads it again at once.
+        qc.invalidateQueries({ queryKey: ['pod-inner-pods', parent.id] });
+        qc.invalidateQueries({ queryKey: ['pod', parent.id] });
+        addToast(NESTED_TOAST.madeInside(res.data?.data?.name ?? 'The pod', parent.name), 'success');
         onClose();
         return;
       }
@@ -93,7 +113,7 @@ function CreatePodSheet({ onClose, initialValues, circle }: Omit<Props, 'open'>)
     <Sheet
       open
       onClose={close}
-      title={circle ? `New pod in ${circle.name}` : duplicating ? 'Duplicate Pod' : 'Create a Pod'}
+      title={circle ? `New pod in ${circle.name}` : parent ? `New pod inside ${parent.name}` : duplicating ? 'Duplicate Pod' : 'Create a Pod'}
       footer={(
         <div className="flex w-full flex-wrap items-center justify-end gap-x-2 gap-y-1">
           <FormSummary className="basis-full sm:basis-auto sm:flex-1" summary={summary} message={formError} onGoTo={(key) => setFocus(key as PodField)} />

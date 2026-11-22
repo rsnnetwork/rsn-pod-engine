@@ -44,6 +44,8 @@ jest.mock('../../db', () => ({
 // Mock identity service
 jest.mock('../../services/identity/identity.service');
 jest.mock('../../services/pod/pod.service');
+// 22 Nov 2026: GET /pods/:id also reads where the pod sits (pods inside pods).
+jest.mock('../../services/pod/nested-pods.service');
 jest.mock('../../services/session/session.service');
 jest.mock('../../services/invite/invite.service');
 jest.mock('../../services/rating/rating.service');
@@ -51,6 +53,7 @@ jest.mock('../../services/matching/matching.service');
 
 import * as identityService from '../../services/identity/identity.service';
 import * as podService from '../../services/pod/pod.service';
+import * as nestedPods from '../../services/pod/nested-pods.service';
 import * as sessionService from '../../services/session/session.service';
 import * as inviteService from '../../services/invite/invite.service';
 import * as ratingService from '../../services/rating/rating.service';
@@ -567,6 +570,9 @@ describe('Pod Routes', () => {
   describe('GET /pods/:id', () => {
     it('should return pod by id', async () => {
       (podService.getPodById as jest.Mock).mockResolvedValue(mockPod);
+      (nestedPods.readPodNesting as jest.Mock).mockResolvedValue({
+        parentPod: null, parentPodHidden: false, innerPodCount: 0, joinNeedsMainPod: false, mayHoldPods: true,
+      });
 
       // Admin role bypasses canViewPod DB lookups (short-circuits on role check).
       const token = makeToken({ role: 'admin' });
@@ -576,6 +582,7 @@ describe('Pod Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.id).toBe('d0d0d0d0-0000-4000-8000-000000000123');
+      expect(res.body.data).toMatchObject({ parentPodId: null, parentPod: null, mayHoldPods: true, innerPodCount: 0 });
     });
   });
 });

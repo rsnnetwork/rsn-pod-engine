@@ -100,6 +100,10 @@ export interface Pod {
   rules: string | null;
   joinConfig: PodJoinConfig | null;
   allowMemberInvites: boolean;
+  /** 22 Nov 2026: the main pod this pod is inside, or null for a pod that stands alone (migration 161). */
+  parentPodId: string | null;
+  /** A main pod's director's choice: people must be its active members to join the pods inside it (off by default). */
+  innerPodsMembersOnly: boolean;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -133,6 +137,8 @@ export interface CreatePodInput {
   allowMemberInvites?: boolean;
   /** 1 Nov 2026: made from a circle's page, and attached to that circle in the same transaction (its managers only). */
   circleId?: string;
+  /** 22 Nov 2026: made inside this main pod, in the same transaction (its director or a platform admin only). */
+  parentPodId?: string;
 }
 
 export interface UpdatePodInput {
@@ -147,6 +153,52 @@ export interface UpdatePodInput {
   status?: PodStatus;
   joinConfig?: PodJoinConfig | null;
   allowMemberInvites?: boolean;
+}
+
+// ─── Pods inside pods (Stefan, 22 Nov 2026) ─────────────────────────────────────────────────────────────────
+// Circle (RSN admins) > main pod > the pods inside it > events. One level only: a main pod holds pods, a pod inside
+// one holds none. The main pod's director chooses whether people must be its members to join its pods.
+
+/** The main pod a pod is inside, as the viewer may see it. */
+export interface ParentPodSummary {
+  id: string;
+  name: string;
+}
+
+/** What the pod's page reads about where the pod sits (GET /pods/:id carries these beside the pod). */
+export interface PodNesting {
+  /** The main pod it is inside, when the viewer may see that pod; null when it stands alone or the main pod is hidden. */
+  parentPod: ParentPodSummary | null;
+  /** It is inside a main pod the viewer may not see (a private pod they are not in). */
+  parentPodHidden: boolean;
+  /** How many pods inside it the viewer may see. */
+  innerPodCount: number;
+  /** Joining it needs the viewer to be a member of its main pod first, and they are not. */
+  joinNeedsMainPod: boolean;
+  /** It may hold pods (it is not inside another pod). */
+  mayHoldPods: boolean;
+}
+
+/** One pod inside a main pod, as GET /pods/:id/pods lists it for the viewer. */
+export interface InnerPodItem {
+  id: string;
+  name: string;
+  description: string | null;
+  visibility: PodVisibility;
+  status: PodStatus;
+  memberCount: number;
+  sessionCount: number;
+  /** The viewer's active role in it, or null. */
+  memberRole: PodMemberRole | null;
+  /** The viewer may take it out of the main pod (they direct it or the main pod, or are a platform admin). */
+  mayTakeOut: boolean;
+}
+
+/** One of the viewer's own pods that could be put inside a main pod (GET /pods/:id/pods/candidates). */
+export interface InnerPodCandidate {
+  id: string;
+  name: string;
+  memberCount: number;
 }
 
 export interface PodConfig {

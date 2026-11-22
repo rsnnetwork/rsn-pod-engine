@@ -16,38 +16,38 @@ import { PANEL_TITLE } from '../sessions/post-event-panel';
 import { clusterMessages, type Cluster } from './bubble-look';
 
 // ── The cap, said in the product ──
-export const GROUP_LIMIT = `Group chats hold up to ${GROUP_CHAT_MAX_MEMBERS} people.`;
+export const GROUP_LIMIT = `A chat holds up to ${GROUP_CHAT_MAX_MEMBERS} people.`;
 // The server's own words for the two sizes it refuses (group.service.ts, GROUP_COPY), so a refusal and the screen agree.
-export const GROUP_FULL = `This group is full (${GROUP_CHAT_MAX_MEMBERS} people).`;
-export const GROUP_TOO_SMALL = `A group chat needs at least ${GROUP_CHAT_MIN_MEMBERS} people.`;
+export const GROUP_FULL = `This chat is full (${GROUP_CHAT_MAX_MEMBERS} people).`;
+export const GROUP_TOO_SMALL = `A chat needs at least ${GROUP_CHAT_MIN_MEMBERS} people.`;
 
 // ── Starting one from a completed event ──
-export const START_TITLE = 'Start a group chat';
-export const START_INTRO = 'Talk with the people who took part, all together, in Messages.';
-export const START_SUBMIT = 'Start group chat';
+export const START_TITLE = 'Start the event chat';
+export const START_INTRO = 'Talk with the people who took part, all together. The chat belongs to this event and lives in Messages.';
+export const START_SUBMIT = 'Start the chat';
 // Points to the panel beside the card by its own title, so the two cannot drift apart.
 export const START_MANY = `More than ${GROUP_CHAT_MAX_MEMBERS - 1} people took part. Choose up to ${GROUP_CHAT_MAX_MEMBERS - 1}, or use ${PANEL_TITLE} to reach them all.`;
-export const START_FAILED = 'The group chat could not be started. Try again.';
+export const START_FAILED = 'The chat could not be started. Try again.';
 export const PEOPLE_LEGEND = 'People who took part';
 export const PEOPLE_FAILED = "We couldn't load who took part.";
-export const EVENT_GROUPS = 'Your group chats from this event';
+export const EVENT_GROUPS = 'Your chats from this event';
 
 // ── The inbox ──
-export const GROUPS_FAILED = "We couldn't load your group chats.";
+export const GROUPS_FAILED = "We couldn't load your event and pod chats.";
 export const NO_MESSAGES_YET = 'No messages yet';
 
 // ── The thread ──
-export const GROUP_EMPTY = 'No messages yet. Say hello to the group.';
-export const GROUP_GONE = 'This group chat could not be found.';
-export const NOT_IN_GROUP = 'You are not in this group.';
-export const GROUP_FAILED = "We couldn't load this group chat.";
+export const GROUP_EMPTY = 'No messages yet. Say hello to everyone.';
+export const GROUP_GONE = 'This chat could not be found.';
+export const NOT_IN_GROUP = 'You are not in this chat.';
+export const GROUP_FAILED = "We couldn't load this chat.";
 export const EARLIER_FAILED = "We couldn't load the earlier messages.";
 export const SEND_FAILED = 'Your message could not be sent. Try again.';
 export const SHOW_EARLIER = 'Show earlier messages';
 export const TRY_AGAIN = 'Try again';
 export const TRYING_AGAIN = 'Trying again…';
 export const BACK_TO_MESSAGES = 'Back to Messages';
-export const MESSAGE_PLACEHOLDER = 'Write to the group…';
+export const MESSAGE_PLACEHOLDER = 'Write to everyone…';
 export const MESSAGE_PLACEHOLDER_SHORT = 'Message…';
 
 // ── The members sheet ──
@@ -57,13 +57,13 @@ export const YOU = 'You';
 export const CANCEL = 'Cancel';
 export const REMOVE = 'Remove';
 export const REMOVE_FAILED = 'They could not be removed. Try again.';
-export const LEAVE = 'Leave group';
-export const LEAVE_WARNING = "You will stop getting its messages. Only the group's admin can add you back.";
-export const LEAVE_FAILED = 'You could not leave the group. Try again.';
+export const LEAVE = 'Leave chat';
+export const LEAVE_WARNING = "You will stop getting its messages. Only the chat's admin can add you back.";
+export const LEAVE_FAILED = 'You could not leave the chat. Try again.';
 export const ADD_TITLE = 'Add people who took part';
 export const ADD_PEOPLE = 'Add people';
 export const ADD_FAILED = 'They could not be added. Try again.';
-export const EVERYONE_IN = 'Everyone who took part is already in the group.';
+export const EVERYONE_IN = 'Everyone who took part is already in the chat.';
 // The server's words (routes/groups.ts): the name a closed account goes by (the client's one constant), and an add with
 // nobody chosen.
 export { FORMER_MEMBER } from '../../lib/former-member';
@@ -97,6 +97,19 @@ export function ofMax(memberCount: number): string {
   return `${memberCount} of ${GROUP_CHAT_MAX_MEMBERS}`;
 }
 
+/**
+ * What kind of chat it is, said beside its name (Stefan, 22 Nov 2026: "That's an event. Not a group."): a chat started
+ * after an event is that event's chat, a pod's chat is the pod's. There are no groups of their own.
+ */
+export function chatKindLabel(type: DmGroupSummary['type']): string {
+  if (type === 'event') return 'Event chat';
+  if (type === 'pod') return 'Pod chat';
+  return 'Chat';
+}
+
+/** The event an event chat belongs to, opened from the chat's header. */
+export const OPEN_EVENT = 'Open the event';
+
 /** "1 person", "3 people". */
 export function memberCountLabel(n: number): string {
   return `${n} ${n === 1 ? 'person' : 'people'}`;
@@ -107,8 +120,8 @@ export function addLabel(n: number): string {
   return `Add ${memberCountLabel(n)}`;
 }
 
-export const removeAsk = (name: string) => `Remove ${name} from the group?`;
-export const removedSentence = (name: string) => `${name} is no longer in the group.`;
+export const removeAsk = (name: string) => `Remove ${name} from the chat?`;
+export const removedSentence = (name: string) => `${name} is no longer in the chat.`;
 export const leftSentence = (groupName: string) => `You left ${groupName}.`;
 export const addedSentence = (n: number) => `Added ${memberCountLabel(n)}.`;
 

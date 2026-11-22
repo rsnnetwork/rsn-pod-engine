@@ -305,7 +305,8 @@ export async function removeCircleMember(circleId: string, memberId: string, act
 
 /**
  * The attach picker's list (30 Oct review 7.6), a page at a time and searched by name: the pods the viewer runs (an
- * active director or host) or, for a platform admin, every pod; never an archived one or one already attached. Only
+ * active director or host) or, for a platform admin, every pod; never an archived one, one already attached here, or one in another circle that is not archived (a pod
+ * belongs to one circle, Stefan 22 Nov 2026). Only
  * the people who run the circle ask it (403). The old picker read GET /pods, which stops at the first 20 of the
  * caller's own pods.
  */
@@ -324,7 +325,8 @@ export async function listAttachablePods(
        LEFT JOIN pod_members pm ON pm.pod_id = p.id AND pm.user_id = $2 AND pm.status = 'active'
       WHERE p.status <> 'archived'
         AND ($3::boolean OR pm.role IN ('director', 'host'))
-        AND NOT EXISTS (SELECT 1 FROM circle_pods cp WHERE cp.circle_id = $1 AND cp.pod_id = p.id)
+        AND NOT EXISTS (SELECT 1 FROM circle_pods cp JOIN circles oc ON oc.id = cp.circle_id
+                         WHERE cp.pod_id = p.id AND (cp.circle_id = $1 OR oc.archived_at IS NULL))
         AND ($4::text IS NULL OR p.name ILIKE $4)
       ORDER BY lower(p.name), p.id
       LIMIT $5 OFFSET $6`,

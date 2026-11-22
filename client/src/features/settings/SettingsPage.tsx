@@ -53,7 +53,7 @@ function MessageNotificationPrefsCard() {
   const rows = [
     { key: 'dm', label: 'Direct messages', description: 'When someone sends you a 1:1 message' },
     { key: 'poke', label: 'Meeting requests', description: 'When someone you haven\'t met sends you a meeting request' },
-    { key: 'group', label: 'Group + pod chats', description: 'New messages in your group + pod conversations' },
+    { key: 'group', label: 'Event + pod chats', description: 'New messages in the chats of your events and pods' },
     { key: 'invite', label: 'Event + pod invites', description: 'When someone invites you to an event or pod' },
     { key: 'report_resolved', label: 'Report resolved', description: 'When an admin acts on a report you submitted' },
   ];

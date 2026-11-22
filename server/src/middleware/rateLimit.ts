@@ -297,7 +297,7 @@ export const groupCreateLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
   store: buildStore('group-create'),
-  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have started a lot of group chats this hour. Try again later.' } },
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have started a lot of chats this hour. Try again later.' } },
 });
 
 /**

@@ -33,6 +33,10 @@ import { POD_HINT, SECTION_ID, podManageKeys, type ManageKey } from '@/features/
 import SpaceExportSheet from '@/features/spaces/SpaceExportSheet';
 import { mayExportPod } from '@/features/spaces/space-export';
 import { POD_VISIBILITY_COPY } from '@rsn/shared';
+import PodInnerPodsSection from './PodInnerPodsSection';
+import PodParentLine from './PodParentLine';
+import PodMainPodGate from './PodMainPodGate';
+import { isMainPodGate } from './nested-pods-view';
 
 // ─── Label / icon maps ──────────────────────────────────────────────────────
 
@@ -218,7 +222,12 @@ export default function PodDetailPage() {
       }
       addToast('Joined pod!', 'success');
     },
-    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to join pod', 'error'),
+    onError: (err: any) => {
+      // 22 Nov 2026: the main pod's director made its pods members-only since the page was read: read it again, so the
+      // Join area says so and links the main pod.
+      if (isMainPodGate(err)) qc.invalidateQueries({ queryKey: ['pod', podId] });
+      addToast(err?.response?.data?.error?.message || 'Failed to join pod', 'error');
+    },
   });
 
   const requestJoinMutation = useMutation({
@@ -228,7 +237,10 @@ export default function PodDetailPage() {
       qc.invalidateQueries({ queryKey: ['pod-members', podId] });
       addToast('Join request sent! The pod director will review it.', 'success');
     },
-    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to request join', 'error'),
+    onError: (err: any) => {
+      if (isMainPodGate(err)) qc.invalidateQueries({ queryKey: ['pod', podId] });
+      addToast(err?.response?.data?.error?.message || 'Failed to request join', 'error');
+    },
   });
 
   const approveMutation = useMutation({
@@ -423,6 +435,11 @@ export default function PodDetailPage() {
         <div className="flex gap-2 mt-3">
           <Badge variant="brand">{orchestrationLabel(pod)}</Badge>
         </div>
+
+        {/* 22 Nov 2026: a pod inside a main pod says which, and its director may take it out. */}
+        <div className="mt-2">
+          <PodParentLine pod={pod} directsPod={isPodDirector} platformAdmin={isAdminUser} />
+        </div>
       </Card>
 
       {/* Actions */}
@@ -438,7 +455,10 @@ export default function PodDetailPage() {
       )}
       {!isMember && !isPending && pod.status === 'active' && !keptOutBy && (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
-          {pod.visibility === 'public' || isAdminUser ? (
+          {/* 22 Nov 2026: its main pod's pods are for the main pod's members, and the viewer is not one (never an admin). */}
+          {pod.joinNeedsMainPod ? (
+            <PodMainPodGate mainPod={pod.parentPod ?? null} />
+          ) : pod.visibility === 'public' || isAdminUser ? (
             <>
               <Button onClick={() => joinMutation.mutate()} isLoading={joinMutation.isPending} className="btn-glow">
                 <UserPlus className="h-4 w-4 mr-2" /> Join Pod
@@ -591,6 +611,9 @@ export default function PodDetailPage() {
 
       {/* ── Circles this pod belongs to (REASON P3b); S2: its director may take it out of one ── */}
       <PodCircleChips podId={podId} podName={pod.name} canUnlink={isPodDirector || isAdminUser} />
+
+      {/* ── Pods inside this one (22 Nov 2026): shown when there are some, or to its director ── */}
+      <PodInnerPodsSection pod={pod} directsPod={isPodDirector} platformAdmin={isAdminUser} />
 
       {/* ── Jump to a section (phone and tablet; from 1024px the sections sit side by side) ── */}
       <nav aria-label="Jump to a section" className="flex flex-wrap gap-2 lg:hidden">
