@@ -14,15 +14,17 @@ import { Button } from '@/components/ui/Button';
 import FormSummary from '@/components/ui/FormSummary';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
-import { cn, localTimezoneLabel, toLocalDatetimeInput } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCROLL_MARGINS, fieldBorder } from './EventFormatFields';
 import { useMatchingChoices } from './useMatchingChoices';
 import {
-  DESCRIPTION_MAX, TITLE_MAX, editEventValues, eventChanges, eventChangesSchema, offeredFormats, shownEventKeys,
-  type EventFormValues,
+  DESCRIPTION_MAX, TITLE_MAX, editEventValues, eventChanges, eventChangesSchema, eventWallTime, offeredFormats,
+  shownEventKeys, type EventFormValues,
 } from './event-format-form';
+import EventZoneField from './EventZoneField';
 import { useEventFormatForm } from './useEventFormatForm';
 import EventAccessField from './EventAccessField';
+import EventLinkNameField from './EventLinkNameField';
 
 export interface EditableEvent {
   id: string;
@@ -30,12 +32,16 @@ export interface EditableEvent {
   title?: string | null;
   description?: string | null;
   scheduledAt?: string | null;
+  /** Part 3: the event's zone; the date field holds the time on its clock. */
+  timezone?: string | null;
   format?: unknown;
   /** T11: who can join; NULL follows the pod. */
   visibility?: EventVisibility | null;
   config?: Record<string, unknown> | null;
   /** T13: the circle the event is for, so Who can join's Private card names it (final fix wave CM2). */
   circle?: { id: string; name: string } | null;
+  /** The event link's name (/events/<name>-<n>); the field starts on it. */
+  linkName?: string | null;
 }
 
 interface Props {
@@ -68,9 +74,9 @@ function EditEventSheet({ onClose, session, podType, podVisibility, podName, isA
   const addToast = useToastStore((s) => s.addToast);
   const formId = useId();
   const descriptionId = useId();
-  // LOCAL time for the datetime-local field, never toISOString (UTC), which shifted the time by the viewer's offset
-  // on every save (Ali, 10 Jun).
-  const [start] = useState(() => editEventValues(session, session.scheduledAt ? toLocalDatetimeInput(session.scheduledAt) : ''));
+  // The time on the EVENT's clock (Part 3, K1), never the viewer's: an organiser in Karachi editing a Copenhagen event
+  // sees and saves Copenhagen's 14:00. (Never toISOString either, which shifted the time on every save, Ali, 10 Jun.)
+  const [start] = useState(() => editEventValues(session, eventWallTime(session)));
   const ev = useEventFormatForm({
     defaultValues: start.values,
     schema: eventChangesSchema,
@@ -91,7 +97,8 @@ function EditEventSheet({ onClose, session, podType, podVisibility, podName, isA
     networkMode: 'always',
     // T11: "Who can join" is sent only when the organiser changed it, so an event that follows its pod keeps doing so.
     mutationFn: (values: EventFormValues) => api.put(`/sessions/${session.id}`, {
-      ...eventChanges(values, { isAdmin }),
+      // The time and zone go only when the organiser changed them from what the form opened with.
+      ...eventChanges(values, { isAdmin, opened: start.values }),
       ...(visibilityChosen ? { visibility } : {}),
     }),
     onSuccess: () => {
@@ -138,7 +145,7 @@ function EditEventSheet({ onClose, session, podType, podVisibility, podName, isA
 
         <div>
           <Input label="Date and time" type="datetime-local" error={errors.scheduledAt?.message} className={FIELD_SCROLL_MARGINS} {...register('scheduledAt')} />
-          <p className="text-xs text-gray-400 mt-1">Shown in your local time — {localTimezoneLabel()}.</p>
+          <EventZoneField form={ev.form} />
         </div>
 
         <EventAccessField
@@ -149,6 +156,8 @@ function EditEventSheet({ onClose, session, podType, podVisibility, podName, isA
           circleName={session.circle?.name}
           editing
         />
+
+        <EventLinkNameField form={ev.form} sessionId={session.id} visibility={visibility} isAdmin={isAdmin} currentName={session.linkName} />
 
         <EventFormatFields
           format={ev.format}

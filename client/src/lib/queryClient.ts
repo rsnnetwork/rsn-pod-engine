@@ -7,10 +7,14 @@
 // inside its five seconds of freshness, the new member's own request was not even sent. Every page that reads
 // server data shares the pattern, so the cache is emptied here, once, whenever the member changes.
 import { QueryClient } from '@tanstack/react-query';
+import { retryOnceUnlessRateLimited, watchRateLimitedReads } from '../realtime/rate-limited-reads';
 
+// A failed read is tried once more, except a 429: the rate limit's window cannot have reset a second later, so that read
+// waits for the window instead (watchRateLimitedReads, review I2 of 11 Nov 2026).
 export const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 5_000, retry: 1, refetchOnWindowFocus: true } },
+  defaultOptions: { queries: { staleTime: 5_000, retry: retryOnceUnlessRateLimited, refetchOnWindowFocus: true } },
 });
+watchRateLimitedReads(queryClient);
 
 // Whose data the cache holds. null: nobody is signed in, or it was just emptied.
 let cacheOwner: string | null = null;

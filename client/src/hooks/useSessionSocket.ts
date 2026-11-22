@@ -5,11 +5,17 @@ import { leaveOnUnmount } from '@/features/live/leave-event';
 import { useSessionStore } from '@/stores/sessionStore';
 import { registerRefusal } from '@/features/live/session-guard-state';
 import { useAuthStore } from '@/stores/authStore';
+import { isEventGuest } from '@/features/call/guest-routes';
 import { useToastStore } from '@/stores/toastStore';
 import { playTimerChime } from '@/lib/chime';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { mergeChatHistory, withoutTakenDown } from './chat-history';
+import { LOCKED_CODES, LOCKED_MEETING } from '@/features/schedule/locked-meeting';
+
+// Part 2 Tasks 9 and 13: the host's swap or exclude touched a meeting locked on the matching board. The live host
+// sees errors, so the sentence is shown as one.
+const LOCKED_ERRORS = Object.fromEntries(LOCKED_CODES.map((c) => [c, { msg: LOCKED_MEETING, severity: 'error' as const }]));
 
 // All socket event names we listen to — used for deterministic cleanup
 const SOCKET_EVENTS = [
@@ -133,7 +139,9 @@ export default function useSessionSocket(sessionId: string) {
     // swallowed silently. The page's own register UI surfaces user-facing
     // errors via React Query mutations elsewhere; this auto-register is a
     // best-effort warmup, so console.warn is the right level of noise.
-    api.post(`/sessions/${sessionId}/register`).catch(err => {
+    // An event guest's place comes only through the event's RSN Call link (Part 2, Task 12), and the server refuses
+    // them this call (a member-only route), so it is not made for one: the page draws as soon as it would have.
+    (isEventGuest(useAuthStore.getState().user) ? Promise.resolve() : api.post(`/sessions/${sessionId}/register`)).catch(err => {
       const code = err?.response?.data?.error?.code;
       // June-10 — a kicked user reloaded the live page. The server bars
       // re-registration (403 REMOVED_FROM_EVENT). This HTTP reply is the
@@ -1238,6 +1246,7 @@ export default function useSessionSocket(sessionId: string) {
         REMOVE_FAILED: { msg: 'Could not remove that participant. Try again.', severity: 'error' },
         DM_SEND_FAILED: { msg: 'Message could not be sent. Try again.', severity: 'error' },
         DM_REACT_FAILED: { msg: 'Reaction could not be added. Try again.', severity: 'info' },
+        ...LOCKED_ERRORS,
       };
       const entry = FRIENDLY[code] || { msg: rawMsg, severity: 'error' as const };
       // Toast for visibility, plus banner for persistence on critical issues.

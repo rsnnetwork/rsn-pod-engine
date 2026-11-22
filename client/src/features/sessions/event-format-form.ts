@@ -13,10 +13,12 @@ import { z } from 'zod';
 import {
   EVENT_FORMAT_KEYS, IN_PERSON_ENABLED_CLIENTS, MATCHING_PRESET_IDS, applyFormatChange, checkEventInput,
   defaultEventFormat, defaultTitle, defaultsFor, effectiveOrchestration, eventFormatsForPod, fieldsFor, formatOffered, formatRule,
-  liveKindOf, missingRequired, resolveEventFormat, valuesFromConfig,
+  canonicalTimeZone, eventLinkNameProblem, liveKindOf, missingRequired, normaliseEventLinkName, resolveEventFormat,
+  utcToZonedWallTime, valuesFromConfig, zonedWallTimeToUtc,
 } from '@rsn/shared';
 import type { EventFormat, OrchestrationMode, PodType } from '@rsn/shared';
 import { errorMessage, memberSentence } from '../reason/errors';
+import { defaultEventZone, formZone } from '../../lib/event-time';
 
 /**
  * Everything an event form holds. The settings of every offered type are kept, so a switch back restores what the
@@ -26,8 +28,13 @@ export interface EventFormValues {
   podId: string;
   title: string;
   description: string;
-  /** As a datetime-local field holds it: local time, "2026-11-02T10:00". */
+  /** As a datetime-local field holds it, on the event's own clock (`timezone`): "2026-11-02T10:00". */
   scheduledAt: string;
+  /**
+   * The event's IANA zone (Part 3, K1): the clock `scheduledAt` is read on, and the one every time of the event is
+   * shown in. Changing it keeps the wall clock: 14:00 stays 14:00, now on the new zone's clock.
+   */
+  timezone: string;
   format: EventFormat;
   numberOfRounds: number;
   roundMinutes: number;
@@ -41,6 +48,11 @@ export interface EventFormValues {
   durationMinutes: number;
   /** Where an in-person event happens (30 Oct 2026). */
   location: string;
+  /**
+   * The event link's name (Stefan, 11 Nov 2026): /events/<name>-<n>. Empty on a new event: the server gives the pod's
+   * latest event's name, else "rsn". As typed: trimmed and lower-cased when checked and sent.
+   */
+  linkName: string;
 }
 
 export type EventSettingKey =
@@ -69,6 +81,8 @@ export const DESCRIPTION_MAX = 2000;
 export const CHECK_SETTINGS = "Check the event's settings and try again.";
 export const DATE_REQUIRED = 'Choose a date and time.';
 export const POD_REQUIRED = 'Choose a pod.';
+/** The server's sentence for a zone it does not know (routes/sessions.ts, Part 3 Task 1). */
+export const TIME_ZONE_REQUIRED = "Choose the event's time zone from the list.";
 
 /**
  * Every type these forms may offer, in the table's order. They draw an in-person event's place, so they ask for In
@@ -135,26 +149,42 @@ function settingDefaults(format: EventFormat, podType?: PodType | null): Pick<Ev
   return merged as unknown as Pick<EventFormValues, EventSettingKey>;
 }
 
-/** A new event's form: the pod's starting type with that type's defaults, and a title already filled in. */
-export function newEventValues(o: { pod?: EventPod | null; scheduledAt: string }): EventFormValues {
+/**
+ * A new event's form: the pod's starting type with that type's defaults, and a title already filled in. Its zone is the
+ * one given (the screen passes defaultEventZone: the organiser's own, else the browser's), else the browser's, else UTC.
+ */
+export function newEventValues(o: { pod?: EventPod | null; scheduledAt: string; timezone?: string | null }): EventFormValues {
   const format = startingFormat(o.pod);
   return {
     podId: o.pod?.id ?? '',
     title: defaultTitle(format, o.pod?.name ?? ''),
     description: '',
     scheduledAt: o.scheduledAt,
+    timezone: o.timezone ? formZone(o.timezone) : defaultEventZone(null),
     format,
     ...settingDefaults(format, o.pod?.podType),
+    linkName: '',
   };
 }
 
 /**
- * An event's edit form: its type (the stored column, else the old config.eventType, as the server reads it) and its
- * saved settings (the round length back in minutes). On an edit every saved setting counts as chosen (`touched`), so
- * a switch that would drop one asks first.
+ * The time an edit form starts on: the event's instant on the event's own clock ("2026-12-01T14:00" for 13:00Z in
+ * Copenhagen), whoever opens it and wherever they are; '' for an event with no date.
+ */
+export function eventWallTime(session: { scheduledAt?: string | null; timezone?: string | null }): string {
+  return session.scheduledAt ? utcToZonedWallTime(session.scheduledAt, formZone(session.timezone)) : '';
+}
+
+/**
+ * An event's edit form: its type (the stored column, else the old config.eventType, as the server reads it), its zone
+ * and its saved settings (the round length back in minutes). On an edit every saved setting counts as chosen
+ * (`touched`), so a switch that would drop one asks first. `scheduledAt` is eventWallTime's.
  */
 export function editEventValues(
-  session: { podId?: string | null; title?: string | null; description?: string | null; format?: unknown; config?: object | null },
+  session: {
+    podId?: string | null; title?: string | null; description?: string | null; format?: unknown; config?: object | null;
+    timezone?: string | null; linkName?: string | null;
+  },
   scheduledAt: string,
 ): { values: EventFormValues; touched: Set<string> } {
   const format = resolveEventFormat({ format: session.format, config: session.config as { eventType?: unknown } | null });
@@ -164,10 +194,12 @@ export function editEventValues(
       title: session.title ?? '',
       description: session.description ?? '',
       scheduledAt,
+      timezone: formZone(session.timezone),
       format,
       ...settingDefaults(format),
       // An event saved with no template pairs on the engine's defaults, which General is: it shows as General.
       ...(valuesFromConfig(format, session.config) as Partial<EventFormValues>),
+      linkName: session.linkName ?? '',
     },
     touched: new Set(fieldsFor(format)),
   };
@@ -232,6 +264,12 @@ export function settingProblem(format: EventFormat, key: string, value: unknown)
   return null;
 }
 
+/** The link name's problem in the shared rule's words, or null; an empty field is no problem (the default is used). */
+export function linkNameProblem(raw: string | undefined): string | null {
+  const name = normaliseEventLinkName(raw ?? '');
+  return name ? eventLinkNameProblem(name) : null;
+}
+
 export function titleProblem(title: string): string | null {
   const t = (title ?? '').trim();
   if (!t) return TITLE_REQUIRED;
@@ -247,7 +285,11 @@ function eventIssues(values: EventFormValues, ctx: z.RefinementCtx, o: { pod: bo
   };
   if (o.pod) say('podId', values.podId ? null : POD_REQUIRED);
   say('title', titleProblem(values.title));
-  say('scheduledAt', values.scheduledAt ? null : DATE_REQUIRED);
+  const realZone = !!canonicalTimeZone(values.timezone);
+  // A time read on a zone that is not one is the zone's problem, said once, at the zone.
+  say('scheduledAt', values.scheduledAt && (instantOf(values) || !realZone) ? null : DATE_REQUIRED);
+  say('timezone', realZone ? null : TIME_ZONE_REQUIRED);
+  say('linkName', linkNameProblem(values.linkName));
   // Only the chosen type's settings are checked: settingProblem says nothing about another type's field.
   for (const key of SETTING_KEYS) {
     // The months are checked only under the cooldown rule, the one that uses them.
@@ -270,7 +312,7 @@ export const eventChangesSchema = eventFormValues.superRefine((v, ctx) => eventI
  * Who should meet whom is drawn for everyone (the presets); only its other templates are an admin's.
  */
 export function shownEventKeys(format: EventFormat, _isAdmin: boolean): string[] {
-  return ['format', 'title', 'description', 'scheduledAt', ...fieldsFor(format)];
+  return ['format', 'title', 'description', 'scheduledAt', 'timezone', 'linkName', ...fieldsFor(format)];
 }
 
 export interface NewEventBody {
@@ -278,7 +320,11 @@ export interface NewEventBody {
   title: string;
   description?: string;
   scheduledAt: string | null;
+  /** The event's zone: the server stores it and writes every time of the event on its clock. */
+  timezone: string;
   format: EventFormat;
+  /** The event link's name, when the organiser gave one (else the server's default). */
+  linkName?: string;
   config: Record<string, unknown>;
 }
 
@@ -286,7 +332,11 @@ export interface EventChangesBody {
   title: string;
   description: string;
   scheduledAt?: string;
+  /** Sent with the time, only when the organiser changed the date or the zone. */
+  timezone?: string;
   format: EventFormat;
+  /** Sent only when the organiser changed the link's name (the event then takes the next number under it). */
+  linkName?: string;
   config: Record<string, unknown>;
 }
 
@@ -310,28 +360,56 @@ function settingsFor(values: EventFormValues, isAdmin: boolean): Record<string, 
   return config;
 }
 
-const isoFromLocal = (local: string) => new Date(local).toISOString();
+/**
+ * The instant the form's time names, read on the EVENT's clock, never the browser's: an organiser in Karachi who sets
+ * 14:00 on a Copenhagen event sends 13:00Z. null with no time, or for a time or a zone that is not one (the schema
+ * says so at the field first).
+ */
+function instantOf(values: Pick<EventFormValues, 'scheduledAt' | 'timezone'>): string | null {
+  return values.scheduledAt ? zonedWallTimeToUtc(values.scheduledAt, values.timezone) : null;
+}
 
 /** POST /sessions: the type at the top level, so the server checks it against the pod and the type's limits. */
 export function eventBody(values: EventFormValues, o: { isAdmin: boolean }): NewEventBody {
   const description = values.description.trim();
+  const linkName = normaliseEventLinkName(values.linkName ?? '');
   return {
     podId: values.podId,
     title: values.title.trim(),
     ...(description ? { description } : {}),
-    scheduledAt: values.scheduledAt ? isoFromLocal(values.scheduledAt) : null,
+    scheduledAt: instantOf(values),
+    timezone: values.timezone,
     format: values.format,
+    ...(linkName ? { linkName } : {}),
     config: settingsFor(values, o.isAdmin),
   };
 }
 
-/** PUT /sessions/:id. The type is sent every time; an event with no date keeps none rather than getting an empty one. */
-export function eventChanges(values: EventFormValues, o: { isAdmin: boolean }): EventChangesBody {
+/**
+ * PUT /sessions/:id. The type is sent every time. The time and the zone are sent only when the organiser changed the
+ * date field or the zone field from what the form opened with (`opened`, compared as the fields hold them, never as a
+ * re-derived instant): the field holds the time to the minute, so rebuilding it would move an event stored with
+ * seconds, or in the autumn's repeated hour, and the server would tell everyone it had moved (task 6 review, #6). When
+ * either changed, both go: a new zone with the same wall clock is a new instant (14:00 Copenhagen is not 14:00
+ * London), and the server tells the event's people it has moved. An event with no date keeps none rather than getting
+ * an empty one.
+ */
+export function eventChanges(
+  values: EventFormValues,
+  o: { isAdmin: boolean; opened: Pick<EventFormValues, 'scheduledAt' | 'timezone'> & Partial<Pick<EventFormValues, 'linkName'>> },
+): EventChangesBody {
+  const moved = values.scheduledAt !== o.opened.scheduledAt || values.timezone !== o.opened.timezone;
+  const scheduledAt = moved ? instantOf(values) : null;
+  // A new link name only when it was changed and not emptied (an emptied field keeps the event's own name).
+  const linkName = normaliseEventLinkName(values.linkName ?? '');
+  const renamed = linkName !== '' && linkName !== normaliseEventLinkName(o.opened.linkName ?? '');
   return {
     title: values.title.trim(),
     description: values.description.trim(),
-    ...(values.scheduledAt ? { scheduledAt: isoFromLocal(values.scheduledAt) } : {}),
+    ...(scheduledAt ? { scheduledAt } : {}),
+    ...(moved ? { timezone: values.timezone } : {}),
     format: values.format,
+    ...(renamed ? { linkName } : {}),
     config: settingsFor(values, o.isAdmin),
   };
 }
@@ -368,8 +446,11 @@ const REQUEST_FIELD_WORDS: Record<string, (said: string) => string> = {
   title: (said) => (/at most|too long/i.test(said) ? `Keep the title to ${TITLE_MAX} characters.` : TITLE_REQUIRED),
   description: () => 'Keep the description to 2,000 characters.',
   scheduledAt: () => DATE_REQUIRED,
+  timezone: () => TIME_ZONE_REQUIRED,
   podId: () => POD_REQUIRED,
   format: () => 'Choose an event type.',
+  // The server's words for a link name are the shared rule's, already the organiser's own.
+  linkName: (said) => shown(said) ?? 'Check the event link name.',
 };
 
 /** A stored key a refusal may name, as the field the form shows: the round length is set in minutes, kept in seconds. */
@@ -446,9 +527,10 @@ export function eventProblems(err: unknown, format: EventFormat, copy: EventProb
 
 const FORM_FIELD_LABELS: Record<string, string> = {
   podId: 'Pod', format: 'Event type', title: 'Title', description: 'Description', scheduledAt: 'Date and time',
+  timezone: 'Time zone', linkName: 'Event link name',
 };
 /** The fields above a type's own settings, in the order the forms draw them. */
-const LEADING_FIELDS = ['podId', 'format', 'title', 'description', 'scheduledAt'];
+const LEADING_FIELDS = ['podId', 'format', 'title', 'description', 'scheduledAt', 'timezone', 'linkName'];
 
 export function fieldLabel(key: string, format: EventFormat): string {
   return FORM_FIELD_LABELS[key] ?? formatRule(format).fields[key]?.label ?? key;

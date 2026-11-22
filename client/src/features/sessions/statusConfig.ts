@@ -8,6 +8,8 @@
 // for any generic status-chip display. LiveSessionPage keeps its local
 // STATE_CONFIG because it has richer, context-specific copy per phase.
 
+import type { EventLifecycle } from '@rsn/shared';
+
 export type SessionStatus =
   | 'scheduled'
   | 'lobby_open'
@@ -97,4 +99,42 @@ export function sessionStatusColor(s: string | undefined | null) {
 
 export function sessionStatusPhase(s: string | undefined | null): StatusPhase {
   return (s && PHASE_MAP[s as SessionStatus]) || 'pre';
+}
+
+// ─── The event's lifecycle, for the people who run it (Part 2 Task 11; spec 11) ─────────────────────────────────────
+// Where the event stands beside its live status: GET /sessions/:id sends `lifecycle`, worked out by the shared
+// eventLifecycleOf, so the chip never guesses. Members keep the labels above.
+
+export type EventLifecycleChip = EventLifecycle;
+
+const LIFECYCLE_LABELS: Record<EventLifecycleChip, string> = {
+  draft: 'Draft',
+  published: 'Published',
+  registration_open: 'Registration open',
+  live: 'Live',
+  completed: 'Ended',
+  archived: 'Archived',
+  cancelled: 'Cancelled',
+};
+
+const LIFECYCLE_COLORS: Record<EventLifecycleChip, 'default' | 'success' | 'warning' | 'info' | 'danger'> = {
+  draft: 'warning',
+  published: 'info',
+  registration_open: 'success',
+  live: 'success',
+  completed: 'default',
+  archived: 'default',
+  cancelled: 'danger',
+};
+
+export function isEventLifecycleChip(value: unknown): value is EventLifecycleChip {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(LIFECYCLE_LABELS, value);
+}
+
+export function lifecycleLabel(lifecycle: EventLifecycleChip): string {
+  return LIFECYCLE_LABELS[lifecycle];
+}
+
+export function lifecycleColor(lifecycle: EventLifecycleChip) {
+  return LIFECYCLE_COLORS[lifecycle];
 }

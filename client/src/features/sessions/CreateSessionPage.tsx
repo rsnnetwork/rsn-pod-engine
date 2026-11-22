@@ -23,17 +23,20 @@ import FormSummary from '@/components/ui/FormSummary';
 import { useToastStore } from '@/stores/toastStore';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
-import { cn, isAdmin as isAdminRole, localTimezoneLabel } from '@/lib/utils';
+import { cn, isAdmin as isAdminRole } from '@/lib/utils';
+import { defaultEventZone } from '@/lib/event-time';
 import { E } from '@/realtime/entities';
 import EventFormatFields, { EVENT_FIELD, EVENT_LABEL, EventTypePicker, FIELD_SCROLL_MARGINS, fieldBorder } from './EventFormatFields';
 import { useMatchingChoices } from './useMatchingChoices';
 import EventAccessField from './EventAccessField';
+import EventLinkNameField from './EventLinkNameField';
 import {
   DESCRIPTION_MAX, TITLE_MAX, autoTitle, eventBody, newEventSchema, newEventValues, offeredFormats,
   podChangeFormat, shownEventKeys, startingPreset, type EventPod, type NewEventBody,
 } from './event-format-form';
 import { useEventFormatForm } from './useEventFormatForm';
 import { nextQuarterHourAfter } from './default-start';
+import EventZoneField from './EventZoneField';
 import { circleEntities, type CircleDetail } from '@/features/circles/circle-logic';
 import { circleForLine, circleGate, podsForCircle } from './circle-preset';
 
@@ -56,6 +59,9 @@ const CREATE_COPY = {
   forbidden: "Only the pod's director or a host can schedule events in this pod.",
   notFound: 'This pod could not be found. It may have been archived.',
 };
+
+/** Part 2 Task 11: what Save as draft says once the draft is kept. */
+const DRAFT_SAVED = 'Draft saved. Only the people running it can see it until you publish it.';
 
 const canSchedule = (pod: PodRow, isAdmin: boolean) => isAdmin || pod.memberRole === 'director' || pod.memberRole === 'host';
 const toEventPod = (pod: PodRow | null): EventPod | null =>
@@ -248,7 +254,12 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
   const addToast = useToastStore((s) => s.addToast);
   const podFieldId = useId();
   const descriptionId = useId();
-  const [start] = useState(() => newEventValues({ pod: toEventPod(fixedPod ?? null), scheduledAt: nextQuarterHourAfter(new Date()) }));
+  // Part 3 (K1): a new event is on its organiser's zone (their profile's, else this browser's), from its next quarter hour.
+  const organiserZone = useAuthStore((s) => s.user?.timezone as string | null | undefined);
+  const [start] = useState(() => {
+    const zone = defaultEventZone(organiserZone);
+    return newEventValues({ pod: toEventPod(fixedPod ?? null), scheduledAt: nextQuarterHourAfter(new Date(), zone), timezone: zone });
+  });
   const lastAutoTitle = useRef(start.title);
   const ev = useEventFormatForm({
     defaultValues: start,
@@ -297,20 +308,22 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
 
   const create = useMutation({
     networkMode: 'always',
-    mutationFn: (body: NewEventBody & { visibility: EventVisibility; circleId?: string }) => api.post('/sessions', body),
-    onSuccess: (res) => {
-      addToast('Event scheduled!', 'success');
+    mutationFn: (body: NewEventBody & { visibility: EventVisibility; circleId?: string; publication?: 'draft' }) => api.post('/sessions', body),
+    onSuccess: (res, body) => {
+      // Part 2 Task 11: a draft is the organisers' alone until published, so it opens without the invite sheet.
+      const draft = body.publication === 'draft';
+      addToast(draft ? DRAFT_SAVED : 'Event scheduled!', 'success');
       const id = res.data?.data?.id;
-      if (!id) {
-        navigate('/sessions');
-        return;
-      }
+      if (!id) return navigate('/sessions');
+      if (draft) return navigate(`/sessions/${id}`);
       navigate(`/sessions/${id}?invite=1`);
     },
     onError: ev.refused,
     onSettled: ev.settled,
   });
   const submit = ev.onSubmit((values) => create.mutate({ ...eventBody(values, { isAdmin }), visibility, ...(circle ? { circleId: circle.id } : {}) }));
+  // Part 2 Task 11: the same body kept as a draft; Schedule Event sends no publication, exactly as before.
+  const saveDraft = ev.onSubmit((values) => create.mutate({ ...eventBody(values, { isAdmin }), visibility, ...(circle ? { circleId: circle.id } : {}), publication: 'draft' }));
   const typeLabel = pod ? POD_TYPES[pod.podType]?.label : undefined;
 
   return (
@@ -378,15 +391,14 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
 
           <div>
             <Input label="Date and time" type="datetime-local" error={errors.scheduledAt?.message} className={FIELD_SCROLL_MARGINS} {...register('scheduledAt')} />
-            <p className="text-xs text-gray-400 mt-1">
-              Shown in your local time — {localTimezoneLabel()}. Each person sees the event in their own timezone.
-            </p>
+            <EventZoneField form={ev.form} />
           </div>
         </div>
       </Card>
 
       <Card className="animate-fade-in-up stagger-1">
         <EventAccessField value={visibility} onChange={setChosenVisibility} podName={pod?.name} podVisibility={pod?.visibility} circleName={circle?.name} />
+        <EventLinkNameField className="mt-5" form={ev.form} podId={pod?.id} visibility={visibility} circleId={circle?.id} isAdmin={isAdmin} />
       </Card>
 
       <Card className="animate-fade-in-up stagger-1">
@@ -416,7 +428,10 @@ function NewEventForm({ fixedPod, pods, isAdmin, back, circle }: FormProps) {
         <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 rounded-2xl border border-gray-200 bg-white/95 px-4 py-2.5 shadow-lg backdrop-blur">
           <FormSummary className="basis-full sm:basis-auto sm:flex-1" summary={ev.summary} message={ev.formError} onGoTo={ev.goTo} />
           <Button variant="ghost" type="button" onClick={() => navigate(back)}>Cancel</Button>
-          <Button type="submit" isLoading={create.isPending} className="btn-glow">Schedule Event</Button>
+          <Button variant="outline" type="button" data-testid="save-as-draft" onClick={(e) => void saveDraft(e)} disabled={create.isPending} isLoading={create.isPending && create.variables?.publication === 'draft'}>
+            Save as draft
+          </Button>
+          <Button type="submit" isLoading={create.isPending && create.variables?.publication !== 'draft'} disabled={create.isPending} className="btn-glow">Schedule Event</Button>
         </div>
       </div>
     </form>

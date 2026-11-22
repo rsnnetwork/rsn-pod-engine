@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Calendar, Users, Play, Clock, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio, CircleDashed } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, Play, Clock, UserMinus, Settings, CheckCircle, Pencil, Mail, AlertTriangle, CopyPlus, Shield, ShieldCheck, Radio, CircleDashed, LayoutGrid } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -9,20 +9,22 @@ import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
-import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
+import { eventWhen } from '@/lib/event-time';
 import { eventDurationMinutes, liveKindOf, resolveEventFormat } from '@rsn/shared';
 import AddToCalendar from '@/components/calendar/AddToCalendar';
 import { eventEntry, icsFile } from '@/components/calendar/calendar-links';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
+import { isRateLimited } from '@/realtime/rate-limited-reads';
 import { personHref } from '@/features/reason/human/profile-text';
-import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
+import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase, isEventLifecycleChip, lifecycleColor, lifecycleLabel } from './statusConfig';
 import MessageParticipantsPanel from './MessageParticipantsPanel';
 import StartGroupChatCard from './StartGroupChatCard';
 import EventChatHistory from './EventChatHistory';
 import EditEventModal from './EditEventModal';
 import { eventFacts, eventFactsLine, eventPlace, presetNameOf } from './event-format-form';
 import EventPlace from './EventPlace';
+import { EventImageHeader } from './EventImage';
 import { useMatchingPresets } from './useMatchingChoices';
 import InvitePickerSheet from '@/features/invites/InvitePickerSheet';
 import InviteStatusList from '@/features/invites/InviteStatusList';
@@ -32,6 +34,19 @@ import EventJoinRequestsCard from './EventJoinRequestsCard';
 import EndEventButton from './EndEventButton';
 import { duplicateCircleField, eventCircleLine } from './circle-preset';
 import { circleErrorSentence } from '@/features/circles/useCircleActions';
+import OrganiserSettings from './OrganiserSettings';
+import EventHistoryPanel from './history/EventHistoryPanel';
+import EventReportCard from './report/EventReportCard';
+import { useEventGroups } from './groups/useEventGroups';
+import ParticipantGroupControl from './groups/ParticipantGroupControl';
+import WaitlistCard from './waitlist/WaitlistCard';
+import { WAITLIST_COPY, registerBody, waitlistedPosition } from './waitlist/waitlist-text';
+import { useEventQuestions } from './questions/useEventQuestions';
+import MyEventAnswersSheet from './questions/MyEventAnswersSheet';
+import MyAnswersRow from './questions/MyAnswersRow';
+import AnswerChips from './questions/AnswerChips';
+import type { GivenAnswers } from './questions/EventAnswersForm';
+import { needsAnswers, registerBodyWith } from './questions/question-form';
 
 /** The icon over each figure under an event's title. */
 const FACT_ICONS: Record<string, typeof Users> = { numberOfRounds: Settings, roundMinutes: Clock, durationMinutes: Clock, maxParticipants: Users };
@@ -71,9 +86,12 @@ export default function SessionDetailPage() {
     retry: (failureCount, err: any) => {
       // Don't retry 403s — access is intentionally denied
       if (err?.response?.status === 403) return false;
+      // Review I2: nor a 429: its re-read waits for the limit's window (realtime/rate-limited-reads.ts).
+      if (isRateLimited(err)) return false;
       return failureCount < 3;
     },
-    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
+    // Part 3 Task 8: the access block carries the waiting list (full, my number), which session:<id>:waitlist moves.
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionWaitlist(sessionId)] : [] },
   });
 
   const { data: pod } = useQuery({
@@ -83,10 +101,16 @@ export default function SessionDetailPage() {
     meta: { entities: session?.podId ? [E.pod(session.podId)] : [] },
   });
 
+  // Part 3 Task 8: someone only on the waiting list opens the event page, never its attendee list or live state (the
+  // server refuses both). The list is read once they hold a place: a promotion clears their number (session:<id>), which
+  // turns this read on, and the page reads "Registered" without a refresh.
+  const waitingInLine = session?.access?.waitlist?.position != null;
   const { data: participants } = useQuery({
     queryKey: ['session-participants', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participants`).then(r => r.data.data ?? []),
-    enabled: !!sessionId,
+    enabled: !!sessionId && !waitingInLine,
+    retry: (failureCount, err: unknown) =>
+      (err as { response?: { status?: number } })?.response?.status !== 403 && !isRateLimited(err) && failureCount < 3,
     // R2 safety net (20 May 2026 — live-test post-mortem). Entity-tag
     // fanout is the primary refresh path, but missed emits at scattered
     // session_participants write sites left clients showing stale lists
@@ -119,8 +143,10 @@ export default function SessionDetailPage() {
   // renders only while the event can still happen / is happening.
   const sessionOver = session?.status === 'completed' || session?.status === 'cancelled';
   const canManageCohosts = !sessionOver && (isHost || user?.role === 'super_admin' || viewerIsCohost);
+  // Part 2 Task 11: a draft is seen only by the people running it; it takes no invites, no Go Live, no calendar entry.
+  const isDraft = session?.lifecycle === 'draft';
   // Who may invite (the server's rule: the host, a co-host, an admin), while the event can still take people.
-  const mayInvite = (isHost || isAdmin || viewerIsCohost) && (phase === 'pre' || phase === 'live');
+  const mayInvite = (isHost || isAdmin || viewerIsCohost) && (phase === 'pre' || phase === 'live') && !isDraft;
   const pickerOpen = inviteOpen || (askedToInvite && mayInvite);
   const closePicker = () => {
     setInviteOpen(false);
@@ -154,6 +180,19 @@ export default function SessionDetailPage() {
     enabled: !!sessionId && (isHost || isAdmin),
     meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
+  // The people who may run the event: its host and co-hosts, the pod's director or host, admins. The server has the
+  // last word (each organiser card hides itself for anyone it refuses); this only spares everyone else the requests.
+  const mayRunEvent = isHost || viewerIsCohost || isAdmin || pod?.memberRole === 'director' || pod?.memberRole === 'host';
+  const roundsEvent = !!session && liveKindOf(resolveEventFormat(session)) === 'rounds';
+  // Part 2 Task 11: the event's matching groups, read once for the groups card and the participant list's group chips.
+  const groupsView = useEventGroups(sessionId ?? '', !!sessionId && mayRunEvent && roundsEvent);
+  // Part 3 Task 10: the event's extra matching questions. The server shapes the read per viewer: the viewer's own answers
+  // ("Your answers"), and for organisers everyone's (the participant list's answer chips). Refused reads draw nothing.
+  const questionsView = useEventQuestions(sessionId ?? '', !!sessionId && !!user && roundsEvent);
+  // "Before you join": opened when registering is refused for a group or a required answer (EVENT_GROUP_REQUIRED,
+  // EVENT_ANSWERS_REQUIRED), then Register again with what the sheet gave.
+  const [answersSheetOpen, setAnswersSheetOpen] = useState(false);
+
   // The server's "All" counts pending invites as well. They are listed on the Invitations card now, not below.
   const participantTotal: number | undefined = participantCounts
     ? participantCounts.total - (participantCounts.pendingInvites ?? 0)
@@ -165,7 +204,16 @@ export default function SessionDetailPage() {
   const isRegistered = (participants || []).some((p: any) => p.userId === user?.id && p.status !== 'removed');
   // T11 (1 Nov 2026), D11: what this viewer may do comes from the server (session.access), never from the pod.
   const access: EventAccess | undefined = session?.access;
-  const [autoRegistering, setAutoRegistering] = useState(false);
+  // Part 3 Task 8: the event cannot take this viewer now: it is full, or they are already on its waiting list.
+  const cannotTakeMe = !!access?.waitlist && (access.waitlist.full || access.waitlist.position !== null);
+  // Review I1 (11 Nov 2026): whose registration is on its way, by event. The route reuses this page from one event to
+  // the next, so a registration still on its way for the last event never holds this one's Register busy, nor keeps
+  // this event's own registration from being sent.
+  const [autoRegisteringFor, setAutoRegisteringFor] = useState<string | null>(null);
+  const autoRegistering = !!sessionId && autoRegisteringFor === sessionId;
+  // The event on screen now, for an answer that comes back after the page has moved on.
+  const pageEventRef = useRef(sessionId);
+  pageEventRef.current = sessionId;
   // Bug 13 (April 19) — block the auto-register useEffect after an EXPLICIT
   // unregister click. Without this, unregister → isRegistered flips false →
   // useEffect fires → re-registers automatically (the visible "flash" of
@@ -182,63 +230,102 @@ export default function SessionDetailPage() {
   // Anything else (private pod, event ended, etc.) gets a visible toast — we
   // used to swallow these errors which made the user think the auto-register
   // worked when it didn't, then the Register button appeared mysteriously.
-  useEffect(() => {
-    if (explicitlyUnregisteredRef.current) return;
+  // Part 3 Task 10: a refusal for a group or a required answer opens "Before you join" instead of a toast.
+  //
+  // Final preview fix (11 Nov 2026): whether the page is about to register this member is one rule, read by the effect
+  // and by Register, which shows it is working from the first frame until that registration has answered (and, when it
+  // took, until the list reads Registered). Register used to stay pressable meanwhile: a press sent a second request,
+  // the sheet the first refusal opened covered the button under the press, and the second refusal then said "Answer the
+  // questions first." to someone who had not been asked anything yet.
+  const autoRegisterDue = (): boolean => {
+    if (explicitlyUnregisteredRef.current) return false;
     // An event that has ended or was cancelled takes nobody (the server refuses, and the refusal showed as an error
     // to anyone opening it who had not registered: a pod member reading the chat, someone following a link).
-    if (phase === 'done' || phase === 'cancelled') return;
+    if (phase === 'done' || phase === 'cancelled') return false;
     // T11 (L17): opening the page registers only the event's audience and its invitees. A server before T11 sends
     // no access block, and the page registers as it always did.
-    if (access && !access.autoRegister) return;
+    if (access && !access.autoRegister) return false;
     // T13 fix round 1: at most one try per event, whatever answers next (a failure, a refetch of the list).
-    if (autoRegisterTriedRef.current === sessionId) return;
-    if (session && user && participants && !isRegistered && !autoRegistering && sessionId) {
-      autoRegisterTriedRef.current = sessionId;
-      setAutoRegistering(true);
-      api.post(`/sessions/${sessionId}/register`).then(() => {
-        qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
-      }).catch(err => {
+    if (autoRegisterTriedRef.current === sessionId) return false;
+    return !!(session && user && participants && !isRegistered && sessionId);
+  };
+  const pageRegistering = autoRegistering || autoRegisterDue();
+  useEffect(() => {
+    if (autoRegistering || !autoRegisterDue()) return;
+    const tried = sessionId ?? null;
+    autoRegisterTriedRef.current = tried;
+    setAutoRegisteringFor(tried);
+    // Register stays busy until the list it invalidates has been read again (it then says Registered).
+    api.post(`/sessions/${sessionId}/register`).then(() => qc.invalidateQueries({ queryKey: ['session-participants', sessionId] }))
+      .catch(err => {
+        // The page has moved to another event meanwhile: this refusal is not about the event on screen.
+        if (pageEventRef.current !== tried) return;
         const code = err?.response?.data?.error?.code;
         if (code === 'SESSION_ALREADY_REGISTERED') return; // idempotent — silent
+        if (code === 'SESSION_FULL') return void qc.invalidateQueries({ queryKey: ['session', sessionId] }); // Part 3: offers the line
+        if (needsAnswers(err)) return void setAnswersSheetOpen(true);
         const msg = err?.response?.data?.error?.message;
         if (msg) addToast(msg, 'error');
       })
-        .finally(() => setAutoRegistering(false));
-    }
+      .finally(() => setAutoRegisteringFor((now) => (now === tried ? null : now)));
     // T13 fix round 1: the participant list and the server's autoRegister are deps too. The event and the list load in
     // parallel, and when the list came second the effect never ran again, so a circle member (whose list read is a little
-    // slower) was left looking at Register.
-  }, [session?.id, user?.id, isRegistered, !!participants, access?.autoRegister, phase]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const deleteMutation = useMutation({
-    mutationFn: () => api.delete(`/sessions/${sessionId}`),
-    onSuccess: () => {
-      addToast('Event deleted', 'success');
-      navigate('/sessions');
-    },
-    onError: () => addToast('Failed to delete event', 'error'),
-  });
+    // slower) was left looking at Register. Review I1: and whether this event's registration is on its way, so the
+    // effect runs again the moment one ends (a page that moved on while the last event's was still out).
+  }, [session?.id, user?.id, isRegistered, !!participants, access?.autoRegister, phase, autoRegistering]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openEdit = () => setEditOpen(true);
 
+  // Part 3 Task 8: one press at a time. A double press (or a double tap) sends one request, so it joins the line once;
+  // the server would give the same number again anyway.
+  const registerInFlight = useRef(false);
   const registerMutation = useMutation({
-    mutationFn: () => api.post(`/sessions/${sessionId}/register`),
-    onSuccess: () => {
+    // A full event (the server's access.waitlist.full) asks for the waiting list: 202 and the person's number. Part 3
+    // Task 10: a retry from "Before you join" carries the group and the answers it gave (`choices`).
+    mutationFn: (choices?: GivenAnswers) => api.post(`/sessions/${sessionId}/register`, registerBodyWith(registerBody(access), choices)),
+    onSuccess: (res) => {
+      setAnswersSheetOpen(false);
       qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
       qc.invalidateQueries({ queryKey: ['session', sessionId] });
-      addToast('Registered for event!', 'success');
+      const position = waitlistedPosition(res);
+      if (position !== null) addToast(WAITLIST_COPY.joinedToast(position), 'info');
+      else addToast('Registered for event!', 'success');
     },
     onError: (err: any) => {
       const errCode = err?.response?.data?.error?.code;
+      // A sheet left open over a page that is now Registered or full would be stale: these two answers close it.
+      if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'SESSION_FULL') setAnswersSheetOpen(false);
       if (errCode === 'SESSION_ALREADY_REGISTERED') {
         addToast('You\'re already registered for this event!', 'info');
         qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
+      } else if (errCode === 'SESSION_FULL') {
+        // It filled while the page was open: read it again, and the page offers the waiting list.
+        qc.invalidateQueries({ queryKey: ['session', sessionId] });
+        addToast(err?.response?.data?.error?.message || WAITLIST_COPY.full, 'info');
+      } else if (needsAnswers(err)) {
+        // The event needs a group or an answer first: the sheet asks for it. Refused again with it open, it says why.
+        if (answersSheetOpen) addToast(err?.response?.data?.error?.message || 'Answer the questions first.', 'error');
+        setAnswersSheetOpen(true);
       } else {
         const msg = err?.response?.data?.error?.message || 'Failed to register';
         addToast(msg, 'error');
       }
     },
+    onSettled: () => {
+      registerInFlight.current = false;
+    },
   });
+  const register = () => {
+    if (registerInFlight.current) return;
+    registerInFlight.current = true;
+    registerMutation.mutate(undefined);
+  };
+  // "Before you join" registers again with the group and answers it gave (one press at a time, as Register).
+  const registerWithAnswers = (given: GivenAnswers): Promise<unknown> => {
+    if (registerInFlight.current) return Promise.resolve();
+    registerInFlight.current = true;
+    return registerMutation.mutateAsync(given);
+  };
 
   // The copy names its type (D9): sent as config only, the server read it from config.eventType, which a row from
   // before 26 Oct may name wrongly.
@@ -252,6 +339,8 @@ export default function SessionDetailPage() {
       ...(session?.visibility ? { visibility: session.visibility } : {}),
       format: session ? resolveEventFormat(session) : undefined,
       config: session?.config,
+      // Part 3: and its zone, so the copy's times read on the same clock (the image is not copied).
+      timezone: session?.timezone,
       // T13: and the circle it is for (the server lets only the circle's managers name it).
       ...duplicateCircleField(session ?? {}),
     }),
@@ -331,10 +420,20 @@ export default function SessionDetailPage() {
   const hasRoom = liveKindOf(eventFormat) !== 'none';
   const place = eventPlace(eventFormat, session.config);
   const facts = eventFacts(eventFormat, session.config);
-  // The people who may run the event: its host and co-hosts, the pod's director or host, admins. The server has the
-  // last word (the panel hides itself for anyone else); this only spares everyone else a loading card.
-  const mayRunEvent = isHost || viewerIsCohost || isAdmin || pod?.memberRole === 'director' || pod?.memberRole === 'host';
+  // The people tile counts the attendee list, which a person still waiting cannot read.
+  const tiles = facts.length + (waitingInLine ? 0 : 1);
+  const groupsData = groupsView.data;
+  // The people who run the event are not matched, so they have no group to change.
+  const isCohostOrHost = (p: { userId: string; isCohost?: boolean }) => !!p.isCohost || p.userId === session.hostUserId;
   const showAfterEventTools = phase === 'done' && mayRunEvent;
+  // The people who are matched (not the host or a co-host) read and change their own answers until the event is live.
+  const showMyAnswers = !isHost && !viewerIsCohost && phase === 'pre' && (isRegistered || waitingInLine || access?.myRequest === 'pending');
+  // The words of the press the sheet repeats: the same as the page's own Register button.
+  const joinLabel = access?.waitlist?.full ? WAITLIST_COPY.join : session.status === 'scheduled' ? 'Register' : 'Join Late';
+  // The matching board (Part 2 Task 13): the people the server lets plan a rounds event's meetings (canActAsHost: the
+  // host, a co-host, the pod's director, a super admin), before it starts and while it runs.
+  const mayPlanMeetings = isRoundsEvent && (phase === 'pre' || phase === 'live')
+    && (isHost || viewerIsCohost || user?.role === 'super_admin' || pod?.memberRole === 'director');
   // A video meeting has no rounds to recap: its recap is who took part, further down this page.
   const openRecap = () => {
     if (isRoundsEvent) navigate(`/sessions/${sessionId}/recap`);
@@ -362,9 +461,11 @@ export default function SessionDetailPage() {
 
       {/* Session Info */}
       <Card className="animate-fade-in-up">
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <h1 className="text-2xl font-bold text-[#1a1a2e]">{session.title || 'Event'}</h1>
+        {/* Part 3: the event's image; its host and platform admins (the server's rule) add, change or remove it. */}
+        <EventImageHeader sessionId={session.id} src={session.imageUrl} title={session.title || 'Event'} canChange={isHost || isAdmin} />
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold text-[#1a1a2e] [overflow-wrap:anywhere]">{session.title || 'Event'}</h1>
             {session.description && <p className="text-gray-500 mt-1 text-sm">{session.description}</p>}
             {/* T13: an event for a whole circle says so, and links the circle. */}
             {session.circle && (
@@ -372,9 +473,10 @@ export default function SessionDetailPage() {
                 <CircleDashed className="h-4 w-4 shrink-0" /> {eventCircleLine(session.circle.name)}
               </Link>
             )}
-            <p className="text-gray-400 mt-2 text-sm flex items-center gap-1.5">
-              <Calendar className="h-4 w-4" />
-              {session.scheduledAt ? `${formatDateTime(session.scheduledAt)} ${LOCAL_TIME_LABEL}` : 'No date set'}
+            {/* On the event's own clock, its zone named, for everyone wherever they are (Part 3, K1). */}
+            <p className="text-gray-500 mt-2 text-sm flex items-center gap-1.5" data-testid="event-when">
+              <Calendar className="h-4 w-4 shrink-0" />
+              {eventWhen(session.scheduledAt, session.timezone, 'long') ?? 'No date set'}
             </p>
             <p className="text-gray-500 mt-1 text-sm flex items-center gap-1.5">
               <Radio className="h-4 w-4 shrink-0" />
@@ -383,19 +485,34 @@ export default function SessionDetailPage() {
               </span>
             </p>
           </div>
-          <Badge variant={statusVariant}>{sessionStatusLabel(session.status)}</Badge>
+          {/* Part 2 Task 11: the people running the event read where it stands (Draft … Cancelled); members as before. */}
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            {mayRunEvent && isEventLifecycleChip(session.lifecycle) ? (
+              <Badge variant={lifecycleColor(session.lifecycle)} className="shrink-0">{lifecycleLabel(session.lifecycle)}</Badge>
+            ) : (
+              <Badge variant={statusVariant} className="shrink-0">{sessionStatusLabel(session.status)}</Badge>
+            )}
+            {/* Part 3 Task 8: every place is taken. Attendees are told only this, never a count. */}
+            {access?.waitlist?.full && (phase === 'pre' || phase === 'live') && (
+              <span data-testid="event-full-chip">
+                <Badge variant="warning" className="shrink-0">{WAITLIST_COPY.fullChip}</Badge>
+              </span>
+            )}
+          </div>
         </div>
         {/* The place spans the card, under the title and the status, so a long address has room on a phone. */}
         {place && <EventPlace place={place} over={phase === 'done'} />}
 
-        <div className={`grid ${facts.length + 1 === 3 ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'} gap-4 mt-4 pt-4 border-t border-gray-200`}>
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-1 text-gray-500 mb-1">
-              <Users className="h-4 w-4" />
+        <div className={`grid ${tiles === 3 ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'} gap-4 mt-4 pt-4 border-t border-gray-200`}>
+          {!waitingInLine && (
+            <div className="text-center">
+              <div className="flex items-center justify-center gap-1 text-gray-500 mb-1">
+                <Users className="h-4 w-4" />
+              </div>
+              <p className="text-lg font-bold text-[#1a1a2e]">{(participants || []).length}</p>
+              <p className="text-xs text-gray-400">{(participants || []).length === 1 ? 'participant' : 'participants'}</p>
             </div>
-            <p className="text-lg font-bold text-[#1a1a2e]">{(participants || []).length}</p>
-            <p className="text-xs text-gray-400">{(participants || []).length === 1 ? 'participant' : 'participants'}</p>
-          </div>
+          )}
           {facts.map((fact) => {
             const Icon = FACT_ICONS[fact.key] ?? Settings;
             return (
@@ -412,7 +529,7 @@ export default function SessionDetailPage() {
       </Card>
 
       {/* Late-join warning */}
-      {(session.status === 'lobby_open' || session.status === 'round_active' || session.status === 'round_rating' || session.status === 'round_transition') && !isRegistered && (
+      {(session.status === 'lobby_open' || session.status === 'round_active' || session.status === 'round_rating' || session.status === 'round_transition') && !isRegistered && !cannotTakeMe && (
         <div className="flex items-start gap-3 rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3 animate-fade-in-up stagger-1">
           <AlertTriangle className="h-5 w-5 text-amber-400 flex-shrink-0 mt-0.5" />
           <div>
@@ -429,149 +546,162 @@ export default function SessionDetailPage() {
         </div>
       )}
 
-      {/* Actions — status-driven primary + overflow menu (April 17 item #10) */}
-      <div className="flex flex-col gap-3 animate-fade-in-up stagger-1">
-        {/* Primary Actions */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Non-host participant flows: Register / Join Late / Pending-invite notice */}
-          {!isHost && sessionStatusPhase(session.status) !== 'done' && sessionStatusPhase(session.status) !== 'cancelled' && !isRegistered && (
-            <EventAccessActions
-              sessionId={sessionId!}
-              access={access}
-              registerLabel={session.status === 'scheduled' ? 'Register' : 'Join Late'}
-              onRegister={() => registerMutation.mutate()}
-              registering={registerMutation.isPending}
-              circleName={session.circle?.name}
-            />
-          )}
-          {!isHost && isRegistered && sessionStatusPhase(session.status) === 'live' && (
-            <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
+      {/* Actions: ONE bar for the event (11 Nov 2026, the owner's "???" over the gap). The primary actions first (Go Live,
+          Join, Register or the waiting list, then Add to calendar), then the organiser's tools in the same row, every one
+          left-aligned, 44px tall, one gap apart. Nothing is pushed to the right: on a phone they wrap line by line. */}
+      <div data-testid="event-actions" className="flex flex-wrap items-center gap-3 animate-fade-in-up stagger-1">
+        {/* Non-host participant flows: Register / Join Late / Pending-invite notice */}
+        {!isHost && sessionStatusPhase(session.status) !== 'done' && sessionStatusPhase(session.status) !== 'cancelled' && !isRegistered && (
+          <EventAccessActions
+            sessionId={sessionId!}
+            access={access}
+            registerLabel={session.status === 'scheduled' ? 'Register' : 'Join Late'}
+            onRegister={register}
+            registering={registerMutation.isPending || pageRegistering}
+            circleName={session.circle?.name}
+          />
+        )}
+        {!isHost && isRegistered && sessionStatusPhase(session.status) === 'live' && (
+          <div data-testid="event-registered" className="flex min-h-[44px] items-center gap-2 px-4 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
+            <CheckCircle className="h-4 w-4" /> Registered
+          </div>
+        )}
+        {!isHost && isRegistered && sessionStatusPhase(session.status) === 'pre' && (
+          <>
+            <div data-testid="event-registered" className="flex min-h-[44px] items-center gap-2 px-4 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
               <CheckCircle className="h-4 w-4" /> Registered
             </div>
-          )}
-          {!isHost && isRegistered && sessionStatusPhase(session.status) === 'pre' && (
-            <>
-              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
-                <CheckCircle className="h-4 w-4" /> Registered
-              </div>
-              <Button variant="ghost" onClick={async () => {
-                if (!(await ask({ title: 'Unregister from this event?', body: 'To come back you register again, or ask for a new invite.', confirmLabel: 'Unregister', tone: 'danger' }))) return;
-                unregisterMutation.mutate();
-              }} isLoading={unregisterMutation.isPending}>
-                <UserMinus className="h-4 w-4 mr-2" /> Unregister
-              </Button>
-            </>
-          )}
+            <Button variant="ghost" onClick={async () => {
+              if (!(await ask({ title: 'Unregister from this event?', body: 'To come back you register again, or ask for a new invite.', confirmLabel: 'Unregister', tone: 'danger' }))) return;
+              unregisterMutation.mutate();
+            }} isLoading={unregisterMutation.isPending}>
+              <UserMinus className="h-4 w-4 mr-2" /> Unregister
+            </Button>
+          </>
+        )}
 
-          {/* Status-driven primary button:
-              pre  -> Enter Event   (host Go Live / participant Enter Event)
-              live -> Enter Live Event
-              done -> View Recap
-           */}
-          {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'pre' && (
-            <Button
-              variant="primary"
-              onClick={() => navigate(`/session/${sessionId}/live`)}
-              className="btn-glow"
-            >
-              <Play className="h-4 w-4 mr-2" />
-              {isHost ? 'Go Live' : 'Enter Event'}
-            </Button>
-          )}
-          {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'live' && (
-            <Button
-              variant="primary"
-              onClick={() => navigate(`/session/${sessionId}/live`)}
-              className="btn-glow"
-            >
-              <Play className="h-4 w-4 mr-2" /> Enter Live Event
-            </Button>
-          )}
-          {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). An
-              in-person event carries its place as where it is (30 Oct 2026, T12). The
-              entry links back to this page on this site. */}
-          {session.status === 'scheduled' && session.scheduledAt && (
-            <AddToCalendar
-              entry={eventEntry({
-                title: session.title || 'Event',
-                startAt: session.scheduledAt,
-                durationMin: eventDurationMinutes(eventFormat, session.config),
-                pageUrl: `${window.location.origin}/sessions/${session.id}`,
-                place,
-              })}
-              file={async () => icsFile(eventEntry({
-                title: session.title || 'Event',
-                startAt: session.scheduledAt,
-                durationMin: eventDurationMinutes(eventFormat, session.config),
-                pageUrl: `${window.location.origin}/sessions/${session.id}`,
-                place,
-              }), `event-${session.id}`)}
-              fileName="reason-event.ics"
-              className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 inline-flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
-            />
-          )}
-          {phase === 'done' && (
-            <Button variant="primary" className="btn-glow" onClick={openRecap}>
-              {isRoundsEvent ? 'View recap' : 'Who took part'}
-            </Button>
-          )}
+        {/* Status-driven primary button:
+            pre  -> Enter Event   (host Go Live / participant Enter Event)
+            live -> Enter Live Event
+            done -> View Recap
+         */}
+        {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'pre' && !isDraft && (
+          <Button
+            variant="primary"
+            onClick={() => navigate(`/session/${sessionId}/live`)}
+            className="btn-glow"
+          >
+            <Play className="h-4 w-4 mr-2" />
+            {isHost ? 'Go Live' : 'Enter Event'}
+          </Button>
+        )}
+        {hasRoom && (isRegistered || isHost) && sessionStatusPhase(session.status) === 'live' && (
+          <Button
+            variant="primary"
+            onClick={() => navigate(`/session/${sessionId}/live`)}
+            className="btn-glow"
+          >
+            <Play className="h-4 w-4 mr-2" /> Enter Live Event
+          </Button>
+        )}
+        {/* A scheduled event in any calendar: Google, Outlook.com or a file this page builds (1 Nov 2026, T7). An
+            in-person event carries its place as where it is (30 Oct 2026, T12). The
+            entry links back to this page on this site. */}
+        {session.status === 'scheduled' && session.scheduledAt && !isDraft && (
+          <AddToCalendar
+            entry={eventEntry({
+              title: session.title || 'Event',
+              startAt: session.scheduledAt,
+              durationMin: eventDurationMinutes(eventFormat, session.config),
+              pageUrl: `${window.location.origin}/sessions/${session.id}`,
+              place,
+            })}
+            file={async () => icsFile(eventEntry({
+              title: session.title || 'Event',
+              startAt: session.scheduledAt,
+              durationMin: eventDurationMinutes(eventFormat, session.config),
+              pageUrl: `${window.location.origin}/sessions/${session.id}`,
+              place,
+            }), `event-${session.id}`)}
+            fileName="reason-event.ics"
+            className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 inline-flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+          />
+        )}
+        {phase === 'done' && (
+          <Button variant="primary" className="btn-glow" onClick={openRecap}>
+            {isRoundsEvent ? 'View recap' : 'Who took part'}
+          </Button>
+        )}
 
-          {/* Overflow menu for host/admin. Host Controls button intentionally removed —
-              live host controls live inside the /live page once the host clicks Enter Live Event.
-              Co-hosts send invites too (26 Oct 2026), so they get the invite button and nothing else here. */}
-          {(isHost || isAdmin || mayInvite) && sessionStatusPhase(session.status) !== 'cancelled' && (
-            <div className="ml-auto flex items-center gap-2 flex-wrap">
-              {mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}
-              {mayInvite && (
-                // Labelled on every width and 44px tall: on a phone it was a 36px envelope (25 Oct walkthrough).
+        {/* The organiser's tools, in the same row after the primary actions. Host Controls button intentionally
+            removed: live host controls live inside the /live page once the host clicks Enter Live Event.
+            Co-hosts send invites too (26 Oct 2026), so they get the invite button and nothing else here. */}
+        {(isHost || isAdmin || mayInvite || mayPlanMeetings) && sessionStatusPhase(session.status) !== 'cancelled' && (
+          <>
+            {mayPlanMeetings && (
+              <Link
+                to={`/sessions/${sessionId}/board`}
+                data-testid="matching-board-link"
+                className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+              >
+                <LayoutGrid className="h-4 w-4" /> Matching board
+              </Link>
+            )}
+            {mayInvite && (
+              // Labelled on every width and 44px tall: on a phone it was a 36px envelope (25 Oct walkthrough).
+              <button
+                type="button"
+                onClick={() => setInviteOpen(true)}
+                className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+              >
+                <Mail className="h-4 w-4" /> Invite people
+              </button>
+            )}
+            {(isHost || isAdmin) && (
+              <>
                 <button
                   type="button"
-                  onClick={() => setInviteOpen(true)}
-                  className="min-h-[44px] px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-2 text-sm font-semibold text-[#1a1a2e] transition-colors"
+                  onClick={() => duplicateMutation.mutate()}
+                  disabled={duplicateMutation.isPending}
+                  className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors disabled:opacity-60"
+                  title="Duplicate this event"
                 >
-                  <Mail className="h-4 w-4" /> Invite people
+                  <CopyPlus className="h-4 w-4" /> <span className="hidden sm:inline">Copy</span>
                 </button>
-              )}
-              {(isHost || isAdmin) && (
-                <>
+                {sessionStatusPhase(session.status) === 'pre' && (
                   <button
                     type="button"
-                    onClick={() => duplicateMutation.mutate()}
-                    disabled={duplicateMutation.isPending}
-                    className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors disabled:opacity-60"
-                    title="Duplicate this event"
+                    onClick={() => openEdit()}
+                    className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                    title="Edit event"
                   >
-                    <CopyPlus className="h-4 w-4" /> <span className="hidden sm:inline">Copy</span>
+                    <Pencil className="h-4 w-4" /> <span className="hidden sm:inline">Edit</span>
                   </button>
-                  {sessionStatusPhase(session.status) === 'pre' && (
-                    <button
-                      type="button"
-                      onClick={() => openEdit()}
-                      className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
-                      title="Edit event"
-                    >
-                      <Pencil className="h-4 w-4" /> <span className="hidden sm:inline">Edit</span>
-                    </button>
-                  )}
-                  {sessionStatusPhase(session.status) !== 'live' && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (await ask({ title: 'Delete this event?', body: 'This cannot be undone.', confirmLabel: 'Delete event', tone: 'danger' })) deleteMutation.mutate();
-                      }}
-                      disabled={deleteMutation.isPending}
-                      className="min-h-[44px] min-w-[44px] px-3 rounded-xl border border-red-200 bg-white hover:bg-red-50 flex items-center justify-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 transition-colors disabled:opacity-60"
-                      title="Delete event"
-                    >
-                      <Trash2 className="h-4 w-4" /> <span className="hidden sm:inline">Delete</span>
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-        </div>
+                )}
+                {/* Part 2 Task 11: no legacy Delete here. Cancel event (with a notice to everyone registered), Archive and
+                    Delete permanently are in the Event status card below, as the server's allowedActions say. */}
+              </>
+            )}
+            {/* End event last among the tools (the owner's order: Matching board, Invite people, Copy, Edit, End event). */}
+            {mayEndForEveryone && sessionId && <EndEventButton sessionId={sessionId} />}
+          </>
+        )}
       </div>
+
+      {/* Part 3 Task 10: "Your answers", for someone with a place, a request or a number in the line, before the event. */}
+      {showMyAnswers && sessionId && <MyAnswersRow sessionId={sessionId} view={questionsView.data} />}
+
+      {/* Part 2 Task 11: the organiser's settings: status and lifecycle steps, the call link, admission, groups. */}
+      {sessionId && (
+        <OrganiserSettings
+          event={{ ...session, id: sessionId }}
+          phase={phase}
+          mayRunEvent={mayRunEvent}
+          isRoundsEvent={isRoundsEvent}
+          mayChooseOverride={isHost || user?.role === 'super_admin'}
+          groups={groupsView}
+        />
+      )}
 
       {/* After the event, for the people who run it: message everyone who took part, or start a group chat with them. */}
       {showAfterEventTools && sessionId && (
@@ -581,8 +711,16 @@ export default function SessionDetailPage() {
         </div>
       )}
 
+      {/* The event report (Part 3 Task 9): the figures, the three spreadsheets and the full report, for the same people.
+          It draws nothing for anyone the server refuses. */}
+      {showAfterEventTools && sessionId && (
+        <div className="animate-fade-in-up stagger-1">
+          <EventReportCard sessionId={sessionId} />
+        </div>
+      )}
+
       {/* The event's chat: kept with it once it has ended; inside the live event while it runs. */}
-      {sessionId && (phase === 'done' || phase === 'live') && (
+      {sessionId && (phase === 'done' || phase === 'live') && !waitingInLine && (
         <div className="animate-fade-in-up stagger-2">
           <EventChatHistory sessionId={sessionId} live={phase === 'live'} canEnterLive={isRegistered || isHost} />
         </div>
@@ -595,6 +733,12 @@ export default function SessionDetailPage() {
         <EventJoinRequestsCard sessionId={sessionId} focus={searchParams.get('requests') === '1'} />
       )}
 
+      {/* Part 3 Task 8: a full event's waiting list, for the people who run it (the card draws nothing for anyone the
+          server refuses, and nothing while the event has room and nobody waits). */}
+      {mayRunEvent && (phase === 'pre' || phase === 'live') && sessionId && (
+        <WaitlistCard sessionId={sessionId} full={!!access?.waitlist?.full} />
+      )}
+
       {mayInvite && sessionId && (
         <InviteStatusList
           target={{ type: 'session', sessionId, podId: session.podId ?? null }}
@@ -604,7 +748,15 @@ export default function SessionDetailPage() {
         />
       )}
 
+      {/* Part 3 Task 8: someone still waiting reads who is coming once a place is theirs. */}
+      {waitingInLine && (
+        <Card data-testid="waitlist-people-later" className="animate-fade-in-up stagger-2">
+          <p className="text-gray-500 text-sm text-center py-2">{WAITLIST_COPY.peopleLater}</p>
+        </Card>
+      )}
+
       {/* Participants */}
+      {!waitingInLine && (
       <div id="participants" className="scroll-mt-4 animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
           <Users className="h-5 w-5 text-rsn-red" /> Participants ({participantTotal ?? (participants || []).filter((p: any) => p.status !== 'removed' && p.userId !== session.hostUserId).length})
@@ -686,7 +838,7 @@ export default function SessionDetailPage() {
                 : p.status || 'Member';
               return (
                 <Card key={p.userId || p.id} className="!p-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                     <Link to={personHref(p.userId || p.id, 'Events')} className="flex min-h-[44px] items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
                       <Avatar src={p.avatarUrl} name={p.displayName || p.email || 'User'} size="sm" />
                       <div className="min-w-0">
@@ -696,7 +848,21 @@ export default function SessionDetailPage() {
                     </Link>
                     {/* S16 — pre-event co-host management on the event page.
                         Same semantics as the live drawer's shield toggle. */}
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
+                      {/* Part 2 Task 11: the person's matching group, and Change group before the event (organisers). */}
+                      {sessionId && groupsData && groupsData.groups.length > 0 && groupsData.members && p.userId && (
+                        <ParticipantGroupControl
+                          sessionId={sessionId}
+                          userId={p.userId}
+                          name={p.displayName || 'This person'}
+                          groups={groupsData.groups}
+                          mine={groupsData.members[p.userId] ?? []}
+                          allowMultiple={groupsData.allowMultiple}
+                          canChange={phase === 'pre' && !isCohostOrHost(p)}
+                        />
+                      )}
+                      {/* Part 3 Task 10: their answers to the extra matching questions (organisers only: nobody else reads them). */}
+                      {p.userId && <AnswerChips view={questionsView.data} userId={p.userId} />}
                       {p.isCohost && (
                         <Badge variant="info" className="text-xs flex items-center gap-1">
                           <ShieldCheck className="h-3 w-3" /> Co-Host
@@ -723,6 +889,10 @@ export default function SessionDetailPage() {
           </div>
         )}
       </div>
+      )}
+
+      {/* Part 2 Task 11: who did what to this event, for the people running it (the server refuses anyone else). */}
+      {mayRunEvent && sessionId && <EventHistoryPanel sessionId={sessionId} />}
 
       {/* Invite people: the invite sheet (the event's pod, your connections, by email, a link) */}
       {sessionId && (
@@ -732,6 +902,19 @@ export default function SessionDetailPage() {
           target={{ type: 'session', sessionId, podId: session.podId ?? null }}
           podName={pod?.name}
           linkCap={session.config?.maxParticipants}
+        />
+      )}
+
+      {/* Part 3 Task 10: "Before you join": the group and the extra matching questions, then Register again with them. */}
+      {sessionId && (
+        <MyEventAnswersSheet
+          sessionId={sessionId}
+          open={answersSheetOpen}
+          onClose={() => setAnswersSheetOpen(false)}
+          mode="join"
+          submitLabel={joinLabel}
+          busy={registerMutation.isPending}
+          onJoin={registerWithAnswers}
         />
       )}
 

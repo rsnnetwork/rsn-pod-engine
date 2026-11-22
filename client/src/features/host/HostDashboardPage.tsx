@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
-import { formatDateTime } from '@/lib/utils';
+import { formatEventDateTime } from '@/lib/utils';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 
@@ -113,7 +113,7 @@ export default function HostDashboardPage() {
         </h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
           <div><span className="text-gray-400">Title:</span> <span className="text-gray-800 ml-1">{session.title || 'Open'}</span></div>
-          <div><span className="text-gray-400">Scheduled:</span> <span className="text-gray-800 ml-1">{formatDateTime(session.scheduledAt)}</span></div>
+          <div><span className="text-gray-400">Scheduled:</span> <span className="text-gray-800 ml-1">{formatEventDateTime(session.scheduledAt, session.timezone)}</span></div>
           <div><span className="text-gray-400">Participants:</span> <span className="text-gray-800 ml-1">{(participants || []).length}</span></div>
           <div><span className="text-gray-400">Rounds:</span> <span className="text-gray-800 ml-1">{session.config?.numberOfRounds || 5}</span></div>
           <div><span className="text-gray-400">Round Duration:</span> <span className="text-gray-800 ml-1">{Math.floor((session.config?.roundDurationSeconds || 480) / 60)}m</span></div>

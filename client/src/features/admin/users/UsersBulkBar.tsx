@@ -1,12 +1,17 @@
 // client/src/features/admin/users/UsersBulkBar.tsx
 // What the selected rows can have done to them together: on Active a role, Suspend or Ban; on the other tabs
 // Reactivate; on every tab the Premium badge, given or taken off (21 Nov 2026, display only). Each asks first
-// (ConfirmDialog, busy while the server answers) and says how it went in a toast.
+// (ConfirmDialog, busy while the server answers) and says how it went in a toast. A role change that grants or
+// removes admin also needs "Confirm it's you" (ReauthDialog, over the busy question).
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
+import { touchesAdminRole } from '@rsn/shared';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import ReauthDialog from '@/features/settings/ReauthDialog';
+import { useReauth } from '@/features/settings/useReauth';
+import { isReauthCancelled, withProof } from '@/features/settings/reauth';
 import { ROLE_LABEL, bulkCopy, failureText, roleChoices, type AccountStatus } from './user-status';
 import { useProfileBadge } from './useProfileBadge';
 
@@ -27,14 +32,18 @@ export default function UsersBulkBar({ selected, tab, isSuperAdmin, onDone, onCl
   const count = selected.length;
   const people = count === 1 ? '1 person' : `${count} people`;
 
+  // A role change to admin or super_admin asks "Confirm it's you" first; one the server answers REAUTH_REQUIRED (an admin
+  // among the people selected) asks then. Either way the change is sent again with the proof in its body (Part 3 Task 7).
+  const reauth = useReauth();
   const mutation = useMutation({
     mutationFn: ({ action, role }: { action: BulkAction; role?: string }) =>
-      api.post('/admin/users/bulk-action', { userIds: selected, action, value: role }),
+      reauth.withReauth('admin_role', action === 'change_role' && touchesAdminRole([], role), (reauthToken) =>
+        api.post('/admin/users/bulk-action', withProof({ userIds: selected, action, value: role }, reauthToken))),
     onSuccess: (_res, { action, role }) => {
       addToast(action === 'change_role' ? `${people} are now ${ROLE_LABEL[role ?? ''] ?? role}.` : bulkCopy(action, count).done, 'success');
       onDone();
     },
-    onError: (err) => addToast(failureText(err), 'error'),
+    onError: (err) => { if (!isReauthCancelled(err)) addToast(failureText(err), 'error'); },
     onSettled: () => {
       setAsking(null);
       void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
@@ -104,6 +113,7 @@ export default function UsersBulkBar({ selected, tab, isSuperAdmin, onDone, onCl
         onConfirm={() => { if (badgeAsk) badge.change({ userIds: selected, badge: badgeAsk.badge, name: null }); }}
         onCancel={() => setBadgeAsk(null)}
       />
+      <ReauthDialog {...reauth.dialog} />
     </div>
   );
 }

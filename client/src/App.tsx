@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { Suspense, lazy, useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { connectSocket, disconnectSocket, getSocket, reconnectSocket } from '@/lib/socket';
 import { useEntityChangedHandler } from '@/realtime/useEntityChangedHandler';
@@ -41,6 +41,8 @@ import LiveSessionPage from '@/features/live/LiveSessionPage';
 import SessionGuard from '@/features/live/SessionGuard';
 import HostDashboardPage from '@/features/host/HostDashboardPage';
 import RecapPage from '@/features/sessions/RecapPage';
+import MatchingBoardPage from '@/features/schedule/MatchingBoardPage';
+import { PageLoader } from '@/components/ui/Spinner';
 import MeetingDetailPage from '@/features/meetings/MeetingDetailPage';
 import MessagesPage from '@/features/messages/MessagesPage';
 import MeetPage from '@/features/messages/MeetPage';
@@ -76,6 +78,13 @@ import RequestToJoinPage from '@/features/auth/RequestToJoinPage';
 import OnboardingFlow from '@/features/onboarding/OnboardingFlow';
 import ToastContainer from '@/components/ui/Toast';
 import CallLayer from '@/features/calls/CallLayer';
+import { CALL_LINK_BASE_PATH, EVENT_LINK_BASE_PATH } from '@rsn/shared';
+import CallLinkPage from '@/features/call/CallLinkPage';
+import GuestHome from '@/features/call/GuestHome';
+import { GUEST_HOME_PATH } from '@/features/call/guest-routes';
+
+// The organisers' event report (Part 3 Task 9): a page few people open, so it loads only when it is.
+const EventReportPage = lazy(() => import('@/features/sessions/report/EventReportPage'));
 
 export default function App() {
   const { checkSession } = useAuthStore();
@@ -244,6 +253,12 @@ export default function App() {
       <Route path="/request-to-join" element={<RequestToJoinPage />} />
       <Route path="/auth/verify" element={<VerifyPage />} />
       <Route path="/invite/:code" element={<InviteAcceptPage />} />
+      {/* An event's call link (Part 2, Task 12): anyone holding it, signed in or not, and never platform
+          onboarding on the way in. The path is the shared constant's (Stefan still has to confirm the naming). */}
+      <Route path={`${CALL_LINK_BASE_PATH}/:code`} element={<CallLinkPage />} />
+      {/* The event link (Stefan, 11 Nov 2026): /events/<name>-<n>[-<tail>] opens the same entry; the server reads the slug
+          where it reads a code. */}
+      <Route path={`${EVENT_LINK_BASE_PATH}/:code`} element={<CallLinkPage />} />
       {/* Admin email-action page — token IS the auth, no session required. */}
       <Route path="/admin/jr/:token" element={<AdminJoinRequestActionPage />} />
       {/* A member's public profile link (Shirley pilot S6, D5): the public card only, open signed out. */}
@@ -265,6 +280,10 @@ export default function App() {
         <Route path="/sessions/new" element={<CreateSessionPage />} />
         <Route path="/sessions/:sessionId" element={<SessionDetailPage />} />
         <Route path="/sessions/:sessionId/recap" element={<RecapPage />} />
+        {/* The organisers' event report (10 Nov 2026 spec 03, Part 3 Task 9), loaded when opened. */}
+        <Route path="/sessions/:sessionId/report" element={<Suspense fallback={<PageLoader />}><EventReportPage /></Suspense>} />
+        {/* The organisers' matching board of a rounds event (10 Nov 2026 spec, Part 2 Task 13). */}
+        <Route path="/sessions/:sessionId/board" element={<MatchingBoardPage />} />
         {/* A meeting two members agreed (26 Oct 2026), under Events. */}
         <Route path="/meetings/:meetingId" element={<MeetingDetailPage />} />
         <Route path="/encounters" element={<EncounterHistoryPage />} />
@@ -290,6 +309,8 @@ export default function App() {
         <Route path="/messages/:conversationId" element={<MessagesPage />} />
         <Route path="/invites" element={<InvitesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        {/* The events someone joined from a link: an event guest's home (ReasonShell gives a guest the guest frame). */}
+        <Route path={GUEST_HOME_PATH} element={<GuestHome />} />
         {/* Every notification in one list (30 Oct 2026); the bell's foot links here. */}
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/billing" element={<BillingPage />} />

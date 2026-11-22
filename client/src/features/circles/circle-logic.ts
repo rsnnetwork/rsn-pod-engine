@@ -25,7 +25,10 @@ export interface CircleDetail extends CircleSummary {
   members: CircleMember[];
   /** S2: each pod's visibility (a server from before S2 sends none). */
   pods: Array<{ podId: string; name: string; description: string | null; visibility?: string }>;
-  upcomingEvents: Array<{ id: string; title: string; scheduledAt: string; podId: string; forCircle?: boolean }>;
+  /** Part 3: each event's zone (its time is on its clock, named) and its image, when it has one. */
+  upcomingEvents: Array<{
+    id: string; title: string; scheduledAt: string; podId: string; forCircle?: boolean; timezone?: string | null; imageUrl?: string | null;
+  }>;
   children: Array<{ id: string; name: string; memberCount: number }>;
   /** T15: the entities linked to it (a server from before T15 sends none). */
   entities?: CircleEntityLink[];

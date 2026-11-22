@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { MutationObserver } from '@tanstack/react-query';
 import { clearCache, queryClient, setCacheOwner } from '../../../../client/src/lib/queryClient';
+import { retryOnceUnlessRateLimited } from '../../../../client/src/realtime/rate-limited-reads';
 
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
 const read = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../../client/src', rel), 'utf8').replace(/\r\n/g, '\n');
@@ -27,7 +28,8 @@ afterAll(() => clearCache());
 
 describe('the one query cache the whole app reads through', () => {
   it('keeps the settings main.tsx used to build it with', () => {
-    expect(queryClient.getDefaultOptions().queries).toEqual({ staleTime: 5_000, retry: 1, refetchOnWindowFocus: true });
+    // Review I2 (11 Nov 2026): one retry as before, but never for a 429, whose re-read waits for the limit's window.
+    expect(queryClient.getDefaultOptions().queries).toEqual({ staleTime: 5_000, retry: retryOnceUnlessRateLimited, refetchOnWindowFocus: true });
   });
 });
 
