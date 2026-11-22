@@ -84,7 +84,7 @@ export function useNotificationActions(onLeave: () => void = () => undefined) {
         const status = err?.response?.status;
         // Already accepted/registered — success. The register ping normalises the membership for the navigation that
         // follows; if it errors, log but don't toast (the server already told us we're fine).
-        if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'POD_MEMBER_EXISTS' || errCode === 'INVITE_ALREADY_USED') {
+        if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'POD_MEMBER_EXISTS') {
           if (n.sessionId) {
             try { await api.post(`/sessions/${n.sessionId}/register`); }
             catch (regErr) { console.warn('register normalize after already-registered failed', regErr); }

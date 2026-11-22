@@ -20,7 +20,7 @@ function getAcceptErrorMessage(err: any): { message: string } {
     case 'INVITE_EXPIRED':
       return { message: 'This invite has expired and is no longer valid' };
     case 'INVITE_ALREADY_USED':
-      return { message: 'This invite has already been used the maximum number of times' };
+      return { message: 'This invite link has been used by as many people as it allows. Ask the organiser for a new one.' };
     case 'EVENT_ENDED':
       return { message: 'This event has already ended' };
     case 'SESSION_ALREADY_REGISTERED':
@@ -129,11 +129,9 @@ export default function InviteAcceptPage() {
       // the event" but the catch block did nothing else, leaving the user
       // stuck behind a "Try Again" button that retried the same
       // idempotent operation and got the same misleading toast.
-      if (
-        errCode === 'POD_MEMBER_EXISTS' ||
-        errCode === 'SESSION_ALREADY_REGISTERED' ||
-        errCode === 'INVITE_ALREADY_USED'
-      ) {
+      // A used-up link (INVITE_ALREADY_USED) is not "already in": since 22 Nov 2026 the server answers someone who is
+      // already in the pod or event with the codes above, so a used-up link is a real refusal and stays below.
+      if (errCode === 'POD_MEMBER_EXISTS' || errCode === 'SESSION_ALREADY_REGISTERED') {
         addToast("You're already in — taking you to the event", 'success');
         const sid = invite?.sessionId;
         await Promise.all([

@@ -283,14 +283,15 @@ describe('T0-4 — atomic invite acceptance', () => {
     // "Try Again" button that retried the same idempotent op and saw the
     // same misleading toast forever. This test pins the fix: those error
     // codes are now treated as success and trigger navigation.
-    it('catch block treats POD_MEMBER_EXISTS / SESSION_ALREADY_REGISTERED / INVITE_ALREADY_USED as success (navigates to lobby)', () => {
+    it('catch block treats POD_MEMBER_EXISTS / SESSION_ALREADY_REGISTERED as success (navigates to lobby), and a used-up link as a refusal', () => {
       const acceptFnStart = clientSrc.indexOf('const accept = useCallback');
       const acceptFnEnd = clientSrc.indexOf('  // Pre-emptive check', acceptFnStart);
       const acceptFn = clientSrc.slice(acceptFnStart, acceptFnEnd);
       // The catch block must contain a code-equality check for all three codes
       expect(acceptFn).toMatch(/errCode\s*===\s*['"]POD_MEMBER_EXISTS['"]/);
       expect(acceptFn).toMatch(/errCode\s*===\s*['"]SESSION_ALREADY_REGISTERED['"]/);
-      expect(acceptFn).toMatch(/errCode\s*===\s*['"]INVITE_ALREADY_USED['"]/);
+      // 22 Nov 2026 prod smoke: a used-up link is not "already in" (the server sends the member codes to members).
+      expect(acceptFn).not.toMatch(/errCode\s*===\s*['"]INVITE_ALREADY_USED['"]/);
       // And inside that branch it must navigate via fallbackDestination
       const branchStart = acceptFn.indexOf("errCode === 'POD_MEMBER_EXISTS'");
       const branchEnd = acceptFn.indexOf('// EVENT_ENDED', branchStart);
@@ -298,6 +299,17 @@ describe('T0-4 — atomic invite acceptance', () => {
       const branch = acceptFn.slice(branchStart, branchEnd);
       expect(branch).toMatch(/navigate\(fallbackDestination\(\)/);
       expect(branch).toMatch(/return;/);
+    });
+
+    it('the server answers a used-up link with the member code only for someone already in its pod or event', () => {
+      const fnStart = src.indexOf('async function refuseUsedUpInvite');
+      expect(fnStart).toBeGreaterThan(-1);
+      const fn = src.slice(fnStart, src.indexOf('export async function createInvite', fnStart));
+      expect(fn).toMatch(/FROM session_participants WHERE session_id = \$1 AND user_id = \$2 AND status NOT IN \('removed', 'left'\)/);
+      expect(fn).toMatch(/'SESSION_ALREADY_REGISTERED'/);
+      expect(fn).toMatch(/FROM pod_members WHERE pod_id = \$1 AND user_id = \$2 AND status = 'active'/);
+      expect(fn).toMatch(/'POD_MEMBER_EXISTS'/);
+      expect(fn).toMatch(/throw new AppError\(400, 'INVITE_ALREADY_USED'/);
     });
   });
 });

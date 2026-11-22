@@ -596,13 +596,29 @@ describe('Invite Service', () => {
             .mockResolvedValueOnce({
               rows: [{ ...mockInvite, useCount: 1, maxUses: 1 }],
               rowCount: 1,
-            }),
+            })
+            // 22 Nov 2026: the caller is not in the invite's pod or event.
+            .mockResolvedValueOnce({ rows: [], rowCount: 0 }),
         };
         return cb(client);
       });
 
       await expect(inviteService.acceptInvite('ABC123XYZ', 'user-guest'))
-        .rejects.toThrow('maximum uses');
+        .rejects.toMatchObject({ statusCode: 400, code: 'INVITE_ALREADY_USED' });
+    });
+
+    it('answers a used-up pod link with POD_MEMBER_EXISTS when the caller is already an active member (22 Nov 2026)', async () => {
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ ...mockInvite, sessionId: null, podId: 'pod-1', useCount: 1, maxUses: 1 }], rowCount: 1 })
+          .mockResolvedValueOnce({ rows: [{ '?column?': 1 }], rowCount: 1 }),
+      };
+      mockTransaction.mockImplementation(async (cb: Function) => cb(client));
+
+      await expect(inviteService.acceptInvite('ABC123XYZ', 'user-guest'))
+        .rejects.toMatchObject({ statusCode: 409, code: 'POD_MEMBER_EXISTS' });
+      expect(client.query.mock.calls[1][0]).toContain('FROM pod_members WHERE pod_id = $1 AND user_id = $2');
+      expect(client.query.mock.calls[1][1]).toEqual(['pod-1', 'user-guest']);
     });
   });
 

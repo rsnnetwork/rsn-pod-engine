@@ -18,6 +18,7 @@ import * as circleService from '../circle/circle.service';
 import { isCircleManager, mayInviteToCircle } from '../circle/circle-managers';
 import { activeMemberSql } from '../users/active-member';
 import { inviteExpiresAt } from './invite-expiry';
+import type { PoolClient } from 'pg';
 import * as emailService from '../email/email.service';
 import config from '../../config';
 
@@ -588,6 +589,31 @@ export async function notifyInvitee(ctx: InviteContext, invite: InviteDelivery):
   }
 }
 
+/**
+ * Refuses an invite whose uses have run out: with the "already in" code when the caller is already an active member of
+ * its pod or holds a place in its event (the accept page takes them there), otherwise with INVITE_ALREADY_USED.
+ */
+async function refuseUsedUpInvite(
+  client: PoolClient,
+  invite: Pick<Invite, 'podId' | 'sessionId'>,
+  userId: string,
+): Promise<never> {
+  if (invite.sessionId) {
+    const seat = await client.query(
+      `SELECT 1 FROM session_participants WHERE session_id = $1 AND user_id = $2 AND status NOT IN ('removed', 'left')`,
+      [invite.sessionId, userId],
+    );
+    if (seat.rows.length > 0) throw new AppError(409, 'SESSION_ALREADY_REGISTERED', 'You are already registered for this event');
+  } else if (invite.podId) {
+    const member = await client.query(
+      `SELECT 1 FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
+      [invite.podId, userId],
+    );
+    if (member.rows.length > 0) throw new AppError(409, 'POD_MEMBER_EXISTS', 'You are already a member of this pod');
+  }
+  throw new AppError(400, 'INVITE_ALREADY_USED', 'This invite has reached its maximum uses');
+}
+
 export async function createInvite(userId: string, input: CreateInviteInput, userRole?: string): Promise<Invite> {
   const code = generateCode();
 
@@ -1139,7 +1165,10 @@ export async function acceptInvite(
       if (invite.acceptedByUserId === userId) {
         isIdempotent = true;
       } else {
-        throw new AppError(400, 'INVITE_ALREADY_USED', 'This invite has reached its maximum uses');
+        // 22 Nov 2026 (prod smoke): a used-up link opened by someone who is already in its pod or event says so, and
+        // only them: everyone else is told the link is used up. The page used to read "used up" as "already in" for
+        // everyone and sent outsiders to a pod they could not open.
+        await refuseUsedUpInvite(client, invite, userId);
       }
     }
 

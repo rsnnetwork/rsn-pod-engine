@@ -98,7 +98,9 @@ export default function PodDetailPage() {
       if (err?.response?.status === 404) return false;
       return failureCount < 3;
     },
-    meta: { entities: podId ? [E.pod(podId)] : [] },
+    // The pod carries memberCount, which a plain member's "Members (n)" heading reads, so it follows member changes
+    // too (22 Nov 2026 prod smoke: a removal updated the list but left the heading one too high).
+    meta: { entities: podId ? [E.pod(podId), E.podMembers(podId)] : [] },
   });
 
   const { data: members, isLoading: membersLoading, isError: membersFailed, refetch: refetchMembers } = useQuery({

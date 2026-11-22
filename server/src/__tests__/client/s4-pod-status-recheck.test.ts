@@ -114,7 +114,8 @@ describe('with a real query client: the pod page\'s read is read again, once', (
 
   it('the tag it reads again by is the one the pod page\'s query declares, and the wall\'s feed declares it too', () => {
     const page = read('features/pods/PodDetailPage.tsx');
-    expect(page).toMatch(/queryKey: \['pod', podId\][\s\S]{0,400}meta: \{ entities: podId \? \[E\.pod\(podId\)\] : \[\] \}/);
+    // 22 Nov 2026: the pod query also follows pod:<id>:members (its memberCount); pod:<id> stays its first tag.
+    expect(page).toMatch(/queryKey: \['pod', podId\][\s\S]{0,700}meta: \{ entities: podId \? \[E\.pod\(podId\), E\.podMembers\(podId\)\] : \[\] \}/);
     expect(podWallConfig({ podId: POD, me: undefined, podStatus: 'active', isActiveMember: true }).entities.feed).toContain(E.pod(POD));
     expect(read('features/pods/usePodStatusRecheck.ts')).toMatch(/invalidateEntities\(queryClient, \[E\.pod\(podId\)\]\)/);
     expect(read('features/pods/usePodStatusRecheck.ts')).not.toMatch(/setQueryData|setInterval|setTimeout/);

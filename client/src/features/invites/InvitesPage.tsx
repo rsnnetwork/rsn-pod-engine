@@ -126,7 +126,7 @@ export default function InvitesPage() {
     onError: async (err: any) => {
       const errCode = err?.response?.data?.error?.code;
       // Already a member or similar — try to register anyway, then navigate
-      if (errCode === 'POD_MEMBER_EXISTS' || errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'INVITE_ALREADY_USED') {
+      if (errCode === 'POD_MEMBER_EXISTS' || errCode === 'SESSION_ALREADY_REGISTERED') {
         qc.invalidateQueries({ queryKey: ['received-invites'] });
         // Use the tracked invite data (from receivedInvites list) to find session/pod
         const inv = acceptingInvite;
