@@ -234,6 +234,16 @@ describe('the Premium badge', () => {
     expect(renderToStaticMarkup(createElement(Badge, { badge: 'premium', size: 'md' }))).toContain('text-[12px]');
   });
 
+  it('is the ink pill with a red tick (23 Nov 2026, Shradha 1c chosen by Ali): never the pale amber sparkle pill', () => {
+    const { default: Badge } = badge();
+    const html = renderToStaticMarkup(createElement(Badge, { badge: 'premium' }));
+    expect(html).toContain('bg-gray-900');
+    expect(html).toContain('text-white');
+    expect(html).toContain('data-icon="BadgeCheck"');
+    expect(html).toContain('fill-red-500');
+    expect(html).not.toMatch(/amber|Sparkles/);
+  });
+
   it('is drawn beside the name on Everyone, Your connections, search, the For You card and the profile heroes', () => {
     const sites: Array<[string, string]> = [
       ['features/reason/people/EveryoneCard.tsx', '<ProfileBadge badge={person.profileBadge} className="ml-1.5" />'],
