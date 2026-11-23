@@ -67,10 +67,10 @@ export function policySavedToast(name: string, policy: CircleJoinPolicy): string
   return `${name} is open. Anyone on REASON can join.`;
 }
 export const NO_REQUESTS = 'Nobody is waiting to join.';
-export const ATTACH_EMPTY = 'You have no other pods to attach. Pods you direct or host that are not in a circle yet are listed here, since a pod can be in one circle.';
-/** A search with no pod to show: a pod already in another circle is never listed (a pod can be in one circle, 22 Nov 2026). */
+export const ATTACH_EMPTY = 'You have no other pods to attach. Pods you direct or host are listed here.';
+/** A search that finds none of the viewer's pods (a pod can be in several circles, so only this circle's own are left out). */
 export function attachNoMatch(q: string): string {
-  return `None of your pods matches “${q}”. A pod already in a circle is not listed, since a pod can be in one circle.`;
+  return `None of your pods matches “${q}”.`;
 }
 
 /** T15 (30 Oct review 7.3): the circle's Organisations. */

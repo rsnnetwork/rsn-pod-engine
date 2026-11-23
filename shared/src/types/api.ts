@@ -75,7 +75,6 @@ export const ErrorCodes = {
   POD_MEMBER_EXISTS: 'POD_MEMBER_EXISTS',
   CIRCLE_MEMBER_EXISTS: 'CIRCLE_MEMBER_EXISTS',
   CIRCLE_CLOSED: 'CIRCLE_CLOSED',  // 403; a closed circle: joining needs an ask its managers approve, and its wall, members and events are for members
-  POD_IN_OTHER_CIRCLE: 'POD_IN_OTHER_CIRCLE',  // 409; a pod belongs to one circle (Stefan, 22 Nov 2026), so it leaves the one it is in first
   CIRCLE_ARCHIVED: 'CIRCLE_ARCHIVED',  // 409; an archived circle's wall is read-only (S4, 11 Nov 2026)
   CIRCLE_REQUEST_ALREADY_ANSWERED: 'CIRCLE_REQUEST_ALREADY_ANSWERED',  // 409; an ask for a new circle was approved, declined or withdrawn already
   CIRCLE_REQUEST_REFUSED: 'CIRCLE_REQUEST_REFUSED',  // 409; too many asks waiting, the same name waiting, or a name a circle has

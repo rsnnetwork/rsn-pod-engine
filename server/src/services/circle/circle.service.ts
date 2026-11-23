@@ -13,7 +13,7 @@
 import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
-import { AppError, ConflictError, NotFoundError, ValidationError } from '../../middleware/errors';
+import { AppError, NotFoundError, ValidationError } from '../../middleware/errors';
 import { CircleAccess, CircleEntityLink, CircleJoinPolicy, ErrorCodes, UserRole, eventZone, hasRoleAtLeast } from '@rsn/shared';
 import { activeMemberSql } from '../users/active-member';
 import { visibleEventsSql } from '../session/event-access';
@@ -305,46 +305,27 @@ export async function archiveCircle(circleId: string): Promise<void> {
 /**
  * Attach a pod to a circle. The route has already checked the caller runs the circle. T14 (30 Oct review 7.6): a
  * platform admin attaches any pod; anyone else only a pod they run (its active director or host), so a pod is never
- * shown on a circle by someone with no say over it.
- *
- * A pod belongs to one circle (Stefan, 22 Nov 2026): a pod already in another circle that is not archived is refused
- * with 409 POD_IN_OTHER_CIRCLE, naming that circle, so it is taken out of it first. The pod's row is locked while the
- * link is checked and written, so two circles attaching the same pod at once cannot both win.
+ * shown on a circle by someone with no say over it. A pod can be attached to several circles (Stefan, 23 Nov 2026), so
+ * the circles it is already in are never asked about; attaching it to the same circle again changes nothing.
  */
 export async function attachPod(circleId: string, podId: string, userId: string, isAdmin = true): Promise<void> {
-  await transaction(async (client) => {
-    const circle = await client.query(`SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
-    if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
-    const pod = await client.query<{ id: string; runs: boolean }>(
-      `SELECT p.id, EXISTS (SELECT 1 FROM pod_members pm WHERE pm.pod_id = p.id AND pm.user_id = $2
-                              AND pm.status = 'active' AND pm.role IN ('director', 'host')) AS runs
-         FROM pods p WHERE p.id = $1 FOR UPDATE OF p`,
-      [podId, userId],
-    );
-    if (pod.rows.length === 0) throw new NotFoundError('Pod', podId);
-    if (!isAdmin && !pod.rows[0].runs) {
-      throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You can attach a pod you direct or host.');
-    }
-    const other = await client.query<{ name: string }>(
-      `SELECT c.name FROM circle_pods cp JOIN circles c ON c.id = cp.circle_id
-        WHERE cp.pod_id = $1 AND cp.circle_id <> $2 AND c.archived_at IS NULL
-        ORDER BY cp.created_at LIMIT 1`,
-      [podId, circleId],
-    );
-    if (other.rows.length > 0) {
-      const name = other.rows[0].name;
-      throw new ConflictError(
-        ErrorCodes.POD_IN_OTHER_CIRCLE,
-        `This pod is already in ${name}. A pod can be in one circle, so take it out of ${name} first.`,
-        { circleName: name },
-      );
-    }
-    await client.query(
-      `INSERT INTO circle_pods (circle_id, pod_id, added_by)
-       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-      [circleId, podId, userId],
-    );
-  });
+  const circle = await query(`SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL`, [circleId]);
+  if (circle.rows.length === 0) throw new NotFoundError('Circle', circleId);
+  const pod = await query<{ id: string; runs: boolean }>(
+    `SELECT p.id, EXISTS (SELECT 1 FROM pod_members pm WHERE pm.pod_id = p.id AND pm.user_id = $2
+                            AND pm.status = 'active' AND pm.role IN ('director', 'host')) AS runs
+       FROM pods p WHERE p.id = $1`,
+    [podId, userId],
+  );
+  if (pod.rows.length === 0) throw new NotFoundError('Pod', podId);
+  if (!isAdmin && !pod.rows[0].runs) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You can attach a pod you direct or host.');
+  }
+  await query(
+    `INSERT INTO circle_pods (circle_id, pod_id, added_by)
+     VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+    [circleId, podId, userId],
+  );
 }
 
 /** What anyone else is told on trying to take a pod out of a circle. */
