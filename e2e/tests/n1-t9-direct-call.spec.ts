@@ -197,7 +197,8 @@ test.describe.serial('a direct video call with a connection', () => {
     const pressedAt = new Date().toISOString().slice(11, 23);
     // 5 Nov 2026 (D56): leaving an answered call the other person was in asks how it went, as a booked meeting does.
     const call = await pool.query<{ id: string }>("SELECT id FROM meetings WHERE conversation_id = $1 AND source = 'instant'", [conv]);
-    const asked = new RegExp(`/meetings/${call.rows[0].id}\\?feedback=1`);
+    // Since 11 Nov (RSN 08) leaving goes back to the conversation and asks over it, as ?feedback=<meetingId>.
+    const asked = new RegExp(`/messages/${conv}(\\?feedback=${call.rows[0].id})?$`);
     await pageA.getByRole('button', { name: 'Leave call and go back to chat' }).click();
     await pageA.waitForURL(asked, { timeout: 20_000 });
     await expect(pageA.getByRole('dialog', { name: 'How did your meeting with Bo Brandt go?' })).toBeVisible({ timeout: 15_000 });
@@ -253,7 +254,11 @@ test.describe.serial('a direct video call with a connection', () => {
     expect(refused.json?.error?.message).toBe(OFFLINE('Bo Brandt'));
     // 11 Nov 2026 (Shirley Palmer's RSN 07): the profile's button follows B's presence; pressed while B is offline it
     // opens the sheet with Try again, Find a time and Send a message instead of ringing.
+    // The press waits for the profile's own presence read: a press before it answers is never held back (the server then
+    // decides, and its refusal opens the same sheet), which is a different path from the one checked here.
+    const presenceRead = pageA.waitForResponse((r) => r.url().includes(`/calls/user/${b!.id}/presence`) && r.ok(), { timeout: 30_000 });
     await gotoRetry(pageA, `${APP}/people/${b!.id}`);
+    await presenceRead;
     await pageA.getByTestId('video-call-button').click();
     await expect(pageA.getByRole('dialog', { name: "Bo Brandt isn't on REASON right now." })).toBeVisible({ timeout: 15_000 });
     for (const name of ['Try again', 'Find a time', 'Send a message']) {

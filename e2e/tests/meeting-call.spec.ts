@@ -178,7 +178,8 @@ test.describe.serial('meeting + call', () => {
     const page = await openAs(b, `/messages/${convId}`);
     const dotted = MOBILE
       ? page.getByRole('button', { name: /More actions .*updated their availability/i })
-      : page.getByRole('button', { name: /updated their availability/i });
+      // The calendar button itself (the More actions menu repeats the hint since the 13 Nov field test).
+      : page.getByRole('button', { name: /^They updated their availability/ });
     await expect(dotted).toBeVisible({ timeout: 25_000 });
     await openScheduler(page);
     await expect(dotted).toHaveCount(0, { timeout: 15_000 });
@@ -470,7 +471,9 @@ test('9) one person leaves the room and comes back in; the other stays in it and
       // went (5 Nov 2026: the room's token names the meeting, as it does for an answered direct call).
       const held = await pool.query<{ id: string }>(
         `SELECT id FROM meetings WHERE conversation_id = $1 AND status = 'scheduled' ORDER BY start_at DESC LIMIT 1`, [convId]);
-      const asked = new RegExp(`/meetings/${held.rows[0].id}\\?feedback=1`);
+      // Since 11 Nov (RSN 08) leaving goes back to the conversation (asking how it went over it, as ?feedback=<meetingId>,
+      // once the meeting has started: this one starts two minutes from now, so the thread asks nothing yet).
+      const asked = new RegExp(`/messages/${convId}(\\?feedback=${held.rows[0].id})?$`);
 
       // Ana leaves. Bo is told who left, and stays: no timer takes him back to the chat.
       const pressedAt = new Date().toISOString().slice(11, 23);

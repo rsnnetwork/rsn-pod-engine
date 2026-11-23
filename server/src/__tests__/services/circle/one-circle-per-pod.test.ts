@@ -28,6 +28,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ErrorCodes } from '@rsn/shared';
 import { attachPod } from '../../../services/circle/circle.service';
+import { ATTACH_EMPTY, attachNoMatch } from '../../../../../client/src/features/circles/circle-logic';
 
 const flat = (sql: unknown) => String(sql).replace(/\s+/g, ' ').trim();
 beforeEach(() => { mockQuery.mockReset(); mockClientSql.length = 0; });
@@ -105,5 +106,14 @@ describe('the attach picker lists no pod that is in another circle', () => {
     expect(block).toContain(
       'AND NOT EXISTS (SELECT 1 FROM circle_pods cp JOIN circles oc ON oc.id = cp.circle_id WHERE cp.pod_id = p.id AND (cp.circle_id = $1 OR oc.archived_at IS NULL))',
     );
+  });
+});
+
+describe('the picker says why a pod in another circle is not there', () => {
+  it('with no search, and with a search that finds nothing', () => {
+    expect(ATTACH_EMPTY).toBe('You have no other pods to attach. Pods you direct or host that are not in a circle yet are listed here, since a pod can be in one circle.');
+    expect(attachNoMatch('Founding')).toBe('None of your pods matches “Founding”. A pod already in a circle is not listed, since a pod can be in one circle.');
+    const sheet = fs.readFileSync(path.join(__dirname, '../../../../../client/src/features/circles/AttachPodSheet.tsx'), 'utf8');
+    expect(sheet).toContain('{q ? attachNoMatch(q) : ATTACH_EMPTY}');
   });
 });

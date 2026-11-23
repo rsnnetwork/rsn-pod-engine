@@ -14,7 +14,7 @@ import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
-import { ATTACH_EMPTY } from './circle-logic';
+import { ATTACH_EMPTY, attachNoMatch } from './circle-logic';
 import { circleErrorSentence, refreshCircle } from './useCircleActions';
 
 interface Props { circleId: string; circleName: string; onClose: () => void; onCreate: () => void }
@@ -74,7 +74,7 @@ export default function AttachPodSheet({ circleId, circleName, onClose, onCreate
           </div>
         ) : items.length === 0 ? (
           <p className="rounded-2xl bg-reason-warm p-3.5 text-[13px] text-reason-muted [overflow-wrap:anywhere]">
-            {q ? `None of your pods matches “${q}”.` : ATTACH_EMPTY}
+            {q ? attachNoMatch(q) : ATTACH_EMPTY}
           </p>
         ) : (
           <ul className="divide-y divide-reason-line">

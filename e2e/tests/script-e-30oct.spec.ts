@@ -487,9 +487,15 @@ test('4.5: the notifications page: today, earlier, Load more, a new bell live, m
        FROM generate_series(1, 35) g`, [cy.id]);
   const poke = await pool.query<{ id: string }>(
     `INSERT INTO user_pokes (sender_id, recipient_id, status, message) VALUES ($1, $2, 'pending', 'Hello') RETURNING id`, [rex.id, cy.id]);
+  // Rex's request is from today on the reader's own calendar (the page groups by the browser's local day, and the
+  // browser keeps this machine's time zone): two hours ago, or the start of today when today is not yet two hours old.
+  // A flat "2 hours ago" put it under Yesterday on any run between midnight and 2am (23 Nov 2026, 00:55 in Karachi).
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   await pool.query(
-    `INSERT INTO notifications (user_id, type, title, body, link, created_at) VALUES ($1, 'poke', $2, 'Hello', $3, NOW() - interval '2 hours')`,
-    [cy.id, `${rex.displayName} asked to meet you`, `/messages?poke=${poke.rows[0].id}`]);
+    `INSERT INTO notifications (user_id, type, title, body, link, created_at)
+     VALUES ($1, 'poke', $2, 'Hello', $3,
+             GREATEST(NOW() - interval '2 hours', (date_trunc('day', NOW() AT TIME ZONE $4) + interval '1 second') AT TIME ZONE $4))`,
+    [cy.id, `${rex.displayName} asked to meet you`, `/messages?poke=${poke.rows[0].id}`, zone]);
   const page = (await openAs(browser, cy, '/notifications')).page;
   const rows = page.getByTestId('notification-row');
   await expect(rows.first()).toBeVisible({ timeout: SLOW });
@@ -497,8 +503,17 @@ test('4.5: the notifications page: today, earlier, Load more, a new bell live, m
 
   await test.step('4.5 Today and Earlier, Load more to the end, every row once', async () => {
     await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Today' }).getByTestId('notification-row')
+      .filter({ hasText: `${rex.displayName} asked to meet you` }), 'today\'s request sits under Today').toHaveCount(1);
     const more = page.getByRole('button', { name: 'Load more' });
-    for (let i = 0; i < 3 && await more.count() > 0; i++) { await more.click(); await page.waitForTimeout(800); }
+    // Each press waits for its page to arrive (more rows, the button no longer busy) rather than a flat 800 ms: on
+    // production the next page can take longer, and a press on the busy button then waited on a button that went.
+    for (let i = 0; i < 3 && await more.count() > 0; i++) {
+      const before = await rows.count();
+      await more.click();
+      await expect.poll(() => rows.count(), { timeout: LIVE, message: 'Load more brings the next page' }).toBeGreaterThan(before);
+      await expect(page.locator('button:disabled', { hasText: 'Load more' })).toHaveCount(0, { timeout: LIVE });
+    }
     await expect(more).toHaveCount(0);
     for (const n of [1, 31, 35]) await expect(page.getByText(`Seeded ${n}`, { exact: true })).toHaveCount(1);
     await expect(page.getByRole('heading', { name: 'Earlier' })).toBeVisible();
@@ -537,6 +552,9 @@ test('4.6: a direct video call rings the connection on any screen, both land in 
   await roomLogsAtDebug(caller.ctx);
   const callerRoom = watchRoom(caller.page, 'Ana');
   await gotoRetry(caller.page, `${APP}/people/${bo.id}`);
+  // The ring is refused (409 CALL_PARTNER_OFFLINE) until the server counts Bo as online; his page being drawn is not that.
+  await expect.poll(async () => (await api(ana, 'GET', `/dm/conversations/${convAB}/partner-presence`)).json?.data?.state,
+    { timeout: 30_000, message: 'the server sees Bo online before Ana rings' }).toBe('online');
 
   await test.step('4.6 Video call → the ring on Bo\'s People page without a reload → Accept → the same room', async () => {
     const call = caller.page.getByTestId('video-call-button');
@@ -570,12 +588,17 @@ test('4.6: a direct video call rings the connection on any screen, both land in 
       throw new Error(`${e.message}\n${await callerRoom.report()}\n${await calleeRoom.report()}`);
     });
     // 5 Nov 2026 (D56): leaving an answered call the other person was in asks how it went, as a booked meeting does.
+    // Since 11 Nov 2026 (RSN 08, 7478a675) leaving goes back to the conversation and asks over it, as
+    // ?feedback=<meetingId>, never on the meeting's own page.
     const answered = await pool.query<{ id: string }>(
       `SELECT id FROM meetings WHERE conversation_id = $1 AND source = 'instant' ORDER BY created_at DESC LIMIT 1`, [convAB]);
     await caller.page.getByRole('button', { name: 'Leave call and go back to chat' }).click();
-    await caller.page.waitForURL(new RegExp(`/meetings/${answered.rows[0].id}\\?feedback=1`), { timeout: LIVE });
+    await expect(caller.page, 'Ana is back on the thread, asked how it went').toHaveURL(
+      new RegExp(`/messages/${convAB}\\?feedback=${answered.rows[0].id}$`), { timeout: LIVE });
     await expect(caller.page.getByRole('dialog', { name: `How did your meeting with ${bo.displayName} go?` }))
       .toBeVisible({ timeout: LIVE });
+    await expect(caller.page.getByText(`Hello Bo ${RUN}`).filter({ visible: true }).first(), 'the thread is behind the question')
+      .toBeVisible();
     await shot(caller.page, 'e-4.6-asked-how-it-went');
     await expect(callee.page.getByTestId('partner-left')).toBeVisible({ timeout: 30_000 });
   });
@@ -627,6 +650,11 @@ test('4.6 (finding F3): a caller with a second tab open stays in the call they r
   const callerRoom = watchRoom(caller.page, 'Pat (the tab that rang)');
   await gotoRetry(caller.page, `${APP}/people/${quin.id}`);
   await expect(callee.getByRole('heading').first()).toBeVisible({ timeout: SLOW });
+  // A ring is refused while the server does not yet count Quin as online (409 CALL_PARTNER_OFFLINE, "Quin isn't
+  // online right now."): his page being drawn does not mean his live connection has registered. Rung too soon, on
+  // 22 Nov 2026 the call never rang and the other tab had nothing to show. So the ring waits for the server's presence.
+  await expect.poll(async () => (await api(pat, 'GET', `/dm/conversations/${conv}/partner-presence`)).json?.data?.state,
+    { timeout: 30_000, message: 'the server sees Quin online before Pat rings' }).toBe('online');
 
   await caller.page.getByTestId('video-call-button').click({ timeout: SLOW });
   await caller.page.getByRole('button', { name: 'Send request' }).click();
@@ -696,11 +724,18 @@ test('5a, 5b, 5c: chat in the meeting room, Add to calendar, and the feedback th
     await maxPage.context().close();
   });
 
-  await test.step('5a Chat in the room: Mia writes, Max\'s Chat counts it and he reads it live; a block made in the call is refused in words', async () => {
+  await test.step('5a Chat in the room: Mia writes, Max\'s Chat counts it and he reads it live; a block made in the call ends it for both and the next line is refused in words', async () => {
     const a = (await openAs(browser, mia, `/meet/${conv}?kind=video`)).page;
     const b = (await openAs(browser, max, `/meet/${conv}?kind=video`)).page;
     for (const p of [a, b]) await expect(p.getByTestId('call-chat-toggle')).toBeVisible({ timeout: SLOW });
     await tall(a.getByTestId('call-chat-toggle'), 'Chat');
+    // Max's room has read the thread before Mia writes: what was written before his room's first read counts as already
+    // there, not unread (MeetPage's seenAt), so a line sent while that read was still on its way never got a count
+    // (23 Nov 2026, once in four runs on production). He looks at the chat once, sees the earlier message, and closes it.
+    await b.getByTestId('call-chat-toggle').click();
+    await expect(b.getByTestId('call-chat-panel').getByText(`Coffee about your seed round ${RUN}?`)).toBeVisible({ timeout: LIVE });
+    await b.getByTestId('call-chat-panel').getByRole('button', { name: 'Close the chat' }).click();
+    await expect(b.getByTestId('call-chat-panel')).toBeHidden();
     await a.getByTestId('call-chat-toggle').click();
     const panelA = a.getByTestId('call-chat-panel');
     const line = `Can you hear me? ${RUN}`;
@@ -712,14 +747,25 @@ test('5a, 5b, 5c: chat in the meeting room, Add to calendar, and the feedback th
     await expect(b.getByTestId('call-chat-panel').getByText(line)).toBeVisible();
     await noSidewaysScroll(b, 'the room with the chat open');
     await shot(b, 'e-5a-meeting-chat');
-    // Blocked during the call: the next line is refused, kept in the box, and nothing is written.
+    // Blocked during the call. Since 11-12 Nov 2026 (Shirley pilot S5: 62cc97f4 closes the room for both, 98b782da has
+    // the call page ask the server when the block's change arrives) the block ends the call for both: each lands on the
+    // thread with "The call has ended.", is asked nothing about a meeting with the person just blocked, and cannot get
+    // back in. The next line Mia tries is refused in words, and nothing is written.
     expect((await api(max, 'POST', `/users/${mia.id}/block`, {})).status).toBeLessThan(300);
+    for (const [who, p] of [['Mia', a], ['Max', b]] as const) {
+      await expect(p, `${who} is back on the thread`).toHaveURL(new RegExp(`/messages/${conv}$`), { timeout: 30_000 });
+      await expect(p.getByText('The call has ended.', { exact: true }).first(), `${who} is told calmly`).toBeVisible({ timeout: 15_000 });
+      await expect(p.getByRole('dialog', { name: /How did your meeting with/ }), `${who} is asked nothing`).toHaveCount(0);
+    }
     const refused = `Still there? ${RUN}`;
-    await panelA.getByLabel('Message').fill(refused);
-    await panelA.getByRole('button', { name: 'Send' }).click();
-    await expect(panelA.getByRole('alert')).toHaveText(/no longer|cannot|can't/i, { timeout: 15_000 });
-    await expect(panelA.getByLabel('Message')).toHaveValue(refused);
+    const box = a.getByPlaceholder(/Type a message|Message…/).filter({ visible: true }).first();
+    await box.fill(refused);
+    await a.getByRole('button', { name: 'Send message' }).click();
+    await expect(a.getByText('You can no longer message this user').filter({ visible: true }).first(), 'Mia is told in words').toBeVisible({ timeout: 15_000 });
     expect((await pool.query('SELECT 1 FROM direct_messages WHERE content = $1', [refused])).rows).toHaveLength(0);
+    await gotoRetry(a, `${APP}/meet/${conv}?kind=video`);
+    await expect(a.getByText(/cannot call this member|Could not start the call/i).first(), 'Mia cannot get back in').toBeVisible({ timeout: 30_000 });
+    await expect(a.getByTestId('call-chat-panel')).toHaveCount(0);
     await api(max, 'DELETE', `/users/${mia.id}/block`);
     await a.context().close();
     await b.context().close();
@@ -1121,7 +1167,7 @@ test('7.1–7.3: an entity\'s claim waits for its admin, approved live; its logo
   });
 });
 
-test('7.4–7.6 and a legacy circle: invite from the sheet (never a removed connection), a closed circle approved live, a new pod from the circle; a creator with no membership row still runs it', async () => {
+test('7.4–7.6 and a legacy circle: invite from the sheet (never a removed connection), a closed circle approved live, a new pod from the circle; a circle whose creator has no membership row is run by admins', async () => {
   test.setTimeout(300_000);
   const owner = await throwaway('Oona', { role: 'admin' });
   const invitee = await throwaway('Ivo');
@@ -1206,14 +1252,26 @@ test('7.4–7.6 and a legacy circle: invite from the sheet (never a removed conn
     await expectNotReloaded(other, 'the owner\'s other browser');
   });
 
-  await test.step('7.4 legacy: a circle whose creator has no membership row is still run by its creator', async () => {
+  // Since 11 Nov 2026 (Shirley pilot S2, D3; 759c5ea8, migration 148) a circle is run by its circle_members roles
+  // alone: its maker holds no right for having made it. Migration 148 made every maker still in their circle its owner;
+  // a circle whose maker has no membership row keeps no owner and is run by platform admins. That is the legacy shape
+  // production can still hold, so: its maker is offered nothing a manager does, and an admin runs it.
+  await test.step('7.4 legacy: a circle whose creator has no membership row is run by platform admins, not by its creator', async () => {
     const legacyId = (await pool.query<{ id: string }>(
       `INSERT INTO circles (name, created_by, member_count) VALUES ($1, $2, 0) RETURNING id`, [`${RUN} Old circle`, ana.id])).rows[0].id;
     made.circles.push(legacyId);
     const page = (await openAs(browser, ana, `/circles/${legacyId}`)).page;
     await expect(page.getByRole('heading', { name: `${RUN} Old circle`, level: 1 })).toBeVisible({ timeout: SLOW });
-    await expect(page.getByTestId('circle-invite')).toBeVisible();
-    await expect(page.getByTestId('circle-schedule-event')).toBeVisible();
+    const mine = await api(ana, 'GET', `/circles/${legacyId}`);
+    expect(mine.status).toBe(200);
+    expect({ canManage: mine.json.data.canManage, canInvite: mine.json.data.canInvite }, 'its maker does not run it')
+      .toEqual({ canManage: false, canInvite: false });
+    await expect(page.getByTestId('circle-invite'), 'no Invite for its maker').toHaveCount(0);
+    await expect(page.getByTestId('circle-schedule-event'), 'no Schedule an event for its maker').toHaveCount(0);
+    const adminPage = (await openAs(browser, admin, `/circles/${legacyId}`)).page;
+    await expect(adminPage.getByRole('heading', { name: `${RUN} Old circle`, level: 1 })).toBeVisible({ timeout: SLOW });
+    await expect(adminPage.getByTestId('circle-invite'), 'an admin invites to it').toBeVisible();
+    await expect(adminPage.getByTestId('circle-schedule-event'), 'an admin schedules for it').toBeVisible();
   });
 });
 

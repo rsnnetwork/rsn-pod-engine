@@ -209,7 +209,7 @@ test('an organiser starts a group chat; the others see it and its messages live,
   await start.click();
   const groupId = await groupIdOf(clausPage);
   await expect(clausPage.getByTestId('group-header')).toContainText(TITLE);
-  await expect(clausPage.getByTestId('group-member-count')).toHaveText('3 of 50');
+  await expect(clausPage.getByTestId('group-member-count')).toHaveText('Event chat · 3 of 50');
   await expect(clausPage.getByTestId('group-thread-empty')).toBeVisible();
 
   // 2. It appears in the others' Messages without a reload.
@@ -282,7 +282,7 @@ test('an organiser starts a group chat; the others see it and its messages live,
   await expect(inesPage, 'back in Messages').toHaveURL(`${APP}/messages`, { timeout: 20_000 });
   await expect(inesPage.getByText(`You left ${TITLE}.`)).toBeVisible();
   await expect(groupRow(inesPage, TITLE), 'the group is gone from her list').toHaveCount(0, { timeout: 20_000 });
-  await expect(clausPage.getByTestId('group-member-count'), 'the organiser sees it without a reload').toHaveText('2 of 50', { timeout: 20_000 });
+  await expect(clausPage.getByTestId('group-member-count'), 'the organiser sees it without a reload').toHaveText('Event chat · 2 of 50', { timeout: 20_000 });
 
   // The organiser, the group's admin, can remove the one who is left (not done: it is the remove control that is checked).
   await clausPage.getByTestId('group-header').click();
@@ -333,7 +333,7 @@ test('a group chat holds 50 people: the start sheet asks to choose, stops at 50,
   await expect(start).toBeEnabled();
   await start.click();
   const groupId = await groupIdOf(page);
-  await expect(page.getByTestId('group-member-count')).toHaveText('49 of 50');
+  await expect(page.getByTestId('group-member-count')).toHaveText('Event chat · 49 of 50');
 
   // The admin adds one more who took part; the 51st cannot be chosen, and says why.
   await page.getByTestId('group-header').click();
@@ -351,7 +351,7 @@ test('a group chat holds 50 people: the start sheet asks to choose, stops at 50,
   await expect(page.getByText('Added 1 person.')).toBeVisible({ timeout: 20_000 });
   await expect(members.getByTestId('group-members-count')).toHaveText('50 of 50', { timeout: 20_000 });
   await expect(members.getByTestId('group-full'), 'a full group says so instead of offering more').toHaveText(FULL);
-  await expect(page.getByTestId('group-member-count')).toHaveText('50 of 50');
+  await expect(page.getByTestId('group-member-count')).toHaveText('Event chat · 50 of 50');
 
   // The server holds the line too: a 51st add is refused in the same words.
   const res = await fetch(`${SERVER}/api/groups/${groupId}/members`, {
@@ -373,7 +373,7 @@ test('a group chat holds 50 people: the start sheet asks to choose, stops at 50,
   await expect(members.getByTestId('group-members-count')).toHaveText('49 of 50', { timeout: 20_000 });
   await expect(members.getByTestId('group-member').filter({ hasText: guest(1) })).toHaveCount(0);
   await expect(members.getByRole('button', { name: 'Add people' })).toBeVisible();
-  await expect(page.getByTestId('group-member-count')).toHaveText('49 of 50');
+  await expect(page.getByTestId('group-member-count')).toHaveText('Event chat · 49 of 50');
 
   expect(pageErrors, 'no page errors').toEqual([]);
 });
